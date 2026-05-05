@@ -8,3 +8,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# presage pinned to HEAD as of Stage 4 (commit 600c4ed). docs/REPORT.md
+# Decision 2 documents the patches we'll likely need to apply against it
+# at Stage 7 (tokio removal); for now we just consume its trait
+# definitions, which are tokio-clean.
+presage = { git = "https://github.com/whisperfish/presage", rev = "600c4ed" }

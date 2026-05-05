@@ -81,6 +81,21 @@ futures-timer = { git = "https://github.com/async-rs/futures-timer", rev = "07db
 git = "https://github.com/betrusted-io/ring-xous"
 rev = "5f86cb10bebd521a45fb3abb06995200aeda2948"
 
+# Mirror libsignal's curve25519-dalek pin
+# (https://github.com/signalapp/libsignal/blob/v0.91.0/Cargo.toml#L237).
+# libsignal's [patch.crates-io] only applies when libsignal is the build
+# root; when consumed as a dep (as we do here), the patch doesn't inherit,
+# and zkgroup ends up compiling against two different RistrettoPoint types
+# (one from crates.io, one from the fork). This patch deduplicates by
+# routing every consumer to the Signal fork. Per docs/REPORT.md Risk #3,
+# this conflicts with xous-core's `tunnell/curve25519-dalek` fork; the
+# resolution at Stage 9 (rv32 hw bring-up) is to either rebase one fork on
+# the other, or have one fork carry both sets of patches. For now we use
+# Signal's fork unilaterally — it's required to make zkgroup compile.
+[patch.crates-io.curve25519-dalek]
+git = "https://github.com/signalapp/curve25519-dalek"
+tag = "signal-curve25519-4.1.3"
+
 # Stage 2 forced an earlier resolution of one of the path-based patches
 # we deferred at Stage 0: cross-compiling rustls/ring for rv32 pulls in
 # `getrandom`, whose upstream crate doesn't recognize Xous as a target.
