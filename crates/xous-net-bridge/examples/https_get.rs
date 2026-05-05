@@ -5,10 +5,10 @@
 
 use std::io::{Read, Write};
 
-use xous_net_bridge::tls_connect;
+use xous_net_bridge::{tls_connect, webpki_roots};
 
 fn main() -> std::io::Result<()> {
-    let mut stream = tls_connect("example.com", 443, &[])?;
+    let mut stream = tls_connect("example.com", 443, webpki_roots(), &[])?;
 
     stream.write_all(
         b"GET / HTTP/1.1\r\n\

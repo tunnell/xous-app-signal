@@ -6,5 +6,9 @@
 //! `async-channel`. See `docs/REPORT.md` Decision 3.
 
 pub mod tls;
+pub mod ws;
 
-pub use tls::{RustlsStream, tls_connect};
+pub use tls::{
+    RustlsStream, signal_production_roots, signal_staging_roots, tls_connect, webpki_roots,
+};
+pub use ws::ws_connect;

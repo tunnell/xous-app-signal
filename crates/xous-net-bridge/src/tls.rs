@@ -16,17 +16,49 @@ use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 /// A handshake-completed sync TLS stream over TCP.
 pub type RustlsStream = StreamOwned<ClientConnection, TcpStream>;
 
-/// Open a sync TLS connection to `host:port`, optionally negotiating an
-/// ALPN protocol. Returns a stream that implements `std::io::Read + Write`.
-///
-/// Trust anchors come from `webpki-roots` (Mozilla's NSS bundle). For
-/// Signal's pinned-CA path (used by `libsignal-service-rs`), the caller
-/// can substitute a custom `RootCertStore`; that's a follow-up at the
-/// Stage 6 transport-fork integration.
-pub fn tls_connect(host: &str, port: u16, alpn: &[&[u8]]) -> io::Result<RustlsStream> {
-    let mut roots = RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+/// Mozilla NSS-bundle root CAs from `webpki-roots`. Suitable for general
+/// HTTPS to public endpoints (example.com, etc.). Not suitable for
+/// Signal endpoints, which pin their own CA — use [`signal_production_roots`].
+pub fn webpki_roots() -> RootCertStore {
+    RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    }
+}
 
+/// Signal's production root CA, pinned. Mirrors what `libsignal-service-rs`
+/// does at `src/push_service/mod.rs:90-96`: disable system roots, use only
+/// this CA. The PEM is vendored at `certs/signal-production.pem` from
+/// upstream `whisperfish/libsignal-service-rs/certs/production-root-ca.pem`.
+pub fn signal_production_roots() -> RootCertStore {
+    parse_pem_roots(include_bytes!("../certs/signal-production.pem"))
+        .expect("Signal production root CA bundled at build time should parse")
+}
+
+/// Same for Signal's staging environment.
+pub fn signal_staging_roots() -> RootCertStore {
+    parse_pem_roots(include_bytes!("../certs/signal-staging.pem"))
+        .expect("Signal staging root CA bundled at build time should parse")
+}
+
+fn parse_pem_roots(pem: &[u8]) -> io::Result<RootCertStore> {
+    let mut reader = std::io::BufReader::new(pem);
+    let mut store = RootCertStore::empty();
+    for cert in rustls_pemfile::certs(&mut reader) {
+        let cert = cert?;
+        store.add(cert).map_err(io::Error::other)?;
+    }
+    Ok(store)
+}
+
+/// Open a sync TLS connection to `host:port` using the supplied trust
+/// anchors, optionally negotiating an ALPN protocol. Returns a stream
+/// that implements `std::io::Read + Write`.
+pub fn tls_connect(
+    host: &str,
+    port: u16,
+    roots: RootCertStore,
+    alpn: &[&[u8]],
+) -> io::Result<RustlsStream> {
     let mut config = ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();

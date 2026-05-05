@@ -13,8 +13,23 @@ publish.workspace = true
 # Pin precisely so transitive `ring` resolves to the version covered by
 # xous-core's [patch.crates-io].ring fork.
 rustls = "=0.22.2"
+rustls-pemfile = "2"
 webpki-roots = "1.0"
+
+# tungstenite is upstream snapview/tungstenite-rs, sync. Per
+# docs/REPORT.md Decision 3, we do NOT use signalapp/tungstenite-rs (that
+# fork only adds permessage-deflate, which Signal's WS doesn't require).
+# We use minimal features: the handshake itself, with no built-in TLS —
+# we wrap our existing `tls_connect` (Stage 2) externally via
+# `tungstenite::client(request, our_tls_stream)`. This keeps tungstenite
+# from pulling its own (potentially-newer) rustls version that would
+# conflict with our pinned `=0.22.2`.
+tungstenite = { version = "0.21", default-features = false, features = ["handshake"] }
 
 [[example]]
 name = "https_get"
 path = "examples/https_get.rs"
+
+[[example]]
+name = "signal_ws_keepalive"
+path = "examples/signal_ws_keepalive.rs"
