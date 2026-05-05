@@ -3,12 +3,134 @@
 version = 4
 
 [[package]]
+name = "async-channel"
+version = "2.5.0"
+source = "git+https://github.com/smol-rs/async-channel?rev=35a63c4#35a63c456aaa1906015f5a825e7e35505a749afa"
+dependencies = [
+ "concurrent-queue",
+ "event-listener-strategy",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-executor"
+version = "1.14.0"
+source = "git+https://github.com/smol-rs/async-executor?rev=543403e#543403e773ec4941a6272e29c2ff649bfd01a4f8"
+dependencies = [
+ "async-task",
+ "concurrent-queue",
+ "fastrand",
+ "futures-lite",
+ "pin-project-lite",
+ "slab",
+]
+
+[[package]]
+name = "async-task"
+version = "4.7.1"
+source = "git+https://github.com/smol-rs/async-task?rev=f98b30b#f98b30bb047426104c23b81e1c2fa083b177a567"
+
+[[package]]
+name = "concurrent-queue"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
+
+[[package]]
+name = "event-listener"
+version = "5.4.1"
+source = "git+https://github.com/smol-rs/event-listener?rev=2e9db21#2e9db2123c6936615d317c07064c0c7fdec21fee"
+dependencies = [
+ "parking",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "event-listener-strategy"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
+dependencies = [
+ "event-listener",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "fastrand"
+version = "2.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
+
+[[package]]
+name = "futures-core"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e3450815272ef58cec6d564423f6e755e25379b217b0bc688e295ba24df6b1d"
+
+[[package]]
+name = "futures-io"
+version = "0.3.32"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cecba35d7ad927e23624b22ad55235f2239cfa44fd10428eecbeba6d6a717718"
+
+[[package]]
+name = "futures-lite"
+version = "2.6.1"
+source = "git+https://github.com/smol-rs/futures-lite?rev=3dc587f#3dc587ffdd652bc6002f34dc24a300643ef498ae"
+dependencies = [
+ "fastrand",
+ "futures-core",
+ "futures-io",
+ "parking",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "futures-timer"
+version = "3.0.3"
+source = "git+https://github.com/async-rs/futures-timer?rev=07dbe53#07dbe53da1b5ddb703cdfc74ad59e15cb4134ce0"
+
+[[package]]
+name = "parking"
+version = "2.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f38d5652c16fde515bb1ecef450ab0f6a219d619a7274976324d5e377f7dceba"
+
+[[package]]
+name = "pin-project-lite"
+version = "0.2.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+
+[[package]]
 name = "presage-store-pddb"
 version = "0.0.1"
 
 [[package]]
+name = "slab"
+version = "0.4.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
 name = "xous-app-signal"
 version = "0.0.1"
+dependencies = [
+ "async-channel",
+ "async-executor",
+ "futures-lite",
+ "futures-timer",
+]
 
 [[package]]
 name = "xous-net-bridge"
@@ -17,6 +139,11 @@ version = "0.0.1"
 [[package]]
 name = "xous-signal-bridge"
 version = "0.0.1"
+
+[[patch.unused]]
+name = "async-lock"
+version = "3.4.2"
+source = "git+https://github.com/smol-rs/async-lock?rev=29f0ff9#29f0ff9a03de5e453881ec22c9f35a51c9b2d6a8"
 
 [[patch.unused]]
 name = "ring"

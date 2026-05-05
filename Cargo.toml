@@ -15,6 +15,19 @@ license = "AGPL-3.0-only"
 authors = []
 publish = false
 
+# Smol-rs async primitives, pinned to the HEAD revs as of Stage 1
+# (verified at ~/precursor-signal/repos/<crate>/git log --oneline -1).
+# Replaces Tokio per docs/REPORT.md Decision 2. ~21 kLoC vendored audit
+# surface vs. Tokio's >100 kLoC.
+[workspace.dependencies]
+async-task = { git = "https://github.com/smol-rs/async-task", rev = "f98b30b" }
+async-executor = { git = "https://github.com/smol-rs/async-executor", rev = "543403e" }
+async-channel = { git = "https://github.com/smol-rs/async-channel", rev = "35a63c4" }
+async-lock = { git = "https://github.com/smol-rs/async-lock", rev = "29f0ff9" }
+event-listener = { git = "https://github.com/smol-rs/event-listener", rev = "2e9db21" }
+futures-lite = { git = "https://github.com/smol-rs/futures-lite", rev = "3dc587f" }
+futures-timer = { git = "https://github.com/async-rs/futures-timer", rev = "07dbe53" }
+
 # Mirrors xous-core's [profile.release] settings:
 #   https://github.com/betrusted-io/xous-core/blob/main/Cargo.toml#L154-L161
 # debug = true keeps DWARF in the on-disk binary for hardware crash analysis.
@@ -51,6 +64,18 @@ strip = "symbols"
 # Resolution is being investigated separately.
 [patch.crates-io]
 sha2 = { git = "https://github.com/betrusted-io/hashes.git", branch = "sha2-v0.10.8-xous" }
+
+# Smol-rs primitives also patched here so transitive uses (e.g. `futures-lite`
+# pulled by `async-executor` from crates.io) converge on our pinned git versions
+# rather than producing duplicate copies. Without these, `cargo tree -d` flags
+# multiple copies of the same crate at the same version but different sources.
+async-task = { git = "https://github.com/smol-rs/async-task", rev = "f98b30b" }
+async-executor = { git = "https://github.com/smol-rs/async-executor", rev = "543403e" }
+async-channel = { git = "https://github.com/smol-rs/async-channel", rev = "35a63c4" }
+async-lock = { git = "https://github.com/smol-rs/async-lock", rev = "29f0ff9" }
+event-listener = { git = "https://github.com/smol-rs/event-listener", rev = "2e9db21" }
+futures-lite = { git = "https://github.com/smol-rs/futures-lite", rev = "3dc587f" }
+futures-timer = { git = "https://github.com/async-rs/futures-timer", rev = "07dbe53" }
 
 [patch.crates-io.ring]
 git = "https://github.com/betrusted-io/ring-xous"

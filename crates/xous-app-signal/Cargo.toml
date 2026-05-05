@@ -13,3 +13,7 @@ name = "xas"
 path = "src/main.rs"
 
 [dependencies]
+async-executor = { workspace = true }
+async-channel = { workspace = true }
+futures-lite = { workspace = true }
+futures-timer = { workspace = true }
