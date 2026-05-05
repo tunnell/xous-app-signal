@@ -1,0 +1,10 @@
+[package]
+name = "presage-store-pddb"
+description = "PDDB-backed implementation of presage's storage traits."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

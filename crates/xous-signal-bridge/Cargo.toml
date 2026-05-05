@@ -1,0 +1,10 @@
+[package]
+name = "xous-signal-bridge"
+description = "Glue between presage::Manager (worker thread + LocalExecutor) and the Xous IPC server."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

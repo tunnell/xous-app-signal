@@ -1,0 +1,9 @@
+[toolchain]
+# Stable Rust 1.95 — supports edition = "2024" (≥1.85) which libsignal v0.91
+# requires. xous-core itself does not pin a toolchain (verified 2026-05);
+# downstream Xous apps install via `betrusted-io/rust`. Verify the local
+# Xous toolchain matches before doing rv32 builds (see docs/ROADMAP.md
+# Stage 9). For libsignal's own builds (not ours, but worth noting),
+# `signalapp/libsignal/rust-toolchain` pins `nightly-2026-03-23`.
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]

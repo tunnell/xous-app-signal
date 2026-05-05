@@ -1,0 +1,62 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/presage-store-pddb",
+    "crates/xous-net-bridge",
+    "crates/xous-signal-bridge",
+    "crates/xous-app-signal",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.85"
+license = "AGPL-3.0-only"
+authors = []
+publish = false
+
+# Mirrors xous-core's [profile.release] settings:
+#   https://github.com/betrusted-io/xous-core/blob/main/Cargo.toml#L154-L161
+# debug = true keeps DWARF in the on-disk binary for hardware crash analysis.
+# strip = false preserves symbol info for the same reason.
+# For binary-size measurements, build with --profile=release-small (defined below).
+[profile.release]
+codegen-units = 1
+debug = true
+strip = false
+lto = "fat"
+incremental = true
+opt-level = "s"
+# panic = "abort"  # uncomment to reduce file size further at the cost of panic output
+
+# Size-measurement profile per docs/REPORT.md "Binary size strategy".
+# Use this when running `cargo bloat --crates -p xous-signal-app --profile=release-small`
+# to get an accurate picture of on-disk size without DWARF debug info.
+[profile.release-small]
+inherits = "release"
+debug = false
+strip = "symbols"
+
+# Mirrors xous-core's [patch.crates-io]:
+#   https://github.com/betrusted-io/xous-core/blob/main/Cargo.toml#L164-L196
+#
+# Only the git-based patches are mirrored here. xous-core's path-based patches
+# (`aes` -> services/aes, `getrandom` -> imports/getrandom) reference paths
+# that only exist inside the xous-core tree; they're TODO for a later stage
+# (likely the rv32 hardware integration in ROADMAP Stage 9) when we either
+# (a) merge this workspace into xous-core, or (b) vendor those forks here.
+#
+# We do NOT mirror xous-core's curve25519-dalek patch. It conflicts with
+# libsignal's `signalapp/curve25519-dalek` pin (see docs/REPORT.md Risk #3).
+# Resolution is being investigated separately.
+[patch.crates-io]
+sha2 = { git = "https://github.com/betrusted-io/hashes.git", branch = "sha2-v0.10.8-xous" }
+
+[patch.crates-io.ring]
+git = "https://github.com/betrusted-io/ring-xous"
+rev = "5f86cb10bebd521a45fb3abb06995200aeda2948"
+
+# TODO (ROADMAP Stage 9): wire up the path-based patches for `aes` and
+# `getrandom` once we either (a) make this workspace a member of xous-core,
+# or (b) vendor those forks into vendor/aes and vendor/getrandom here.
+# See docs/REPORT.md "Decision 6" for context.

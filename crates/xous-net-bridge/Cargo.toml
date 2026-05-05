@@ -1,0 +1,10 @@
+[package]
+name = "xous-net-bridge"
+description = "Sync TLS + WebSocket transport for the Signal client, bridged to the async executor via channels."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

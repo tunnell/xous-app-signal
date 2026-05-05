@@ -1,0 +1,15 @@
+[package]
+name = "xous-app-signal"
+description = "Xous app: Signal client built on the Whisperfish stack (presage + libsignal-service-rs + libsignal)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+# Short pronouncable name "xas" for the on-device binary.
+name = "xas"
+path = "src/main.rs"
+
+[dependencies]
