@@ -8,3 +8,13 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# rustls 0.22.2 — the version xous-core integrates at libs/tls
+# (https://github.com/betrusted-io/xous-core/blob/main/libs/tls/Cargo.toml).
+# Pin precisely so transitive `ring` resolves to the version covered by
+# xous-core's [patch.crates-io].ring fork.
+rustls = "=0.22.2"
+webpki-roots = "1.0"
+
+[[example]]
+name = "https_get"
+path = "examples/https_get.rs"

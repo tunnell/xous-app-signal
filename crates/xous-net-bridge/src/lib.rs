@@ -4,5 +4,7 @@
 //! `tungstenite::WebSocket<rustls::StreamOwned<ClientConnection, TcpStream>>`
 //! and forwards frames to/from the async executor thread via
 //! `async-channel`. See `docs/REPORT.md` Decision 3.
-//!
-//! Stage 0: skeleton only.
+
+pub mod tls;
+
+pub use tls::{RustlsStream, tls_connect};

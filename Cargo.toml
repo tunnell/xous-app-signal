@@ -81,7 +81,20 @@ futures-timer = { git = "https://github.com/async-rs/futures-timer", rev = "07db
 git = "https://github.com/betrusted-io/ring-xous"
 rev = "5f86cb10bebd521a45fb3abb06995200aeda2948"
 
-# TODO (ROADMAP Stage 9): wire up the path-based patches for `aes` and
-# `getrandom` once we either (a) make this workspace a member of xous-core,
-# or (b) vendor those forks into vendor/aes and vendor/getrandom here.
+# Stage 2 forced an earlier resolution of one of the path-based patches
+# we deferred at Stage 0: cross-compiling rustls/ring for rv32 pulls in
+# `getrandom`, whose upstream crate doesn't recognize Xous as a target.
+# xous-core has a forked `getrandom` at `imports/getrandom` that calls
+# Xous's TRNG. We point at it via an absolute path on this dev box; this
+# is brittle (only works on machines where xous-core is at this path),
+# and is one of the open questions for Stage 9 — see docs/ROADMAP.md
+# "Open questions / things to revisit". Long-term resolution: either
+# merge our workspace into xous-core's tree, or fork the getrandom
+# patch into a separate publishable repo.
+[patch.crates-io.getrandom]
+path = "/home/tunnell/precursor-signal/repos/xous-core/imports/getrandom"
+
+# TODO (ROADMAP Stage 9): wire up the `aes` patch (also path-based,
+# `xous-core/services/aes`) the same way once `aes` shows up
+# transitively. Not blocking yet because no current dep pulls `aes`.
 # See docs/REPORT.md "Decision 6" for context.
