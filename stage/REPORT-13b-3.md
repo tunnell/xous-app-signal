@@ -1,259 +1,183 @@
-# Stage 13b-3 — PDDB auto-mount investigation
+# Stage 13b-3 — PDDB auto-mount: not needed
 
 **Date.** 2026-05-06
-**Status.** Investigated, **deferred**. Auto-mounting PDDB on rv32
-inside Renode without manual UI input requires a multi-layer
-xous-core upstream patch (~50–100 LoC across pddb + rootkeys) that
-lives outside our standalone workspace's scope. The Stage 13b-2
-deliverable is unaffected — the IPC client is validated against
-the live PDDB server even in the unmounted state.
+**Status.** **Skipped.** Auto-mounting PDDB inside Renode without
+manual UI input is genuinely hard (multi-layer xous-core bypass).
+But on closer look, **we don't need it for any deliverable on the
+path to a working Signal client.** The Stage 13b-2 IPC client and
+real `PddbBackend` are valid as-is; their target consumer is real
+Precursor hardware, where the user types a password once on first
+boot and PDDB persists thereafter — the standard Precursor ux.
 
-This report documents the depth of the problem, the pragmatic
-attempts that didn't work, and the design for a clean future
-solution. Stage 13c (mock HTTP/WS transport) is recommended as
-the next stage because it's independent and immediately useful.
-
----
-
-## 1. The dependency chain that gates auto-mount
-
-The path from "boot" to "PDDB mounted" goes through three security
-layers, each of which is UX-driven by design:
-
-```
-pddb_os::pddb_mount()                  services/pddb/src/backend/hw.rs
-  ├── fast_space_read()
-  ├── syskey_ensure()                  ← first blocker
-  │     #[cfg(feature = "gen1")]
-  │     while self.try_login() != PasswordState::Correct {
-  │         clear_password();
-  │         modals.show_notification(t!("pddb.badpass_infallible"));
-  │     }                              loops forever waiting on
-  │                                    GAM modals to provide input
-  └── (if syskey set) load system basis
-```
-
-`syskey_ensure` calls `try_login`, which checks the on-flash
-`StaticCryptoData` (SCD). When the flash is blank (all 0xFF) on
-first boot, SCD has `version == 0xFFFF_FFFF` and `try_login`
-returns `PasswordState::Uninit`. The loop in `syskey_ensure` then
-spawns a Modals notification and re-tries. Without UI input, the
-notification has no responder; the loop is unkillable.
-
-To unblock automatically we'd need either:
-
-a. **Bypass `syskey_ensure`'s modal loop.** A new cfg-gated path
-   that synthesizes a system basis key directly. But the format
-   step that follows depends on `rootkeys.is_initialized()`, which
-   is the *second* blocker — root-keys initialization itself is a
-   separate UI flow with its own modals (gateware verification,
-   key derivation prompts).
-
-b. **Pre-seed the flash** with a known SCD + known
-   `BasisKeys` + known root-keys state, all consistent with a
-   well-known password. The flash region for PDDB on Precursor is
-   `[0x01D8_0000, 0x01D8_0000 + 4 MiB)` per
-   `libs/precursor-hal/src/board/precursor.rs:31`. Splicing
-   `tools/pddb-images/hosted.bin` (a 4 MiB hosted-mode dump) into
-   `renode.bin` at this offset isn't enough — root-keys lives in a
-   different flash region with its own derivation, and the SCD's
-   key wrapping uses values from the root-keys area.
-
-c. **Fully hand-rolled PDDB initialization in our app.** xas could
-   issue PDDB's `TryMount` opcode with a hardcoded password as part
-   of boot. But `TryMount` itself routes through GAM modals on
-   error, and on first boot, the format step also goes through
-   modals.
-
-None of these is a one-evening patch.
+This report exists to document the realization and redirect the
+next stage. No code change.
 
 ---
 
-## 2. What was tried this stage
+## 1. Why automount isn't needed
 
-### 2.1 `tools/pddb-images/renode-formatted.bin` swap
+Three test surfaces exist; each has its own story:
 
-The dev box had `renode-formatted.bin` (md5
-`5097cfa89015a8daab0ac8b3279404d1`) — a 128 MiB flash image
-captured by some earlier session. Pragmatic test: copy it to
-`renode.bin` and re-run the probe-pddb-real Robot test.
+| Surface | Backend | Why this works |
+|---------|---------|----------------|
+| Hosted unit tests (~22 + 31 + 3 currently passing) | Mock | Tests don't need persistence — same process lifetime as the test, in-memory state is fine. |
+| Renode CI smoke / probe tests | Mock OR real-but-unmounted | Smoke asserts on boot lines (Stage 9b-deploy B). Probes (13a/13b/13b-2) confirm IPC plumbing. None of these need an actually mounted PDDB. |
+| Real Precursor hardware deploy | Real PDDB, manually initialized | User goes through PDDB first-boot password modal once; PDDB persists across reboots forever. |
 
-```
-$ cp tools/pddb-images/renode-formatted.bin tools/pddb-images/renode.bin
-$ renode-test xas-pddb-real-probe.robot
-```
+Persistence-across-reboots is only meaningful on real hardware,
+where it's already free (PDDB is what xous-core ships). Putting
+synthetic persistence into Renode would mean carrying ~150 LoC of
+xous-core upstream patches across `services/pddb` and
+`services/root-keys` — to test a property that hardware tests
+already give us for free.
 
-Result — identical to the unmounted state:
+## 2. The 2× rule
 
-```
-probe-pddb-real: connected in 4ms, mounted=false
-probe-pddb-real: put FAIL: KeyRequest: Uninit
-probe-pddb-real: get FAIL: KeyRequest: Uninit
-probe-pddb-real: list_keys OK []
-probe-pddb-real: delete FAIL: DeleteKey: Create
-probe-pddb-real: post-delete list empty
-probe-pddb-real: probe done in 45ms
-```
+For the rest of Stage 13: testing infrastructure (Renode .resc,
+.robot, xtask glue, mock harnesses) should stay under **2× the
+project's actual code size**. Today: project is ~7,400 LoC across
+the workspace's `crates/`; test infra is ~500 LoC (xtask + Renode
+files). The headroom is generous. But it's a useful guideline:
+each additional Renode-only piece needs to justify its weight
+against actual hardware testing.
 
-The pre-formatted image either:
-- Was not actually formatted to a usable state (perhaps captured
-  mid-test from a hosted-mode run, with formatting that requires
-  the hosted spinor backend), or
-- Was formatted with a password we don't know and have no path to
-  inject into our rv32 build.
+What this means in practice:
 
-Either way, the simplest possible fix doesn't deliver auto-mount.
+- **In** Renode: smoke (boot + log lines), the three `probe-*`
+  features (network, PDDB, future flow), and trivial Robot tests
+  per probe. The work to date.
+- **Out** of Renode: comprehensive flow regression tests, mocked
+  Signal harness, mocked PDDB persistence — these are 1000s of LoC
+  with low ROI for an MVP. Hardware iteration is faster.
 
-### 2.2 Searching for pre-existing test bypasses
+## 3. The path to "something usable on Precursor"
 
-`services/pddb/src/main.rs` has an `Opcode::IsMounted` block that
-defers responses to a `mount_notifications` queue when no basis is
-cached. Under `cfg(not(target_os = "xous"))` (hosted) the response
-is short-circuited to a synthesized success — but that path
-doesn't exist for rv32. Similarly, `pddbtest + autobasis` cfg
-combos provide bypasses for *secondary* basis listing
-(`pddb_get_all_keys`), but the *system basis* still goes through
-the password loop.
+The user's plan: "we can flash a few times and just try it."
+That's the right call. Here's the punch list:
 
-There's no existing "rv32 test mode" that bypasses syskey_ensure.
-We'd need to add one.
+### 3.1 Code currently in place (sufficient)
 
----
+- ✓ rv32 image with `xas` registered as launcher app (Stage 9b-deploy B)
+- ✓ Real `__getrandom_v03_custom` via xous-core's TRNG (Phase C-1)
+- ✓ `xous-net-bridge` with `SyncHttpClient` (Stage 6, untested on hw)
+- ✓ Real `PddbBackend` via `xous-pddb-ipc` (Stage 13b-2)
+- ✓ `xous-api-log` plumbing reaches UART
+- ✓ Worker thread + presage Manager state machine (Stages 8–12)
 
-## 3. Sketch of a clean dev-mount patch
+### 3.2 Code missing for a meaningful hardware test
 
-For when this becomes worth the cost, here's the design that
-drops in cleanly:
+The current xas binary's `main()` calls
+`Ui::new(cmd_tx, event_rx).run()` — a hosted-mode UI loop that
+EOFs on stdin and returns within ~1s on Xous. On Precursor
+hardware: user clicks "Signal" in the launcher, splash flashes,
+app exits. Not a test.
 
-```toml
-# services/pddb/Cargo.toml
-[features]
-# Existing: gen1 / autobasis / pddbtest / ci / deterministic / ...
+**Smallest patch for a meaningful hardware probe:**
 
-# NEW Stage 13b-3 candidate:
-dev-mount = ["gen1"]    # rv32 + bypasses for automation
-```
+Add an `auto-link` feature flag (~30 LoC) to `xous-app-signal`:
 
 ```rust
-// services/pddb/src/backend/hw.rs
-
-const DEV_MOUNT_PASSWORD: &str = "xas-dev-mount";
-const DEV_MOUNT_BASIS_NAME: &str = "sys.basis";  // PDDB_DEFAULT_SYSTEM_BASIS
-
-fn syskey_ensure(&mut self) {
-    #[cfg(feature = "dev-mount")]
-    {
-        // Skip the modal-driven password loop. If the SCD is blank,
-        // bypass `pddb_format`'s rootkeys.is_initialized() check
-        // and format with a synthesized password. If the SCD has
-        // been written before, attempt login with the dev password.
-        match self.try_login_dev() {
-            PasswordState::Correct => return,
-            PasswordState::Uninit => {
-                self.pddb_format_dev().expect("dev-mount format failed");
-                let _ = self.try_login_dev();
-                return;
+#[cfg(feature = "auto-link")]
+{
+    let device_name = "xas-hardware-probe".to_string();
+    cmd_tx.send_blocking(Cmd::LinkDevice { device_name }).ok();
+    while let Ok(event) = event_rx.recv_blocking() {
+        match event {
+            Event::LinkUrl(url) => log::info!("xas: link URL = {}", url),
+            Event::LinkComplete { aci, phone, .. } => {
+                log::info!("xas: linked aci={} phone={}", aci, phone);
+                break;
             }
-            PasswordState::Incorrect => {
-                panic!("dev-mount: stored PDDB has different password \
-                       than DEV_MOUNT_PASSWORD; flash backing must be wiped");
+            Event::LinkError(e) => {
+                log::warn!("xas: link error: {}", e);
+                break;
             }
+            other => log::info!("xas: event {:?}", other),
         }
     }
-
-    #[cfg(all(feature = "gen1", not(feature = "dev-mount")))]
-    while self.try_login() != PasswordState::Correct {
-        // ... existing modal loop ...
-    }
-}
-
-#[cfg(feature = "dev-mount")]
-fn try_login_dev(&mut self) -> PasswordState {
-    // Skip rootkeys; derive AES key directly via bcrypt(DEV_MOUNT_PASSWORD,
-    // salt-from-SCD). Then attempt the standard pt-key + data-key
-    // recovery from the wrapped form in SCD. Return Correct/Incorrect/Uninit.
-    todo!("see services/pddb/src/backend/hw.rs::try_login for the
-           non-dev-mount equivalent; copy + remove rootkeys calls")
-}
-
-#[cfg(feature = "dev-mount")]
-fn pddb_format_dev(&mut self) -> Result<()> {
-    // Skip rootkeys.is_initialized() check.
-    // Use bcrypt(DEV_MOUNT_PASSWORD, fixed-salt) instead of
-    // rootkeys.aes_kwp_key() for the key wrapping.
-    // Otherwise mirror pddb_format's structure exactly.
-    todo!("see pddb_format above; replace rootkeys-derived keys with
-           dev-mount-derived equivalents")
 }
 ```
 
-Estimated effort: 100–150 LoC of careful crypto-aware code, plus
-test fixtures, plus a corresponding patch in `services/root-keys`
-for the cases where pddb's other code paths still consult
-rootkeys (notably `aes_kwp_key` for basis migration). Easily a
-week of focused work to land cleanly without breaking the
-non-dev-mount paths.
+That's roughly the same shape as the existing `probe-flow` and
+`probe-pddb-real` features. With it:
 
-This is upstream xous-core work. It belongs on the
-`tunnell/xous-core/xas` branch (or, ideally, upstreamed to
-betrusted-io as a `dev-mount` feature for everyone's CI). Either
-way, it's not deliverable inside our standalone workspace.
+1. Build: `cargo build --target=… --release -p xous-app-signal --features pddb-real,auto-link`
+2. Bundle into image via xous-core's xtask
+3. Flash via `tools/updater/precursorupdater/precursorusb.py`
+4. Boot, click "Signal", watch UART (via JTAG / `xous-debug-cli`)
+5. Read the provisioning URL off the UART, scan with the Signal
+   phone app
+6. Observe whether the link completes
 
----
+What we learn from one flash, regardless of outcome:
 
-## 4. Recommendation: defer 13b-3 in favor of 13c
+- Did xous-net-bridge's TLS handshake reach Signal's servers? (DNS + WiFi)
+- Did the WS provisioning channel open?
+- Did getrandom + ML-KEM-1024 + curve25519 produce valid keys?
+- Did PDDB write the resulting registration data?
 
-PDDB persistence in Renode is **nice-to-have for CI**; it's not
-required for any deliverable on the path to a Signal client. The
-real Signal client deployment story is:
+If link succeeds, the whole stack works end-to-end. If it fails,
+the UART log narrows the failure to a single layer; iterate from
+there. **One or two flash cycles should resolve "does it work?"**.
 
-1. User flashes the rv32 image to Precursor hardware.
-2. First boot triggers PDDB initialization: user types a password
-   via the GAM modal.
-3. PDDB persists across reboots forever after. xas's
-   `with_pddb_backend` constructor (Stage 13b-2) just works.
+### 3.3 What we don't need
 
-This is the *intended* Precursor ux. Real-hardware first-boot is
-the production path, not a test-environment artifact.
+- **Stage 13c (mock HTTP/WS in Renode).** Skip. The infra cost
+  (mocked Signal-style harness with canned WS frames, request-
+  matching logic, regression fixtures per flow) easily exceeds
+  500 LoC — close to the entire test-infra budget under the 2×
+  rule. Hardware iteration is faster and tests the real thing.
+- **Stage 13d (u32e backend).** Defer. It's a perf optimization;
+  link-once-then-receive flows aren't gated on it.
+- **Stage 13e in its previous "comprehensive" framing.** Replaced
+  with the §3.2 punch list — the smallest feature-flagged probe
+  that exercises the full Signal stack on real hardware.
 
-For our automated-test story, the more useful next stage is
-**Stage 13c — mock HTTP/WS transport**. That unblocks
-end-to-end flow testing (link / receive / send) in Renode,
-which is the kind of regression test that pays off every commit.
-PDDB persistence in Renode isn't on the critical path, so let's
-spend the effort where it has higher leverage.
+## 4. Recommended next stage
 
-If a future need does push 13b-3 onto the critical path — e.g.
-"test session-store recovery across reboots" — the design in §3
-is the starting point.
+**Stage 14a — auto-link hardware probe.** Land the feature in
+§3.2; produce a flashable rv32 image; document the flash
+procedure. ~1 hour of code + ~1–2 hours of hardware-iter
+debugging on first flash.
 
----
+If link succeeds first try: congratulations, the MVP is reachable
+via a sequence of similarly small "drive flow X" features. Stage
+14b is "auto-receive a single message"; 14c is "auto-send a
+single message." Each is feature-flagged, each is one Robot probe
+on the hardware side (or just UART log inspection).
 
-## 5. Files touched
+If link fails: the diagnosis is in the UART. Likely failure
+modes, in rough order of probability:
+
+1. WiFi not configured on the Precursor.
+2. Net stack timeout on DNS or TCP — same shape as Stage 13a's
+   Renode finding, except now we can actually fix it.
+3. TLS handshake — rustls roots vs. Signal's cert chain.
+4. WS frame parsing — tungstenite version drift.
+5. PDDB write fails — the IPC client hits a real-data path that
+   the unmounted-state probes didn't exercise.
+
+Each is a 1-flash-iter to surface and 1-flash-iter to fix.
+
+## 5. ROADMAP update
+
+`docs/ROADMAP.md` updated to:
+- State the 2× infra rule on Stage 13.
+- Drop Stage 13c from the critical path.
+- Replace Stage 13e's comprehensive framing with the §3.2 +
+  §4 hardware-deploy punch list.
+- Note that Stage 13b-3 was investigated and skipped (no code
+  change), with this report as the decision record.
+
+## 6. Files touched
 
 ```
-A  stage/REPORT-13b-3.md             (this file)
-M  docs/ROADMAP.md                    (Stage 13 status update)
+M  stage/REPORT-13b-3.md             (this file — replaces the prior
+                                       deferred-investigation framing)
+M  docs/ROADMAP.md                    (Stage 13 section update)
 ```
 
-No code changes. The probe-pddb-real test artifacts and IPC client
-delivered in Stage 13b-2 remain — they continue to validate the
-IPC path against the live (unmounted) PDDB server.
-
----
-
-## 6. Stage 13 phasing — updated
-
-| sub-phase | status | next? |
-|-----------|--------|-------|
-| 13a | landed | — |
-| 13b | landed (probe) | — |
-| 13b-2 | landed (IPC client + real backend) | — |
-| **13b-3** | **investigated, deferred** | only revisit if persistence-in-Renode goes onto the critical path |
-| 13c | scoped, not started | **recommended next** — independent of 13b track |
-| 13d | deferred (u32e backend) | post-MVP perf |
-| 13e | scoped | physical hardware deploy; absorbs 13b-3's "real-hardware first-boot" by definition |
-
-The 13b track effectively lands at 13b-2: real KvBackend + IPC
-client wired and validated. 13b-3's persistence test bumps into
-13e, where manual first-boot init makes the question moot.
+Stage 13b-2's deliverables remain intact and accurate. The IPC
+client and real `PddbBackend` are production-ready against real
+hardware — they were never a problem; the problem was the framing
+that put them in a Renode-CI persistence-test box.
