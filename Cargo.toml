@@ -81,24 +81,27 @@ futures-timer = { git = "https://github.com/async-rs/futures-timer", rev = "07db
 git = "https://github.com/betrusted-io/ring-xous"
 rev = "5f86cb10bebd521a45fb3abb06995200aeda2948"
 
-# curve25519-dalek: vendored betrusted-io fork at vendor/curve25519-dalek.
-# This fork carries the driver for Precursor's curve25519 IP-core HW
-# accelerator at curve25519-dalek/src/backend/serial/u32e/. The accelerator
-# backend is selected by `RUSTFLAGS=--cfg curve25519_dalek_backend="u32e_backend"`
-# on rv32-xous builds; everywhere else falls back to the portable Rust
-# implementation, so hosted Linux gets the same code as upstream.
+# curve25519-dalek: vendored upstream 4.1.3 + lizard module port from
+# signalapp/curve25519-dalek (signal-curve25519-4.1.3 tag). Software-only,
+# no HW accelerator. Per dev/bunnie guidance (2026-05): "design around
+# software-only crypto-libraries for now; profile and figure out what
+# needs acceleration before putting a lot of effort into bringing the
+# hardware accelerators up to date." The Precursor curve25519 IP core
+# is Precursor-only (not on the Bao1x tape-out); a different PKE engine
+# exists on the chip. The HW-accel decision is deferred until profiling
+# tells us where the time is actually spent.
 #
-# Vendored (not git-pinned) because we needed a small local change: bumping
-# the upstream version field from 4.1.2 to 4.1.3 so that libsignal's
-# zkgroup, which depends on `curve25519-dalek = "4.1.3"`, sees the patch
-# match. Per dev guidance: "If there is any issue preventing your applying
-# that patch, then we should fix that fork to enable this, as that was the
-# purpose of the work."
+# Plug-in seam for HW acceleration later: swap this `[patch.crates-io]`
+# entry to point at a HW-accelerated fork (e.g. one carrying a u32e
+# backend for Precursor's IP core, or a fork wrapping the Bao1x PKE
+# engine). The lizard-module port is additive, so any HW-accelerated
+# fork that has it will also work.
 #
-# This supersedes the earlier choice of `signalapp/curve25519-dalek` and
-# the (incorrect) earlier reference to `tunnell/curve25519-dalek` in
-# xous-core's Cargo.toml. The betrusted-io fork is the canonical
-# Xous-targeted fork.
+# vendor/curve25519-dalek/ contains: upstream curve25519-dalek 4.1.3
+# (verbatim from `curve25519-4.1.3` tag) + curve25519-dalek-derive 0.1.1
+# + the lizard module (~6 files in src/lizard/) + a single-line edit to
+# src/lib.rs to wire `pub mod lizard;`. That's the entire delta — easy
+# to keep current with upstream and easy to audit.
 [patch.crates-io.curve25519-dalek]
 path = "vendor/curve25519-dalek/curve25519-dalek"
 
@@ -109,8 +112,8 @@ path = "vendor/curve25519-dalek/curve25519-dalek-derive"
 # git URL `https://github.com/signalapp/curve25519-dalek` (aliased as
 # `curve25519-dalek-signal`). [patch.crates-io] doesn't redirect git
 # sources, so we additionally patch the git URL here. Both pointers now
-# resolve to the same vendored crate, eliminating the two-RistrettoPoint
-# duplicate-types error.
+# resolve to the same vendored crate, eliminating the duplicate-types
+# error from two RistrettoPoint definitions.
 [patch."https://github.com/signalapp/curve25519-dalek"]
 curve25519-dalek = { path = "vendor/curve25519-dalek/curve25519-dalek" }
 curve25519-dalek-derive = { path = "vendor/curve25519-dalek/curve25519-dalek-derive" }

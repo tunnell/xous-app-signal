@@ -21,11 +21,7 @@
 use cfg_if::cfg_if;
 
 cfg_if! {
-    if #[cfg(curve25519_dalek_backend = "u32e_backend")] {
-        #[doc(hidden)]
-        pub mod u32e;
-    }
-    else if #[cfg(curve25519_dalek_backend = "fiat")] {
+    if #[cfg(curve25519_dalek_backend = "fiat")] {
 
         #[cfg(curve25519_dalek_bits = "32")]
         #[doc(hidden)]

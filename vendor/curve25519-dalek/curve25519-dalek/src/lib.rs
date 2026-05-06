@@ -42,8 +42,8 @@
     unused_lifetimes,
     unused_qualifications
 )]
-// needed for engine25519-as.
-#![recursion_limit = "512"]
+// Requires MSRV 1.77 as it does not allow build.rs gating
+#![allow(unexpected_cfgs)]
 
 //------------------------------------------------------------------------
 // External dependencies:
@@ -65,12 +65,6 @@ pub use digest;
 // Internal macros. Must come first!
 #[macro_use]
 pub(crate) mod macros;
-
-//To consider upstreaming, we likely can't do this. Consider the "panic_on_sw_eval" feature
-#[allow(unused_imports)]
-#[cfg(curve25519_dalek_backend = "u32e_backend")]
-#[macro_use]
-extern crate engine25519_as;
 
 //------------------------------------------------------------------------
 // curve25519-dalek public modules
@@ -94,9 +88,11 @@ pub mod constants;
 // External (and internal) traits.
 pub mod traits;
 
-// Lizard encoding extensions used by libsignal's zkgroup.
-// Ported from signalapp/curve25519-dalek (signal-curve25519-4.1.3 tag).
-// Always-on (no feature gate) so libsignal compiles unconditionally.
+// Lizard encoding extensions used by libsignal's zkgroup. Adds 4 methods
+// to RistrettoPoint: lizard_encode<H>, lizard_decode<H>,
+// from_uniform_bytes_single_elligator, decode_253_bits. Ported verbatim
+// from signalapp/curve25519-dalek (signal-curve25519-4.1.3 tag); patches
+// are additive vs upstream — no API changes to existing types.
 pub mod lizard;
 
 //------------------------------------------------------------------------
@@ -109,10 +105,8 @@ pub(crate) mod field;
 // Arithmetic backends (using u32, u64, etc) live here
 #[cfg(docsrs)]
 pub mod backend;
-#[cfg(all(not(docsrs), not(curve25519_dalek_backend = "u32e_backend")))]
+#[cfg(not(docsrs))]
 pub(crate) mod backend;
-#[cfg(curve25519_dalek_backend = "u32e_backend")]
-pub mod backend;
 
 // Generic code for window lookups
 pub(crate) mod window;

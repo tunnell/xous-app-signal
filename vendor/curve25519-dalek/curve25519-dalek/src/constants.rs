@@ -23,9 +23,7 @@ use crate::scalar::Scalar;
 use crate::edwards::EdwardsBasepointTable;
 
 cfg_if! {
-    if #[cfg(curve25519_dalek_backend = "u32e_backend")]{
-        pub use crate::backend::serial::u32e::constants::*;
-    } else if #[cfg(curve25519_dalek_backend = "fiat")] {
+    if #[cfg(curve25519_dalek_backend = "fiat")] {
         #[cfg(curve25519_dalek_bits = "32")]
         pub use crate::backend::serial::fiat_u32::constants::*;
         #[cfg(curve25519_dalek_bits = "64")]
@@ -146,7 +144,7 @@ mod test {
 
     /// Test that d = -121665/121666
     #[test]
-    #[cfg(all(curve25519_dalek_bits = "32", not(curve25519_dalek_backend = "fiat"), not(curve25519_dalek_backend = "u32e_backend")))]
+    #[cfg(all(curve25519_dalek_bits = "32", not(curve25519_dalek_backend = "fiat")))]
     fn test_d_vs_ratio() {
         use crate::backend::serial::u32::field::FieldElement2625;
         let a = -&FieldElement2625([121665, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
