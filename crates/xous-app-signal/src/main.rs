@@ -84,9 +84,16 @@ fn init_logger() {
 
 #[cfg(target_os = "xous")]
 fn init_logger() {
-    // TODO Stage 9b follow-up: when this binary lands inside
-    // xous-core's tree (or with a path-dep on `services/xous-log`),
-    // wire `log_server::init_wait()` here and route through
-    // `xous-api-log`. Until then the rv32 build prints log calls
-    // to wherever Xous's default-stdio binds (typically the UART).
+    // `xous-api-log::init_wait()` blocks until it can connect to
+    // the `xous-log-server` SID, then registers itself as the
+    // `log::Log` impl. The server (running as a separate process
+    // in the baseline Xous image) forwards records to the UART —
+    // which is what the Renode Robot test asserts on.
+    //
+    // Failure here means the log server didn't come up in time.
+    // For an MVP smoke test that's a fatal misconfiguration, but
+    // we don't panic — just continue. Subsequent `log::info!`
+    // calls become no-ops, which is exactly the same surface as
+    // a binary that hadn't installed a logger at all.
+    let _ = xous_api_log::init_wait();
 }
