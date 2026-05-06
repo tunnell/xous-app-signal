@@ -25,3 +25,13 @@ async-channel = { workspace = true }
 # transitively, but the binary references nothing from them
 # directly any more — Stage 1's smoke test moved into the bridge's
 # `tests` module).
+
+# Stage 9a follow-up to Stage 6.1 phase 3f: getrandom 0.3 custom
+# backend. The cfg `getrandom_backend="custom"` set in
+# `.cargo/config.toml` for rv32-xous makes getrandom expect an
+# extern `__getrandom_v03_custom` function provided by the user
+# binary; without it the rv32 release build won't link. We import
+# the crate here just for `getrandom::Error` (the extern's return
+# type), gated to the rv32-xous target.
+[target.'cfg(target_os = "xous")'.dependencies]
+getrandom = { version = "0.3", default-features = false }

@@ -37,6 +37,7 @@ use presage::libsignal_service::protocol::SessionRecord;
 use presage::model::identity::OnNewIdentity;
 
 mod backend_mock;
+mod backend_pddb;
 mod content;
 mod error;
 mod protocol;

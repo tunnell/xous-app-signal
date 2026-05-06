@@ -17,6 +17,30 @@ use async_channel::bounded;
 use presage_store_pddb::PddbStore;
 use xous_signal_bridge::{Cmd, Event, run_signal_worker};
 
+/// Stage 9a: provide the `__getrandom_v03_custom` symbol the
+/// `--cfg getrandom_backend="custom"` rv32-xous build requires.
+///
+/// Body is a panic for now — Stage 9b replaces it with a real call
+/// to xous-core's `trng::Trng` client (`services/trng/src/lib.rs`,
+/// see `Trng::get_u64` and `Trng::fill_buf`). Until then the symbol
+/// just needs to exist so the linker resolves; any code path that
+/// actually consumes randomness will panic, which is exactly what
+/// we want — Stage 9b's Renode boot test will catch any missing
+/// wiring before MVP flows ship.
+///
+/// The signature mirrors `getrandom-0.3.4/src/backends/custom.rs:10`.
+#[cfg(target_os = "xous")]
+#[unsafe(no_mangle)]
+unsafe extern "Rust" fn __getrandom_v03_custom(
+    _dest: *mut u8,
+    _len: usize,
+) -> Result<(), getrandom::Error> {
+    panic!(
+        "__getrandom_v03_custom: Stage 9b wires xous-core's trng client; \
+         hit before that landed"
+    );
+}
+
 /// Channel capacity. 16 is plenty for the Stage 8 single-prompt
 /// round-trip; production sizing (Stage 12+) will revisit.
 const CHAN_CAP: usize = 16;

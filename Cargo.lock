@@ -4482,6 +4482,7 @@ name = "xous-app-signal"
 version = "0.0.1"
 dependencies = [
  "async-channel",
+ "getrandom 0.3.4",
  "presage-store-pddb",
  "xous-signal-bridge",
 ]

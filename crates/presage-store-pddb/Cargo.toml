@@ -63,6 +63,24 @@ tracing = "0.1"
 # (vendor/presage/presage-store-sled/src/content.rs:471-485).
 base64 = "0.22"
 
+[features]
+# Stage 9a scaffolding: feature-flagged real PDDB backend.
+#
+# - `mock-backend` (default for hosted/test builds) selects the
+#   in-memory `MockBackend` from `backend_mock.rs`. Always available;
+#   tests rely on it.
+# - `pddb-backend` selects the real `PddbBackend` from
+#   `backend_pddb.rs`, which lives behind `cfg(target_os = "xous")`.
+#   Enabling on a non-xous target is harmless — the impl module just
+#   doesn't include itself, so the constructor is unavailable.
+#
+# The feature is non-default: hosted-mode `cargo build` keeps using
+# the mock. Stage 9b inside the xous-core fork will set
+# `--features=pddb-backend` for the rv32 image build.
+default = []
+mock-backend = []
+pddb-backend = []
+
 [dev-dependencies]
 # `RegistrationData` construction in tests needs a few presage / libsignal
 # constructors. They come transitively through `presage`; we only need
