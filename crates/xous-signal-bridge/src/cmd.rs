@@ -40,6 +40,18 @@ pub enum Cmd {
     /// and the link completes anyway.
     LinkCancel,
 
+    /// Stage 11: start the receive loop. Requires a linked Manager
+    /// (i.e. Cmd::LinkDevice must have completed and persisted, or
+    /// the worker must have rehydrated from PDDB at startup). The
+    /// worker moves the Manager into a long-running task that
+    /// streams `Received` items from `Manager::receive_messages`,
+    /// translates each `Received::Content` into `Event::Message`,
+    /// and calls `store.flush_sessions()` on `Received::QueueEmpty`
+    /// per docs/REPORT.md Decision 5. After this Cmd, no further
+    /// access to the Manager is possible from other Cmds — Stage 12
+    /// will refactor to multiplex send/receive once we hit it.
+    StartReceive,
+
     /// Tell the worker to drain its event channel and exit. The main
     /// thread sends this before joining the worker handle so we don't
     /// rely on dropping the cmd channel sender (which works but is
@@ -82,6 +94,36 @@ pub enum Event {
     /// rejecting the link request. String-typed because the IPC
     /// boundary forces stringification (same shape as `Whoami`).
     LinkError(String),
+
+    /// Stage 11: confirms the receive loop is established. Emitted
+    /// after `Manager::receive_messages` has returned a stream and
+    /// the worker is parked on its `next()`. UI uses this to
+    /// transition the status indicator from "starting" to "listening".
+    ReceiveStarted,
+
+    /// Stage 11: a single decrypted incoming message. Fields are
+    /// flattened from `presage::libsignal_service::content::Content`
+    /// for the same IPC reason `LinkComplete` is — string-typed
+    /// payloads cross the boundary cleanly. Only `DataMessage`-style
+    /// text bodies are surfaced; control / sync / receipt messages
+    /// from the receive stream are silently dropped at the worker
+    /// (their effect on the store is already applied).
+    Message {
+        /// `service_id_string()` of the sender — the thread key the
+        /// UI groups conversations by.
+        sender: String,
+        /// Plaintext body. Empty string means an attachment-only or
+        /// reaction-only DataMessage that we can't render in MVP.
+        body: String,
+        /// Server timestamp (UNIX millis), matches what `Content`
+        /// carries.
+        timestamp: u64,
+    },
+
+    /// Stage 11: receive loop hit a fatal error and unwound. The
+    /// worker's Manager is consumed at this point; the user must
+    /// re-link to resume.
+    ReceiveError(String),
 
     /// Confirms the worker is winding down. The main thread joins
     /// after receiving this — same way Manager state machines on

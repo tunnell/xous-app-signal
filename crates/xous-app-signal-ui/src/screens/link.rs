@@ -186,8 +186,11 @@ impl LinkDoneScreen {
 
     pub fn handle_key(&mut self, key: Key) -> Transition {
         match key {
-            Key::Home | Key::Right => Transition::Replace(crate::screen::Screen::EmptyList(
-                crate::screens::empty_list::EmptyListScreen::new(),
+            // Stage 11: from LinkDone, Home transitions into the
+            // ConversationList screen which on entry sends
+            // `Cmd::StartReceive` and begins streaming messages.
+            Key::Home | Key::Right => Transition::Replace(crate::screen::Screen::ConversationList(
+                crate::screens::conversation_list::ConversationListScreen::new(),
             )),
             Key::Left | Key::Esc => Transition::Pop,
             _ => Transition::None,

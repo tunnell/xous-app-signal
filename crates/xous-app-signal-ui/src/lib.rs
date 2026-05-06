@@ -152,6 +152,7 @@ impl Ui {
     /// (they were emitted by side channels — `Event::Pong` etc. —
     /// and don't affect the user-visible screen).
     fn handle_event(&mut self, evt: Event) {
+        use crate::screens::conversation_list::{MessageSummary, ReceiveStatus};
         use crate::screens::link::{LinkDoneScreen, LinkErrorScreen, LinkShowUrlScreen};
         match evt {
             Event::LinkUrl(url) => {
@@ -194,8 +195,36 @@ impl Ui {
                     )));
                 }
             }
-            // Pong / Whoami / ShuttingDown — no UI effect for Stage 10.
-            // Stage 11 will route Whoami / NewMessage etc.
+            Event::ReceiveStarted => {
+                if let Some(Screen::ConversationList(s)) = self.stack.last_mut() {
+                    s.set_status(ReceiveStatus::Listening);
+                }
+            }
+            Event::Message {
+                sender,
+                body,
+                timestamp,
+            } => {
+                if let Some(Screen::ConversationList(s)) = self.stack.last_mut() {
+                    s.push_message(MessageSummary {
+                        sender,
+                        body,
+                        timestamp,
+                    });
+                }
+                // If the user is on a different screen (e.g. menu),
+                // the message is dropped on the floor for MVP. The
+                // PDDB store has already absorbed it through
+                // presage's internals; a future iteration can
+                // populate the screen from PDDB on re-entry.
+            }
+            Event::ReceiveError(reason) => {
+                if let Some(Screen::ConversationList(s)) = self.stack.last_mut() {
+                    s.set_status(ReceiveStatus::Error(reason));
+                }
+            }
+
+            // Pong / Whoami / ShuttingDown — no UI effect.
             _ => {}
         }
     }
@@ -226,15 +255,23 @@ impl Ui {
     /// Audit story: every screen→Cmd binding lives in this one
     /// function.
     fn on_screen_entered(&self) {
-        if let Some(Screen::LinkStarting(_)) = self.stack.last() {
-            let _ = self.cmd_tx.send_blocking(Cmd::LinkDevice {
-                // Stage 10 hosted-mode hardcodes the device name.
-                // A future stage (or a direct UI flow) lets the user
-                // customise it via a text-input screen.
-                device_name: "Precursor".to_string(),
-            });
+        match self.stack.last() {
+            Some(Screen::LinkStarting(_)) => {
+                let _ = self.cmd_tx.send_blocking(Cmd::LinkDevice {
+                    // Stage 10 hosted-mode hardcodes the device name.
+                    // A future stage (or a direct UI flow) lets the
+                    // user customise it via a text-input screen.
+                    device_name: "Precursor".to_string(),
+                });
+            }
+            Some(Screen::ConversationList(_)) => {
+                // Stage 11: starting receive is a side-effect of
+                // landing on the conversation list. The worker moves
+                // the linked Manager into a long-running task.
+                let _ = self.cmd_tx.send_blocking(Cmd::StartReceive);
+            }
+            _ => {}
         }
-        // Other screens have no side-effect on entry.
     }
 
     /// Visible-for-tests: peek the top screen's discriminant.
@@ -279,8 +316,9 @@ fn top_id(s: Option<&Screen>) -> u8 {
         Some(Screen::LinkConfirming(_)) => 7,
         Some(Screen::LinkDone(_)) => 8,
         Some(Screen::LinkError(_)) => 9,
-        Some(Screen::Conversation) => 10,
-        Some(Screen::Compose) => 11,
+        Some(Screen::ConversationList(_)) => 10,
+        Some(Screen::Conversation) => 11,
+        Some(Screen::Compose) => 12,
     }
 }
 
@@ -477,19 +515,29 @@ mod tests {
     }
 
     #[test]
-    fn link_done_home_transitions_to_empty_list() {
-        let (cmd_tx, _cmd_rx) = bounded::<Cmd>(4);
+    fn link_done_home_transitions_to_conversation_list() {
+        let (cmd_tx, cmd_rx) = bounded::<Cmd>(4);
         let (_event_tx, event_rx) = bounded::<Event>(4);
         let mut ui = Ui::new(cmd_tx, event_rx);
 
-        ui.dispatch(Key::Home);
+        // Run through the link flow so we land on LinkDone.
+        ui.dispatch(Key::Home); // Splash -> LinkStarting (cmd: LinkDevice)
         ui.handle_event(Event::LinkComplete {
             device_name: "P".into(),
             aci: "x".into(),
             phone: "+1".into(),
         });
-        ui.dispatch(Key::Home);
-        assert!(matches!(ui.top(), Some(Screen::EmptyList(_))));
+        // Drain the LinkDevice cmd from the queue.
+        let _ = cmd_rx.try_recv();
+
+        ui.dispatch(Key::Home); // LinkDone -> ConversationList (cmd: StartReceive)
+        assert!(matches!(ui.top(), Some(Screen::ConversationList(_))));
+
+        // Side-effect: Cmd::StartReceive should be in the queue.
+        match cmd_rx.try_recv() {
+            Ok(Cmd::StartReceive) => {}
+            other => panic!("expected StartReceive cmd, got {other:?}"),
+        }
     }
 
     #[test]
@@ -507,5 +555,121 @@ mod tests {
         // Stale event arrives. Should be a no-op — UI is on splash.
         ui.handle_event(Event::LinkUrl("tsdevice://stale".to_string()));
         assert!(matches!(ui.top(), Some(Screen::Splash(_))));
+    }
+
+    // ----- Stage 11 -----
+
+    use crate::screens::conversation_list::{
+        ConversationListScreen, MessageSummary, ReceiveStatus,
+    };
+
+    /// Helper: build a UI parked on the ConversationList screen with
+    /// the LinkStarting/StartReceive cmds already drained.
+    fn ui_on_conversation_list() -> (Ui, async_channel::Receiver<Cmd>) {
+        let (cmd_tx, cmd_rx) = bounded::<Cmd>(4);
+        let (_event_tx, event_rx) = bounded::<Event>(4);
+        let mut ui = Ui::new(cmd_tx, event_rx);
+        ui.dispatch(Key::Home);
+        ui.handle_event(Event::LinkComplete {
+            device_name: "P".into(),
+            aci: "x".into(),
+            phone: "+1".into(),
+        });
+        ui.dispatch(Key::Home); // -> ConversationList (sends StartReceive)
+        // Drain LinkDevice + StartReceive.
+        while cmd_rx.try_recv().is_ok() {}
+        (ui, cmd_rx)
+    }
+
+    #[test]
+    fn conversation_list_starts_in_starting_status() {
+        let (ui, _cmd_rx) = ui_on_conversation_list();
+        match ui.top() {
+            Some(Screen::ConversationList(s)) => {
+                assert!(matches!(s.status, ReceiveStatus::Starting));
+                assert!(s.messages.is_empty());
+            }
+            other => panic!("expected ConversationList, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn receive_started_event_sets_listening_status() {
+        let (mut ui, _cmd_rx) = ui_on_conversation_list();
+        ui.handle_event(Event::ReceiveStarted);
+        match ui.top() {
+            Some(Screen::ConversationList(s)) => {
+                assert!(matches!(s.status, ReceiveStatus::Listening));
+            }
+            other => panic!("expected ConversationList, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn message_event_appends_to_list() {
+        let (mut ui, _cmd_rx) = ui_on_conversation_list();
+        ui.handle_event(Event::Message {
+            sender: "alice".into(),
+            body: "hi from alice".into(),
+            timestamp: 1000,
+        });
+        ui.handle_event(Event::Message {
+            sender: "bob".into(),
+            body: "hi from bob".into(),
+            timestamp: 1100,
+        });
+        match ui.top() {
+            Some(Screen::ConversationList(s)) => {
+                assert_eq!(s.messages.len(), 2);
+                assert_eq!(s.messages[0].sender, "alice");
+                assert_eq!(s.messages[1].body, "hi from bob");
+            }
+            other => panic!("expected ConversationList, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn receive_error_event_sets_error_status() {
+        let (mut ui, _cmd_rx) = ui_on_conversation_list();
+        ui.handle_event(Event::ReceiveError("WS closed".into()));
+        match ui.top() {
+            Some(Screen::ConversationList(s)) => match &s.status {
+                ReceiveStatus::Error(reason) => assert_eq!(reason, "WS closed"),
+                other => panic!("expected Error, got {other:?}"),
+            },
+            other => panic!("expected ConversationList, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn message_event_ignored_when_not_on_conversation_list() {
+        let (cmd_tx, _cmd_rx) = bounded::<Cmd>(4);
+        let (_event_tx, event_rx) = bounded::<Event>(4);
+        let mut ui = Ui::new(cmd_tx, event_rx);
+
+        // Still on Splash. Message arrives — should be dropped.
+        ui.handle_event(Event::Message {
+            sender: "carol".into(),
+            body: "noise".into(),
+            timestamp: 0,
+        });
+        assert!(matches!(ui.top(), Some(Screen::Splash(_))));
+    }
+
+    #[test]
+    fn message_list_caps_at_max_visible_times_two() {
+        let mut s = ConversationListScreen::new();
+        for i in 0..50 {
+            s.push_message(MessageSummary {
+                sender: format!("u{i}"),
+                body: format!("m{i}"),
+                timestamp: i,
+            });
+        }
+        // MAX_VISIBLE = 8; cap = 16. Latest 16 messages retained;
+        // the oldest 34 dropped.
+        assert_eq!(s.messages.len(), 16);
+        assert_eq!(s.messages.first().unwrap().sender, "u34");
+        assert_eq!(s.messages.last().unwrap().sender, "u49");
     }
 }

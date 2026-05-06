@@ -13,6 +13,7 @@
 
 use crate::screens::{
     about::AboutScreen,
+    conversation_list::ConversationListScreen,
     empty_list::EmptyListScreen,
     link::{
         LinkConfirmingScreen, LinkDoneScreen, LinkErrorScreen, LinkShowUrlScreen,
@@ -28,6 +29,11 @@ pub enum Screen {
     Splash(SplashScreen),
     Menu(MenuScreen),
     About(AboutScreen),
+
+    /// Stage 9c stub kept around for tests and as the bottom of the
+    /// post-link stack before any messages arrive. Stage 11's
+    /// `LinkDone -> Home` transition replaces this with
+    /// `ConversationList` so the receive loop can populate it.
     EmptyList(EmptyListScreen),
 
     // Stage 10 — populated.
@@ -37,7 +43,11 @@ pub enum Screen {
     LinkDone(LinkDoneScreen),
     LinkError(LinkErrorScreen),
 
-    // --- Stage 11/12 placeholders ---
+    /// Stage 11 — populated. Renders the receive-status indicator
+    /// and a flat list of received messages, latest-first.
+    ConversationList(ConversationListScreen),
+
+    // --- Stage 12 placeholders ---
     Conversation,
     Compose,
 }
@@ -73,9 +83,10 @@ impl Screen {
             Screen::LinkConfirming(s) => s.render(),
             Screen::LinkDone(s) => s.render(),
             Screen::LinkError(s) => s.render(),
+            Screen::ConversationList(s) => s.render(),
 
-            // Stage 11/12 placeholders.
-            Screen::Conversation => placeholder("Conversation", "Stage 11"),
+            // Stage 12 placeholders.
+            Screen::Conversation => placeholder("Conversation", "Stage 12"),
             Screen::Compose => placeholder("Compose", "Stage 12"),
         }
     }
@@ -95,6 +106,7 @@ impl Screen {
             }
             Screen::LinkDone(_) => "Home Continue",
             Screen::LinkError(_) => "Up/Down Select   Home Choose",
+            Screen::ConversationList(_) => "Menu   q Quit",
             Screen::Conversation => "Up/Down Scroll   Left Back   Home Reply",
             Screen::Compose => "Home Send   Left Back   Esc Discard",
         }
@@ -115,8 +127,9 @@ impl Screen {
             Screen::LinkConfirming(s) => s.handle_key(key),
             Screen::LinkDone(s) => s.handle_key(key),
             Screen::LinkError(s) => s.handle_key(key),
+            Screen::ConversationList(s) => s.handle_key(key),
 
-            // Stage 11/12 placeholders: any key returns to the
+            // Stage 12 placeholders: any key returns to the
             // previous screen.
             _ => Transition::Pop,
         }

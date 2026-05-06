@@ -146,6 +146,27 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                     // screen).
                     tracing::debug!("LinkCancel received; in-flight link runs to completion");
                 }
+                Ok(Cmd::StartReceive) => {
+                    let Some(manager) = linked.take() else {
+                        let _ = event_tx
+                            .send(Event::ReceiveError(
+                                "not linked yet — send Cmd::LinkDevice first".to_string(),
+                            ))
+                            .await;
+                        continue;
+                    };
+                    // Move the Manager into a long-running receive
+                    // task. We `take` it from `linked` (so other Cmds
+                    // can't try to use it concurrently — Stage 11
+                    // simplification; Stage 12 will refactor to
+                    // share). The task lives until the stream ends
+                    // or errors; afterward the worker has no Manager.
+                    let store_for_flush = store.clone();
+                    let event_tx_for_recv = event_tx.clone();
+                    executor
+                        .spawn(handle_receive(manager, store_for_flush, event_tx_for_recv))
+                        .detach();
+                }
                 Ok(Cmd::Shutdown) => {
                     let _ = event_tx.send(Event::ShuttingDown).await;
                     break;
@@ -236,6 +257,111 @@ async fn handle_link_device(
             Err(())
         }
     }
+}
+
+/// Stage 11: long-running receive loop.
+///
+/// Owns the linked `Manager` for the lifetime of the task, calls
+/// `receive_messages` to obtain a `Stream<Item = Received>`, and
+/// translates each item into either an `Event::Message` (for
+/// `Received::Content` carrying a `DataMessage` body) or a
+/// `flush_sessions()` side-effect (for `Received::QueueEmpty`, per
+/// docs/REPORT.md Decision 5). `Received::Contacts` is logged but
+/// not surfaced to the UI in MVP (the store has already absorbed
+/// the contact-sync results).
+///
+/// On terminal error the Manager is dropped and `Event::ReceiveError`
+/// is sent. The worker has no way to recover from this without a
+/// fresh `Cmd::LinkDevice` — that's noted in the receive-error
+/// path.
+async fn handle_receive(
+    mut manager: Manager<PddbStore, Registered>,
+    store: PddbStore,
+    event_tx: Sender<Event>,
+) {
+    use futures::StreamExt;
+    use presage::libsignal_service::content::ContentBody;
+    use presage::model::messages::Received;
+
+    let mut stream = match manager.receive_messages().await {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = event_tx
+                .send(Event::ReceiveError(format!("receive_messages: {e}")))
+                .await;
+            return;
+        }
+    };
+
+    if event_tx.send(Event::ReceiveStarted).await.is_err() {
+        // UI already gone; no point continuing.
+        return;
+    }
+
+    while let Some(item) = stream.next().await {
+        match item {
+            Received::Content(content) => {
+                // Only surface text-bearing DataMessages for MVP.
+                // Sync/receipt/typing messages have already been
+                // absorbed by the store machinery presage runs
+                // internally; they don't need UI display.
+                let body = match &content.body {
+                    ContentBody::DataMessage(dm) => dm.body.clone().unwrap_or_default(),
+                    ContentBody::SynchronizeMessage(sm) => {
+                        // Outgoing message we sent from another
+                        // device, mirrored here. Display the body
+                        // if present so the user sees their own
+                        // sends in the conversation list.
+                        sm.sent
+                            .as_ref()
+                            .and_then(|s| s.message.as_ref())
+                            .and_then(|dm| dm.body.clone())
+                            .unwrap_or_default()
+                    }
+                    _ => {
+                        // EditMessage, ReceiptMessage, TypingMessage,
+                        // CallMessage — not displayed in MVP.
+                        continue;
+                    }
+                };
+                if body.is_empty() {
+                    // Attachment-only or reaction-only — skip for MVP.
+                    continue;
+                }
+                let sender = content.metadata.sender.service_id_string();
+                let timestamp = content.metadata.timestamp;
+                if event_tx
+                    .send(Event::Message {
+                        sender,
+                        body,
+                        timestamp,
+                    })
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+            }
+            Received::QueueEmpty => {
+                // Decision 5: flush dirty sessions in batched chunks
+                // at quiescence. Errors are non-fatal — the next
+                // QueueEmpty will retry; if PDDB is genuinely broken
+                // the next session-store write fails too and surfaces
+                // there.
+                if let Err(e) = store.flush_sessions() {
+                    tracing::warn!("flush_sessions on QueueEmpty failed: {e}");
+                }
+            }
+            Received::Contacts => {
+                tracing::debug!("contact-sync batch absorbed by store");
+            }
+        }
+    }
+
+    // Stream ended cleanly — usually means WS closed or shutdown.
+    let _ = event_tx
+        .send(Event::ReceiveError("receive stream ended".to_string()))
+        .await;
 }
 
 /// Run `Manager::load_registered` and stringify the result. Stage 8

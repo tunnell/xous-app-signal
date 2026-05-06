@@ -5,6 +5,7 @@
 //! the four link-flow sub-states, etc.
 
 pub mod about;
+pub mod conversation_list;
 pub mod empty_list;
 pub mod link;
 pub mod menu;
