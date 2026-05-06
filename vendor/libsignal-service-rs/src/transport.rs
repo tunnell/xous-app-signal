@@ -71,17 +71,49 @@ pub enum HttpError {
     Encode(String),
 }
 
+/// A bidirectional WebSocket connection, expressed as the channel ends
+/// of an internal sync↔async pump. The implementation (in
+/// `xous-net-bridge`) owns a worker thread holding a sync
+/// `tungstenite::WebSocket`; this struct hands the executor side the
+/// frame channels plus a future that drives the cross-thread bridge.
+pub struct WebSocketChannels {
+    /// Outgoing frames (executor side → wire). Drop this to half-close.
+    pub outgoing: futures::channel::mpsc::Sender<WsFrame>,
+    /// Incoming frames (wire → executor side).
+    pub incoming: futures::channel::mpsc::Receiver<Result<WsFrame, HttpError>>,
+}
+
+/// Opaque WebSocket frame. Mirrors the subset of
+/// `reqwest_websocket::Message` that libsignal-service-rs uses.
+#[derive(Clone, Debug)]
+pub enum WsFrame {
+    Binary(Vec<u8>),
+    Text(String),
+    Ping(Vec<u8>),
+    Pong(Vec<u8>),
+    Close { code: u16, reason: String },
+}
+
 /// The `?Send` async trait is friendly to single-threaded executors.
 #[async_trait(?Send)]
 pub trait HttpClient {
-    /// Configuration applied per `HttpClient` instance: pinned root CA,
-    /// connect/total timeouts, user-agent. Constructors are
-    /// implementation-specific and provided by the impl crate
-    /// (e.g., `xous-net-bridge` provides a `UreqHttpClient`).
+    /// Send a single HTTP request and receive the full response body.
     async fn execute(
         &self,
         req: HttpRequest,
     ) -> Result<HttpResponse, HttpError>;
+
+    /// Open a WebSocket to `url` with the supplied headers. Returns the
+    /// outgoing/incoming channel pair. The implementation typically spawns
+    /// a worker thread that owns the sync WebSocket and bridges frames
+    /// across the channels; the channels stay open as long as the
+    /// underlying connection is alive.
+    async fn connect_websocket(
+        &self,
+        url: Url,
+        headers: HeaderMap,
+        auth: Option<BasicAuth>,
+    ) -> Result<WebSocketChannels, HttpError>;
 }
 
 // ---------------------------------------------------------------------------

@@ -117,8 +117,10 @@ pub enum ServiceError {
     #[error("Device limit reached: {current} out of {max} devices.")]
     DeviceLimitReached { current: u32, max: u32 },
 
-    #[error("HTTP reqwest error: {0}")]
+    #[error("HTTP error (reqwest, deprecated): {0}")]
     Http(#[from] reqwest::Error),
+    #[error("HTTP error (transport): {0}")]
+    HttpTransport(#[from] crate::transport::HttpError),
 
     #[error(transparent)]
     Curve(#[from] CurveError),
