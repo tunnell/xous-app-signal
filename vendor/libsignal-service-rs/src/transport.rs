@@ -238,3 +238,43 @@ impl Certificate {
         Ok(Certificate { pem: pem.to_vec() })
     }
 }
+
+// ---------------------------------------------------------------------------
+// Thread-local HTTP client handle.
+//
+// PushService used to own a `reqwest::Client` directly. Now the transport
+// implementation lives in a different crate (`xous-net-bridge`) and needs to
+// be installed on the worker thread before any PushService method runs. The
+// pattern mirrors `presage::set_executor` for symmetry — and because both
+// the executor and the http client need per-thread handles to satisfy the
+// `?Send` async-trait constraints, a single registration step at thread
+// startup is the cleanest API.
+//
+// Usage:
+//   // On the worker thread, once at startup:
+//   libsignal_service::transport::set_http_client(Arc::new(my_ureq_impl));
+//   // Then PushService::new etc. work.
+// ---------------------------------------------------------------------------
+
+use std::cell::RefCell;
+
+thread_local! {
+    static HTTP_CLIENT: RefCell<Option<Arc<dyn HttpClient + Send + Sync>>> =
+        const { RefCell::new(None) };
+}
+
+/// Install the per-thread `HttpClient` that PushService will use. Call once
+/// on the worker thread before any PushService method.
+pub fn set_http_client(client: Arc<dyn HttpClient + Send + Sync>) {
+    HTTP_CLIENT.with(|cell| *cell.borrow_mut() = Some(client));
+}
+
+/// Internal accessor used by PushService::new and PushService::request.
+pub(crate) fn get_http_client() -> Arc<dyn HttpClient + Send + Sync> {
+    HTTP_CLIENT.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .expect("libsignal_service::transport::set_http_client must be called on this thread first")
+            .clone()
+    })
+}
