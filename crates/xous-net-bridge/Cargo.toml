@@ -26,6 +26,30 @@ webpki-roots = "1.0"
 # conflict with our pinned `=0.22.2`.
 tungstenite = { version = "0.21", default-features = false, features = ["handshake"] }
 
+# Stage 6.1 phase 3d: HttpClient trait (in libsignal-service-rs) + impl
+# here. Using libsignal-service as a path dep so we can implement the
+# trait without circular-dep problems (libsignal-service doesn't depend
+# on xous-net-bridge).
+libsignal-service = { path = "../../vendor/libsignal-service-rs", default-features = false }
+
+# Sync→async bridging for the Stage 6.1 phase 3d HttpClient impl. The
+# HttpClient::execute trait method is async (returns a Future), but our
+# HTTP/1.1 client is sync (writes/reads on a TcpStream). `async-channel`
+# bridges them: the async-side awaits a oneshot, a worker thread runs the
+# sync HTTP, and posts the response back.
+async-channel = { workspace = true }
+async-trait = "0.1"
+http = "1"
+
+# Serde for JSON body decoding in the HttpClient::execute return path.
+serde = "1"
+serde_json = "1"
+
+# HTTP client encoding helpers.
+base64 = "0.22"
+tracing = "0.1"
+url = "2"
+
 [[example]]
 name = "https_get"
 path = "examples/https_get.rs"

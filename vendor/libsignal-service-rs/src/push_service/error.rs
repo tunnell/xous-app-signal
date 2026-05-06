@@ -52,8 +52,13 @@ pub enum ServiceError {
     #[error("Unexpected response: HTTP {http_code}")]
     UnhandledResponseCode { http_code: u16 },
 
+    // Stage 6.1: was `WsError(Box<reqwest_websocket::Error>)`. WS errors
+    // now route through the transport::HttpError type via the
+    // HttpTransport variant. WsError(String) is kept for explicit
+    // libsignal-service-rs-side WS-state errors that don't have a
+    // transport-level cause (e.g. from process_frame).
     #[error("Websocket error: {0}")]
-    WsError(Box<reqwest_websocket::Error>),
+    WsError(String),
     #[error("Websocket closing: {reason}")]
     WsClosing { reason: &'static str },
 
@@ -117,9 +122,9 @@ pub enum ServiceError {
     #[error("Device limit reached: {current} out of {max} devices.")]
     DeviceLimitReached { current: u32, max: u32 },
 
-    #[error("HTTP error (reqwest, deprecated): {0}")]
-    Http(#[from] reqwest::Error),
-    #[error("HTTP error (transport): {0}")]
+    // Stage 6.1 phase 3b: reqwest::Error variant removed. All HTTP errors
+    // route through transport::HttpError now.
+    #[error("HTTP transport error: {0}")]
     HttpTransport(#[from] crate::transport::HttpError),
 
     #[error(transparent)]
@@ -152,8 +157,6 @@ impl From<FingerprintError> for ServiceError {
     }
 }
 
-impl From<reqwest_websocket::Error> for ServiceError {
-    fn from(error: reqwest_websocket::Error) -> Self {
-        Self::WsError(Box::new(error))
-    }
-}
+// Stage 6.1: From<reqwest_websocket::Error> removed. WS-specific errors
+// now use either WsError(String) for explicit messages or route through
+// HttpTransport via #[from] crate::transport::HttpError.

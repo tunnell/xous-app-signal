@@ -119,10 +119,12 @@ struct SignalWebSocketProcess {
 
     // Stage 6.1: was `ws: WebSocket` (reqwest_websocket). Now the two
     // channel ends from `xous-net-bridge`'s sync-tungstenite worker pump.
-    // The pump worker thread translates between `WsFrame` and the
-    // wire-level frames; this loop sees only frame values.
-    ws_outgoing: mpsc::Sender<WsFrame>,
-    ws_incoming: mpsc::Receiver<Result<WsFrame, crate::transport::HttpError>>,
+    // async-channel (vs futures::channel::mpsc) so the pump worker thread
+    // can use sync send_blocking/recv_blocking, while this async loop uses
+    // .send().await / .recv().await — same channel object both sides.
+    ws_outgoing: async_channel::Sender<WsFrame>,
+    ws_incoming:
+        async_channel::Receiver<Result<WsFrame, crate::transport::HttpError>>,
 }
 
 impl SignalWebSocketProcess {
@@ -304,27 +306,30 @@ impl SignalWebSocketProcess {
                         }
                     }
                 }
-                // Incoming websocket message
-                web_socket_item = self.ws_incoming.next().fuse() => {
+                // Incoming websocket message. async_channel::Receiver's
+                // recv() returns Result<T, RecvError> (not Option<T> like
+                // Stream::next), so the outer Err here is "channel closed",
+                // and the inner Err is "transport error from the pump".
+                web_socket_item = self.ws_incoming.recv().fuse() => {
                     match web_socket_item {
-                        Some(Ok(WsFrame::Close { code, reason })) => {
+                        Ok(Ok(WsFrame::Close { code, reason })) => {
                             tracing::warn!(%code, reason, "websocket closed");
                             break;
                         },
-                        Some(Ok(WsFrame::Binary(frame))) => {
+                        Ok(Ok(WsFrame::Binary(frame))) => {
                             self.process_frame(frame).await?;
                         }
-                        Some(Ok(WsFrame::Ping(_))) => {
+                        Ok(Ok(WsFrame::Ping(_))) => {
                             tracing::trace!("received ping");
                         }
-                        Some(Ok(WsFrame::Pong(_))) => {
+                        Ok(Ok(WsFrame::Pong(_))) => {
                             tracing::trace!("received pong");
                         }
-                        Some(Ok(WsFrame::Text(_))) => {
+                        Ok(Ok(WsFrame::Text(_))) => {
                             tracing::trace!("received text (unsupported, skipping)");
                         }
-                        Some(Err(e)) => return Err(ServiceError::HttpTransport(e)),
-                        None => {
+                        Ok(Err(e)) => return Err(ServiceError::HttpTransport(e)),
+                        Err(_closed) => {
                             return Err(ServiceError::WsClosing {
                                 reason: "end of web request stream; socket closing"
                             });

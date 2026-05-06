@@ -45,8 +45,9 @@ uuid = { version = "1", features = ["serde"] }
 # references that used to flow through reqwest's re-exports. Same crate either
 # way — `reqwest::Method` and `http::Method` are literally the same type.
 http = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls-manual-roots", "stream"] }
-reqwest-websocket = { version = "0.4.2", features = ["json"] }
+# Stage 6.1 phase 3b: reqwest + reqwest-websocket removed. Replaced by the
+# transport::HttpClient trait + RequestBuilder / HttpResponse types defined
+# in src/transport.rs; impl provided by xous-net-bridge::SyncHttpClient.
 
 tracing = { version = "0.1", features = ["log"] }
 tracing-futures = "0.2"
@@ -57,6 +58,13 @@ tokio = { version = "1.0", features = ["macros"] }
 # futures-timer is sync at the leaf (single OS-thread parker) but
 # integrates with futures::select! the same way tokio's Interval does.
 futures-timer = { git = "https://github.com/async-rs/futures-timer", rev = "07dbe53" }
+
+# Stage 6.1 phase 3c: async-channel for the WebSocket frame channels in
+# transport::WebSocketChannels. The WS pump impl in xous-net-bridge runs
+# on a sync worker thread; async-channel has both sync (send_blocking /
+# recv_blocking) and async (send / recv) APIs, so the channel pair
+# bridges the sync↔async boundary without an intermediate translation.
+async-channel = { git = "https://github.com/smol-rs/async-channel", rev = "35a63c4" }
 
 [build-dependencies]
 prost-build = "0.13"

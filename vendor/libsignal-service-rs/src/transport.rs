@@ -75,12 +75,18 @@ pub enum HttpError {
 /// of an internal sync↔async pump. The implementation (in
 /// `xous-net-bridge`) owns a worker thread holding a sync
 /// `tungstenite::WebSocket`; this struct hands the executor side the
-/// frame channels plus a future that drives the cross-thread bridge.
+/// frame channels.
+///
+/// Uses `async-channel` (rather than `futures::channel::mpsc`) because
+/// the implementation runs the WS pump on a sync OS thread. async-channel
+/// has both sync (`send_blocking`/`recv_blocking`) and async
+/// (`send`/`recv`) APIs, so the same channel object connects the sync
+/// pump thread to the async executor without translation.
 pub struct WebSocketChannels {
     /// Outgoing frames (executor side → wire). Drop this to half-close.
-    pub outgoing: futures::channel::mpsc::Sender<WsFrame>,
+    pub outgoing: async_channel::Sender<WsFrame>,
     /// Incoming frames (wire → executor side).
-    pub incoming: futures::channel::mpsc::Receiver<Result<WsFrame, HttpError>>,
+    pub incoming: async_channel::Receiver<Result<WsFrame, HttpError>>,
 }
 
 /// Opaque WebSocket frame. Mirrors the subset of
