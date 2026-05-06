@@ -19,8 +19,6 @@
 //! `WebSocket<S>` is `Send` and the `Mutex<WebSocket>` pattern is the
 //! documented approach for multi-threaded usage.
 
-use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 
 use libsignal_service::transport::{BasicAuth, HeaderMap, HttpError, WebSocketChannels, WsFrame};
@@ -203,12 +201,3 @@ fn writer_loop(ws: Arc<Mutex<WebSocket<RustlsStream>>>, rx: async_channel::Recei
         }
     }
 }
-
-// Imports referenced via fully-qualified path above; bringing them here
-// only as needed for build hygiene. (TcpStream, Read, Write are used via
-// generic bounds elsewhere; these `use` statements are kept for future
-// implementation expansions.)
-#[allow(unused_imports)]
-use std::marker::PhantomData;
-#[allow(unused_imports)]
-use std::sync::OnceLock;

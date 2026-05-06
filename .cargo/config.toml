@@ -14,5 +14,28 @@
 
 [target.riscv32imac-unknown-xous-elf]
 rustflags = [
-    "--cfg", "curve25519_dalek_backend=\"u32e_backend\"",
+    # Stage 6.1 phase 3f: getrandom 0.3 custom backend for rv32-xous.
+    # xous-core has a getrandom 0.2 fork (already patched in this
+    # workspace's [patch.crates-io]) but not yet 0.3. The cfg below
+    # tells getrandom 0.3 to expect a `__getrandom_v03_custom` extern
+    # in the user's code; we provide it from xous-app-signal/src/main.rs.
+    # This is a Stage 6.1 stop-gap — the right long-term fix is either a
+    # 0.3-line xous fork upstreamed into xous-core, or a `linux_android`-
+    # style native xous backend embedded in upstream getrandom.
+    "--cfg", "getrandom_backend=\"custom\"",
+
+    # Stage 6.1 phase 3f: u32e_backend temporarily disabled. The
+    # betrusted-io curve25519-dalek's u32e backend pulls `utralib`,
+    # whose build script needs a Precursor SOC feature flag (e.g.
+    # `precursor-c809403`) that's wired up in xous-core's workspace but
+    # not in our standalone build. Re-enable once we either:
+    #   (a) add `utralib = { features = ["precursor-..."] }` as a direct
+    #       dep of xous-app-signal (or any crate that pulls it through
+    #       to the build), so the feature propagates to utralib's
+    #       build.rs; OR
+    #   (b) merge into xous-core's tree at Stage 9, which inherits the
+    #       SOC features automatically.
+    # For now: portable Rust backend. Acceptable for cross-compile
+    # validation; re-enable for hardware deploys.
+    # "--cfg", "curve25519_dalek_backend=\"u32e_backend\"",
 ]

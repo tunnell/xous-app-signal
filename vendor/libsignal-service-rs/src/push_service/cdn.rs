@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    io::{self, Read, SeekFrom},
+    io::{Read, SeekFrom},
 };
 
 use http::{
@@ -8,7 +8,7 @@ use http::{
     Method, StatusCode,
 };
 use serde::Deserialize;
-use tracing::{debug, trace};
+use tracing::trace;
 use url::Url;
 
 use crate::{
@@ -20,6 +20,11 @@ use super::{response::HttpResponseExt, PushService, ServiceError};
 
 #[derive(Debug, serde::Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+// Stage 6.1: fields were used by reqwest::multipart::Form in
+// upload_to_cdn0; that path is stubbed pending a hand-rolled multipart
+// builder. Allow dead_code to keep the deserialization shape correct
+// (server still sends these fields in the upload-form response).
+#[allow(dead_code)]
 pub struct AttachmentV2UploadAttributes {
     key: String,
     credential: String,
@@ -301,7 +306,7 @@ impl PushService {
         path: &str,
         upload_attributes: AttachmentV2UploadAttributes,
         filename: String,
-        mut reader: impl Read + Send,
+        reader: impl Read + Send,
     ) -> Result<(), ServiceError> {
         // Stage 6.1: was a reqwest::multipart::Form upload. The Xous fork
         // doesn't have multipart-form support in its transport (writing a
