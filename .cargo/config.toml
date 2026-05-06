@@ -30,18 +30,25 @@ rustflags = [
     # style native xous backend embedded in upstream getrandom.
     "--cfg", "getrandom_backend=\"custom\"",
 
-    # Stage 6.1 phase 3f: u32e_backend temporarily disabled. The
-    # betrusted-io curve25519-dalek's u32e backend pulls `utralib`,
-    # whose build script needs a Precursor SOC feature flag (e.g.
-    # `precursor-c809403`) that's wired up in xous-core's workspace but
-    # not in our standalone build. Re-enable once we either:
-    #   (a) add `utralib = { features = ["precursor-..."] }` as a direct
-    #       dep of xous-app-signal (or any crate that pulls it through
-    #       to the build), so the feature propagates to utralib's
-    #       build.rs; OR
-    #   (b) merge into xous-core's tree at Stage 9, which inherits the
-    #       SOC features automatically.
-    # For now: portable Rust backend. Acceptable for cross-compile
-    # validation; re-enable for hardware deploys.
+    # Stage 9b-deploy Phase C-3: u32e_backend STILL DISABLED, this
+    # time for a deeper reason than Stage 6.1's utralib feature.
+    # Re-enable attempt at Phase C found that with u32e active,
+    # `FieldElement` resolves to `u32e::field::Engine25519` (the
+    # IP-core engine handle), which is *not* interchangeable with
+    # `FieldElement2625`. The vendored libsignal lizard port (used
+    # by zkgroup's `RistrettoPoint::from_uniform_bytes_single_elligator`,
+    # called during the profile-fetch / group-message paths) mixes
+    # the two field types freely — its arithmetic only type-checks
+    # with the portable `u32` backend. Re-enabling u32e cleanly
+    # requires either:
+    #   (a) writing Engine25519 ↔ FieldElement2625 conversions in
+    #       the vendored curve25519-dalek lizard module (substantial:
+    #       fast-converting between IP-core state and the limb
+    #       representation while preserving the field semantics), or
+    #   (b) a libsignal upstream change to make zkgroup's lizard use
+    #       avoid the type mix.
+    # Both are out of scope here — Phase C delivers C-1 (real
+    # getrandom) and defers C-3 with reproducible failure notes in
+    # stage/REPORT-9b-deploy-C.md.
     # "--cfg", "curve25519_dalek_backend=\"u32e_backend\"",
 ]

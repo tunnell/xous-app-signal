@@ -19,28 +19,80 @@ use presage_store_pddb::PddbStore;
 use xous_app_signal_ui::Ui;
 use xous_signal_bridge::{Cmd, Event, run_signal_worker};
 
-/// Stage 9a: provide the `__getrandom_v03_custom` symbol the
-/// `--cfg getrandom_backend="custom"` rv32-xous build requires.
+/// Stage 9b-deploy Phase C-1: real `__getrandom_v03_custom` body
+/// backed by xous-core's TRNG service.
 ///
-/// Body is a panic for now — Stage 9b replaces it with a real call
-/// to xous-core's `trng::Trng` client (`services/trng/src/lib.rs`,
-/// see `Trng::get_u64` and `Trng::fill_buf`). Until then the symbol
-/// just needs to exist so the linker resolves; any code path that
-/// actually consumes randomness will panic, which is exactly what
-/// we want — Stage 9b's Renode boot test will catch any missing
-/// wiring before MVP flows ship.
+/// Looks up the trng SID via `xous-api-names`, then calls
+/// `Trng::fill_buf` (per `xous-core/services/trng/src/lib.rs:63`).
+/// `fill_buf` takes `&mut [u32]` — we cast from `*mut u8` and
+/// handle a possible odd tail (`len % 4 != 0`) with a final 1-word
+/// scratch read.
 ///
 /// The signature mirrors `getrandom-0.3.4/src/backends/custom.rs:10`.
+///
+/// `Trng::new` registers a long-lived connection to the TRNG
+/// server. We retain a thread-local `Trng` instance so each
+/// getrandom call reuses the same IPC connection rather than
+/// re-handshaking on every entry.
 #[cfg(target_os = "xous")]
 #[unsafe(no_mangle)]
 unsafe extern "Rust" fn __getrandom_v03_custom(
-    _dest: *mut u8,
-    _len: usize,
+    dest: *mut u8,
+    len: usize,
 ) -> Result<(), getrandom::Error> {
-    panic!(
-        "__getrandom_v03_custom: Stage 9b wires xous-core's trng client; \
-         hit before that landed"
-    );
+    use std::cell::OnceCell;
+    thread_local! {
+        static TRNG: OnceCell<trng::Trng> = const { OnceCell::new() };
+    }
+
+    if len == 0 {
+        return Ok(());
+    }
+
+    TRNG.with(|cell| -> Result<(), getrandom::Error> {
+        let trng = cell.get_or_init(|| {
+            let xns = xous_names::XousNames::new().expect("connect to xous-names");
+            trng::Trng::new(&xns).expect("connect to TRNG service")
+        });
+
+        // Fill the aligned u32 prefix in chunks of <=1020 words (the
+        // max `fill_buf` accepts per call, per `services/trng/src/
+        // lib.rs:64`).
+        let words = len / 4;
+        let mut filled_bytes = 0usize;
+        let mut remaining_words = words;
+        while remaining_words > 0 {
+            let chunk = remaining_words.min(1020);
+            let mut buf = [0u32; 1020];
+            trng.fill_buf(&mut buf[..chunk]).map_err(|_| getrandom::Error::UNSUPPORTED)?;
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    buf.as_ptr() as *const u8,
+                    dest.add(filled_bytes),
+                    chunk * 4,
+                );
+            }
+            filled_bytes += chunk * 4;
+            remaining_words -= chunk;
+        }
+
+        // Tail bytes (len not a multiple of 4): pull one extra word
+        // and copy the leading bytes.
+        let tail = len - filled_bytes;
+        if tail > 0 {
+            let mut scratch = [0u32; 1];
+            trng.fill_buf(&mut scratch).map_err(|_| getrandom::Error::UNSUPPORTED)?;
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    scratch.as_ptr() as *const u8,
+                    dest.add(filled_bytes),
+                    tail,
+                );
+            }
+        }
+
+        Ok(())
+    })
 }
 
 /// Channel capacity. 16 is plenty for the Stage 8 single-prompt

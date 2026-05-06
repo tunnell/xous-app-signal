@@ -59,3 +59,23 @@ getrandom = { version = "0.3", default-features = false }
 # use, so we resolve to the same crates.io release the published
 # image links against.
 xous-api-log = "0.1.69"
+
+# Stage 9b-deploy Phase C-1: Trng client lives in `services/trng`
+# (path-dep'd; the crate exposes `Trng::new(&XousNames)` and
+# `Trng::fill_buf(&mut [u32])` which we call from
+# `__getrandom_v03_custom`). xous-api-names provides the
+# `XousNames` constructor. The two flatipc deps come transitively
+# from trng — its IPC buffers are flatipc-derived. xous-api-susres
+# is also transitive via trng's Cargo.toml; carrying it explicitly
+# keeps the path-dep declaration self-contained.
+trng = { path = "../../../repos/xous-core/services/trng" }
+# xous-api-names is renamed `xous-names` in scope to match the
+# convention every other Xous app uses (mirrors apps/repl/Cargo.toml).
+xous-names = { package = "xous-api-names", version = "0.9.71" }
+xous-api-susres = { path = "../../../repos/xous-core/api/xous-api-susres" }
+flatipc = { path = "../../../repos/xous-core/libs/flatipc" }
+flatipc-derive = { path = "../../../repos/xous-core/libs/flatipc-derive" }
+# (utralib was added in a Phase C-3 first-attempt and removed when
+# u32e_backend turned out to be incompatible with the vendored
+# libsignal lizard port. Re-add when u32e is unblocked — see
+# stage/REPORT-9b-deploy-C.md §3.)

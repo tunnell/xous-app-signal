@@ -3701,6 +3701,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "trng"
+version = "0.1.0"
+dependencies = [
+ "flatipc",
+ "flatipc-derive",
+ "log",
+ "num-derive",
+ "num-traits",
+ "rand 0.8.6",
+ "rand_chacha 0.3.1",
+ "rand_core 0.6.4",
+ "rkyv 0.8.16",
+ "xous",
+ "xous-api-log",
+ "xous-api-names",
+ "xous-api-susres",
+ "xous-api-ticktimer",
+ "xous-ipc 0.10.10",
+]
+
+[[package]]
 name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4423,15 +4444,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "xous-api-susres"
+version = "0.9.68"
+dependencies = [
+ "log",
+ "num-derive",
+ "num-traits",
+ "rkyv 0.8.16",
+ "xous",
+ "xous-api-log",
+ "xous-api-names",
+ "xous-ipc 0.10.10",
+]
+
+[[package]]
+name = "xous-api-ticktimer"
+version = "0.9.70"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9a00a93c3c38caf7f99e73828544027fa0483d0f6ee487b9a1a7b3ee885039d"
+dependencies = [
+ "log",
+ "num-derive",
+ "num-traits",
+ "rkyv 0.8.16",
+ "xous",
+ "xous-api-log",
+ "xous-api-names",
+ "xous-ipc 0.10.10",
+ "xous-semver",
+]
+
+[[package]]
 name = "xous-app-signal"
 version = "0.0.1"
 dependencies = [
  "async-channel",
  "env_logger",
+ "flatipc",
+ "flatipc-derive",
  "getrandom 0.3.4",
  "log",
  "presage-store-pddb",
+ "trng",
  "xous-api-log",
+ "xous-api-names",
+ "xous-api-susres",
  "xous-app-signal-ui",
  "xous-signal-bridge",
 ]
@@ -4484,6 +4541,12 @@ dependencies = [
  "url",
  "webpki-roots",
 ]
+
+[[package]]
+name = "xous-semver"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "906500be0c4ed13afc3c8743e4d40337bfbe08e7dadfa216c39907aaa06cc8c2"
 
 [[package]]
 name = "xous-signal-bridge"
