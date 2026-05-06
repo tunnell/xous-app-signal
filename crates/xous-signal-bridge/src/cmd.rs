@@ -43,14 +43,34 @@ pub enum Cmd {
     /// Stage 11: start the receive loop. Requires a linked Manager
     /// (i.e. Cmd::LinkDevice must have completed and persisted, or
     /// the worker must have rehydrated from PDDB at startup). The
-    /// worker moves the Manager into a long-running task that
-    /// streams `Received` items from `Manager::receive_messages`,
+    /// worker moves the Manager into a long-running "manager task"
+    /// that streams `Received` items from `Manager::receive_messages`,
     /// translates each `Received::Content` into `Event::Message`,
     /// and calls `store.flush_sessions()` on `Received::QueueEmpty`
-    /// per docs/REPORT.md Decision 5. After this Cmd, no further
-    /// access to the Manager is possible from other Cmds — Stage 12
-    /// will refactor to multiplex send/receive once we hit it.
+    /// per docs/REPORT.md Decision 5. The manager task also
+    /// multiplexes inbound `Cmd::SendMessage` requests (Stage 12)
+    /// by selecting between the receive stream and an internal send
+    /// channel; on each send it drops the stream, calls
+    /// `Manager::send_message`, then re-opens the stream.
     StartReceive,
+
+    /// Stage 12: send a 1:1 text message to the named recipient.
+    /// Routed through the same manager task that owns the receive
+    /// stream. `recipient` is a `service_id_string()` (e.g.
+    /// `"00000000-0000-4000-8000-000000000001"` for an Aci); the
+    /// worker parses it back into `ServiceId` before calling
+    /// `Manager::send_message`. `body` is the plaintext UTF-8
+    /// message body. Worker emits `Event::SendComplete` on success
+    /// or `Event::SendError(reason)` on failure.
+    ///
+    /// Requires `Cmd::StartReceive` to have run first — the manager
+    /// task is the only place the Manager is reachable. Sending
+    /// before receive starts gets a `SendError("not receiving;
+    /// send Cmd::StartReceive first")`.
+    SendMessage {
+        recipient: String,
+        body: String,
+    },
 
     /// Tell the worker to drain its event channel and exit. The main
     /// thread sends this before joining the worker handle so we don't
@@ -124,6 +144,20 @@ pub enum Event {
     /// worker's Manager is consumed at this point; the user must
     /// re-link to resume.
     ReceiveError(String),
+
+    /// Stage 12: a `Cmd::SendMessage` succeeded. `timestamp` is the
+    /// server-side timestamp the message was tagged with — useful
+    /// to the UI for echoing the sent message into the conversation
+    /// list as an outgoing entry.
+    SendComplete {
+        timestamp: u64,
+    },
+
+    /// Stage 12: a `Cmd::SendMessage` failed. Common reasons:
+    /// invalid recipient UUID, network error, recipient session
+    /// expired (in which case Signal expects a re-key on next
+    /// attempt). String-typed for IPC-boundary cleanliness.
+    SendError(String),
 
     /// Confirms the worker is winding down. The main thread joins
     /// after receiving this — same way Manager state machines on

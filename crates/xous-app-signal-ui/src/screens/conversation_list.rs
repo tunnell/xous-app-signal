@@ -109,6 +109,20 @@ impl ConversationListScreen {
 
     pub fn handle_key(&mut self, key: Key) -> Transition {
         match key {
+            // Stage 12: 'c' opens the Compose screen, prefilled with
+            // the most-recent sender as recipient. If there are no
+            // messages yet (`messages.is_empty()`), Compose can't
+            // resolve a recipient — drop the keypress on the floor.
+            // Future stage may surface a contact-picker instead.
+            Key::Char('c') => {
+                if let Some(latest) = self.messages.last() {
+                    Transition::Push(Screen::Compose(
+                        crate::screens::compose::ComposeScreen::new(latest.sender.clone()),
+                    ))
+                } else {
+                    Transition::None
+                }
+            }
             // Press M (or Home with no message focus) to open the
             // app menu — gives access to "Test worker", quit, etc.
             Key::Char('m') | Key::Home => Transition::Push(Screen::Menu(MenuScreen::new())),

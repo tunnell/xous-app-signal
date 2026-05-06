@@ -127,8 +127,23 @@ impl Ui {
             // jitter, slow enough that we don't busy-spin.
             match line_rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(line) => {
-                    let key = parse_key(&line);
-                    self.dispatch(key);
+                    // Stage 12: when the Compose screen is on top,
+                    // the entire line of input is the message body
+                    // (handed off via `dispatch_line`). Otherwise
+                    // we treat the first char as a Key.
+                    if matches!(self.stack.last(), Some(Screen::Compose(_))) {
+                        // Strip CR/LF and dispatch as a body.
+                        let body = line.trim_end_matches(['\r', '\n']).to_string();
+                        // Esc / "esc" / "/cancel" return to ConversationList.
+                        if body == "esc" || body == "/cancel" {
+                            self.dispatch(Key::Esc);
+                        } else {
+                            self.dispatch_line(body);
+                        }
+                    } else {
+                        let key = parse_key(&line);
+                        self.dispatch(key);
+                    }
                     needs_render = true;
                 }
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {
@@ -223,6 +238,16 @@ impl Ui {
                     s.set_status(ReceiveStatus::Error(reason));
                 }
             }
+            Event::SendComplete { timestamp } => {
+                if let Some(Screen::Compose(c)) = self.stack.last_mut() {
+                    c.on_send_complete(timestamp);
+                }
+            }
+            Event::SendError(reason) => {
+                if let Some(Screen::Compose(c)) = self.stack.last_mut() {
+                    c.on_send_error(reason);
+                }
+            }
 
             // Pong / Whoami / ShuttingDown — no UI effect.
             _ => {}
@@ -245,6 +270,21 @@ impl Ui {
         self.apply(transition);
         if prev_top_id != top_id(self.stack.last()) {
             self.on_screen_entered();
+        }
+        self.stack.len()
+    }
+
+    /// Stage 12 entry point for whole-line input. Currently used by
+    /// the Compose screen — typing a message and pressing Enter
+    /// sends the line as the message body. If the top screen isn't
+    /// Compose, the line is silently dropped.
+    pub fn dispatch_line(&mut self, line: String) -> usize {
+        if let Some(Screen::Compose(c)) = self.stack.last_mut() {
+            if let Some((recipient, body)) = c.submit(line) {
+                let _ = self
+                    .cmd_tx
+                    .send_blocking(Cmd::SendMessage { recipient, body });
+            }
         }
         self.stack.len()
     }
@@ -317,8 +357,8 @@ fn top_id(s: Option<&Screen>) -> u8 {
         Some(Screen::LinkDone(_)) => 8,
         Some(Screen::LinkError(_)) => 9,
         Some(Screen::ConversationList(_)) => 10,
-        Some(Screen::Conversation) => 11,
-        Some(Screen::Compose) => 12,
+        Some(Screen::Compose(_)) => 11,
+        Some(Screen::Conversation) => 12,
     }
 }
 
@@ -671,5 +711,112 @@ mod tests {
         assert_eq!(s.messages.len(), 16);
         assert_eq!(s.messages.first().unwrap().sender, "u34");
         assert_eq!(s.messages.last().unwrap().sender, "u49");
+    }
+
+    // ----- Stage 12 -----
+
+    use crate::screens::compose::SendState;
+
+    /// Helper: park UI on a populated ConversationList, then push
+    /// Compose. Drains all queued cmds so caller sees only
+    /// post-helper traffic.
+    fn ui_on_compose() -> (Ui, async_channel::Receiver<Cmd>) {
+        let (mut ui, cmd_rx) = ui_on_conversation_list();
+        // Inject one received message so 'c' has a recipient.
+        ui.handle_event(Event::Message {
+            sender: "00000000-0000-4000-8000-000000000abc".into(),
+            body: "hi".into(),
+            timestamp: 1000,
+        });
+        ui.dispatch(Key::Char('c'));
+        // Drain.
+        while cmd_rx.try_recv().is_ok() {}
+        (ui, cmd_rx)
+    }
+
+    #[test]
+    fn conversation_list_c_with_no_messages_is_noop() {
+        let (mut ui, _cmd_rx) = ui_on_conversation_list();
+        ui.dispatch(Key::Char('c'));
+        // Still on ConversationList — no Compose pushed.
+        assert!(matches!(ui.top(), Some(Screen::ConversationList(_))));
+    }
+
+    #[test]
+    fn conversation_list_c_with_messages_pushes_compose() {
+        let (ui, _cmd_rx) = ui_on_compose();
+        match ui.top() {
+            Some(Screen::Compose(c)) => {
+                assert_eq!(c.recipient, "00000000-0000-4000-8000-000000000abc");
+                assert!(matches!(c.state, SendState::Editing));
+            }
+            other => panic!("expected Compose, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_line_emits_send_message_cmd() {
+        let (mut ui, cmd_rx) = ui_on_compose();
+        ui.dispatch_line("hello world".to_string());
+        match cmd_rx.try_recv() {
+            Ok(Cmd::SendMessage { recipient, body }) => {
+                assert_eq!(recipient, "00000000-0000-4000-8000-000000000abc");
+                assert_eq!(body, "hello world");
+            }
+            other => panic!("expected SendMessage, got {other:?}"),
+        }
+        // State should have advanced to Sending.
+        match ui.top() {
+            Some(Screen::Compose(c)) => assert!(matches!(c.state, SendState::Sending)),
+            other => panic!("expected Compose, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_dispatch_line_does_not_send() {
+        let (mut ui, cmd_rx) = ui_on_compose();
+        ui.dispatch_line(String::new());
+        // No cmd emitted.
+        assert!(cmd_rx.try_recv().is_err());
+        // State unchanged.
+        match ui.top() {
+            Some(Screen::Compose(c)) => assert!(matches!(c.state, SendState::Editing)),
+            other => panic!("expected Compose, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn send_complete_event_advances_compose() {
+        let (mut ui, _cmd_rx) = ui_on_compose();
+        ui.dispatch_line("hi".to_string());
+        ui.handle_event(Event::SendComplete { timestamp: 1234 });
+        match ui.top() {
+            Some(Screen::Compose(c)) => match &c.state {
+                SendState::Sent { timestamp } => assert_eq!(*timestamp, 1234),
+                other => panic!("expected Sent, got {other:?}"),
+            },
+            other => panic!("expected Compose, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn send_error_event_advances_compose_to_error() {
+        let (mut ui, _cmd_rx) = ui_on_compose();
+        ui.dispatch_line("hi".to_string());
+        ui.handle_event(Event::SendError("recipient unknown".to_string()));
+        match ui.top() {
+            Some(Screen::Compose(c)) => match &c.state {
+                SendState::Error(reason) => assert_eq!(reason, "recipient unknown"),
+                other => panic!("expected Error, got {other:?}"),
+            },
+            other => panic!("expected Compose, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn compose_esc_pops_to_conversation_list() {
+        let (mut ui, _cmd_rx) = ui_on_compose();
+        ui.dispatch(Key::Esc);
+        assert!(matches!(ui.top(), Some(Screen::ConversationList(_))));
     }
 }

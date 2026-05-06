@@ -13,6 +13,7 @@
 
 use crate::screens::{
     about::AboutScreen,
+    compose::ComposeScreen,
     conversation_list::ConversationListScreen,
     empty_list::EmptyListScreen,
     link::{
@@ -47,9 +48,13 @@ pub enum Screen {
     /// and a flat list of received messages, latest-first.
     ConversationList(ConversationListScreen),
 
-    // --- Stage 12 placeholders ---
+    /// Stage 12 — populated. The compose-and-send screen.
+    Compose(ComposeScreen),
+
+    /// Future single-thread conversation view (Stage 12+1). Stage
+    /// 12 MVP doesn't render this yet; the Compose flow is reachable
+    /// directly from ConversationList via `'c'`.
     Conversation,
-    Compose,
 }
 
 /// What `Screen::handle_key` asks the driver to do next.
@@ -84,10 +89,10 @@ impl Screen {
             Screen::LinkDone(s) => s.render(),
             Screen::LinkError(s) => s.render(),
             Screen::ConversationList(s) => s.render(),
+            Screen::Compose(s) => s.render(),
 
-            // Stage 12 placeholders.
-            Screen::Conversation => placeholder("Conversation", "Stage 12"),
-            Screen::Compose => placeholder("Compose", "Stage 12"),
+            // Per-thread conversation view — Stage 12+1.
+            Screen::Conversation => placeholder("Conversation", "Stage 12+1"),
         }
     }
 
@@ -106,9 +111,9 @@ impl Screen {
             }
             Screen::LinkDone(_) => "Home Continue",
             Screen::LinkError(_) => "Up/Down Select   Home Choose",
-            Screen::ConversationList(_) => "Menu   q Quit",
+            Screen::ConversationList(_) => "c Compose   Menu   q Quit",
+            Screen::Compose(_) => "Type + Enter Send   Esc Cancel",
             Screen::Conversation => "Up/Down Scroll   Left Back   Home Reply",
-            Screen::Compose => "Home Send   Left Back   Esc Discard",
         }
     }
 
@@ -128,8 +133,9 @@ impl Screen {
             Screen::LinkDone(s) => s.handle_key(key),
             Screen::LinkError(s) => s.handle_key(key),
             Screen::ConversationList(s) => s.handle_key(key),
+            Screen::Compose(s) => s.handle_key(key),
 
-            // Stage 12 placeholders: any key returns to the
+            // Stage 12+1 placeholder: any key returns to the
             // previous screen.
             _ => Transition::Pop,
         }
