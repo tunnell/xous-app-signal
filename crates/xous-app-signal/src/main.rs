@@ -99,11 +99,41 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
 /// round-trip; production sizing (Stage 12+) will revisit.
 const CHAN_CAP: usize = 16;
 
+/// Choose the store backend based on feature flags.
+///
+/// - default (smoke / probe-flow / probe-pddb / hosted): mock
+///   in-memory backend.
+/// - `pddb-real` on rv32-xous: real `PddbStore::with_pddb_backend`.
+///   If the connect fails (e.g. PDDB isn't running), we log and
+///   fall back to mock so the binary still boots — the smoke test
+///   shouldn't fail just because PDDB's not up. Stage 13b-2 design:
+///   surface real failures via xas's UI eventually, not by
+///   hard-aborting boot.
+#[cfg(all(feature = "pddb-real", target_os = "xous"))]
+fn build_store() -> PddbStore {
+    match PddbStore::with_pddb_backend() {
+        Ok(s) => {
+            log::info!("xas: store=PDDB (real)");
+            s
+        }
+        Err(e) => {
+            log::warn!("xas: PDDB connect failed ({}); falling back to mock", e);
+            PddbStore::with_mock_backend()
+        }
+    }
+}
+
+#[cfg(not(all(feature = "pddb-real", target_os = "xous")))]
+fn build_store() -> PddbStore {
+    log::info!("xas: store=mock");
+    PddbStore::with_mock_backend()
+}
+
 fn main() -> std::io::Result<()> {
     init_logger();
     log::info!("xas: starting");
 
-    let store = PddbStore::with_mock_backend();
+    let store = build_store();
 
     let (cmd_tx, cmd_rx) = bounded::<Cmd>(CHAN_CAP);
     let (event_tx, event_rx) = bounded::<Event>(CHAN_CAP);
@@ -116,6 +146,9 @@ fn main() -> std::io::Result<()> {
 
     #[cfg(all(feature = "probe-pddb", target_os = "xous"))]
     probe_pddb();
+
+    #[cfg(all(feature = "probe-pddb-real", target_os = "xous"))]
+    probe_pddb_real();
 
     // The UI loop blocks on stdin (hosted) or GAM events
     // (Xous, Stage 9b/follow-up). It owns the cmd/event channel ends
@@ -294,6 +327,84 @@ fn probe_pddb() {
     }
 
     log::info!("probe-pddb: probe done in {:?}", start.elapsed());
+}
+
+/// Stage 13b-2 probe: put/get/list/delete/list cycle against the
+/// real PDDB-backed `KvBackend`. Verifies the buffered IPC path
+/// (the `lend_mut` calls that the scalar-only `probe-pddb` couldn't
+/// exercise) actually works on the wire.
+///
+/// Requires the image to be built with `pddb/autobasis` so PDDB is
+/// pre-mounted on boot — otherwise every op returns `NotMounted`
+/// and we just log that finding.
+///
+/// All outcomes are logged through `xous-api-log`; the Robot test
+/// at `tests/renode/xas-pddb-real-probe.robot` waits on each line.
+#[cfg(all(feature = "probe-pddb-real", target_os = "xous"))]
+fn probe_pddb_real() {
+    use std::time::Instant;
+
+    log::info!("probe-pddb-real: starting put/get/delete cycle");
+    let start = Instant::now();
+
+    let backend = match presage_store_pddb::PddbBackend::connect() {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("probe-pddb-real: connect FAIL: {}", e);
+            return;
+        }
+    };
+    log::info!("probe-pddb-real: connected in {:?}, mounted={}", start.elapsed(), backend.is_mounted());
+
+    use presage_store_pddb::KvBackend;
+    let dict = "xas.probe";
+    let key = "hello";
+    let value: &[u8] = b"world";
+
+    // Stage 13b-2: keep going even if individual ops fail. The
+    // failure mode itself is informative (which is what the probe
+    // is for); aborting early masks downstream IPC behavior we
+    // want to see.
+    let phase = Instant::now();
+    match backend.put(dict, key, value) {
+        Ok(()) => log::info!("probe-pddb-real: put OK in {:?}", phase.elapsed()),
+        Err(e) => log::warn!("probe-pddb-real: put FAIL after {:?}: {}", phase.elapsed(), e),
+    }
+
+    let phase = Instant::now();
+    match backend.get(dict, key) {
+        Ok(Some(v)) => log::info!(
+            "probe-pddb-real: get OK len={} match={} in {:?}",
+            v.len(),
+            v == value,
+            phase.elapsed()
+        ),
+        Ok(None) => log::warn!("probe-pddb-real: get returned None unexpectedly"),
+        Err(e) => log::warn!("probe-pddb-real: get FAIL: {}", e),
+    }
+
+    let phase = Instant::now();
+    match backend.list_keys(dict) {
+        Ok(keys) => log::info!("probe-pddb-real: list_keys OK {:?} in {:?}", keys, phase.elapsed()),
+        Err(e) => log::warn!("probe-pddb-real: list_keys FAIL: {}", e),
+    }
+
+    let phase = Instant::now();
+    match backend.delete(dict, key) {
+        Ok(()) => log::info!("probe-pddb-real: delete OK in {:?}", phase.elapsed()),
+        Err(e) => log::warn!("probe-pddb-real: delete FAIL: {}", e),
+    }
+
+    let phase = Instant::now();
+    match backend.list_keys(dict) {
+        Ok(keys) if keys.is_empty() => {
+            log::info!("probe-pddb-real: post-delete list empty in {:?}", phase.elapsed());
+        }
+        Ok(keys) => log::warn!("probe-pddb-real: post-delete list still has {:?}", keys),
+        Err(e) => log::warn!("probe-pddb-real: post-delete list FAIL: {}", e),
+    }
+
+    log::info!("probe-pddb-real: probe done in {:?}", start.elapsed());
 }
 
 #[cfg(target_os = "xous")]

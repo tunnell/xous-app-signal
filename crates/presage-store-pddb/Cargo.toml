@@ -81,6 +81,14 @@ default = []
 mock-backend = []
 pddb-backend = []
 
+# Stage 13b-2: when `pddb-backend` is enabled on rv32-xous,
+# `backend_pddb` becomes a real `KvBackend` wrapping
+# `xous_pddb_ipc::PddbClient`. Hosted builds with the same feature
+# flag continue using the mock under-the-hood (the cfg in
+# backend_pddb.rs gates the impl module).
+[target.'cfg(target_os = "xous")'.dependencies]
+xous-pddb-ipc = { path = "../xous-pddb-ipc" }
+
 [dev-dependencies]
 # `RegistrationData` construction in tests needs a few presage / libsignal
 # constructors. They come transitively through `presage`; we only need

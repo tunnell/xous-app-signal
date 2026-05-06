@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/presage-store-pddb",
     "crates/xous-net-bridge",
+    "crates/xous-pddb-ipc",
     "crates/xous-signal-bridge",
     "crates/xous-app-signal",
     "crates/xous-app-signal-ui",

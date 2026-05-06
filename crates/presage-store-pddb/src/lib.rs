@@ -45,6 +45,8 @@ mod state;
 mod store;
 
 pub use backend_mock::MockBackend;
+#[cfg(all(feature = "pddb-backend", target_os = "xous"))]
+pub use backend_pddb::PddbBackend;
 pub use error::Error;
 pub use protocol::{IdentityType, PddbProtocolStore};
 
@@ -124,6 +126,22 @@ impl PddbStore {
     /// Convenience for hosted-mode tests — wraps a fresh `MockBackend`.
     pub fn with_mock_backend() -> Self {
         Self::new(Arc::new(MockBackend::new()))
+    }
+
+    /// Stage 13b-2: connect to xous-core's running PDDB server and
+    /// wrap the resulting `xous_pddb_ipc::PddbClient` as a real
+    /// `KvBackend`. rv32-xous + `pddb-backend` feature only.
+    ///
+    /// Returns `Err` if the PDDB server isn't reachable. Does NOT
+    /// block on the basis being mounted — the caller (typically the
+    /// xas worker thread) is responsible for waiting on
+    /// `is_mounted()` before issuing operations that need the
+    /// store, or for tolerating per-op `NotMounted` errors during
+    /// the boot window.
+    #[cfg(all(feature = "pddb-backend", target_os = "xous"))]
+    pub fn with_pddb_backend() -> Result<Self, Error> {
+        let backend = backend_pddb::PddbBackend::connect()?;
+        Ok(Self::new(Arc::new(backend)))
     }
 
     /// Number of entries currently in the session cache (any state —

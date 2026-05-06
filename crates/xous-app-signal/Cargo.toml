@@ -27,6 +27,18 @@ probe-flow = []
 # use) before committing to the full KvBackend implementation.
 probe-pddb = []
 
+# Stage 13b-2: full PDDB-backed KvBackend.
+# - `pddb-real` swaps `PddbStore::with_mock_backend()` for
+#   `PddbStore::with_pddb_backend()` in main.rs (the construction
+#   point is feature-gated). Activating this on hosted is a no-op;
+#   the cfg in `presage-store-pddb/src/backend_pddb.rs` is gated to
+#   `target_os = "xous"`.
+# - `probe-pddb-real` is a downstream "smoke the backend" mode that,
+#   on top of `pddb-real`, drives a single put/get/delete cycle in
+#   main() and logs the result. Stage 13b-2 follow-up.
+pddb-real = ["presage-store-pddb/pddb-backend"]
+probe-pddb-real = ["pddb-real"]
+
 [dependencies]
 # Stage 8: spawn the manager worker thread + drive Hello/GetWhoami
 # round-trips. The presage-store-pddb dep is direct (not just
