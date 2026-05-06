@@ -2410,7 +2410,14 @@ dependencies = [
 name = "presage-store-pddb"
 version = "0.0.1"
 dependencies = [
+ "futures-lite",
+ "phonenumber",
  "presage",
+ "rand 0.9.4",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

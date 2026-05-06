@@ -8,8 +8,34 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-# presage pinned to HEAD as of Stage 4 (commit 600c4ed). docs/REPORT.md
-# Decision 2 documents the patches we'll likely need to apply against it
-# at Stage 7 (tokio removal); for now we just consume its trait
-# definitions, which are tokio-clean.
+# presage pinned to HEAD as of Stage 4 (commit 600c4ed). The workspace
+# [patch."https://github.com/whisperfish/presage"] in xous-app-signal's
+# top-level Cargo.toml redirects this to vendor/presage/presage where the
+# Stage 7 (Decision 2) tokio-removal patches live.
 presage = { git = "https://github.com/whisperfish/presage", rev = "600c4ed" }
+
+# Serde + JSON for state serialization. We use JSON (not bincode) so the
+# on-disk format is debuggable from `pddbcli` dumps. Same choice
+# presage-store-sqlite makes; cost is small for the < 1 KiB state blobs
+# we serialize. Per `docs/REPORT.md` Decision 1.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Used to derive the per-uuid+profilekey lookup key for the
+# `signal.profiles` dict. Same pattern as presage-store-sled
+# (`profile_key_for_uuid` at vendor/presage/presage-store-sled/src/lib.rs:275).
+sha2 = "0.10"
+
+# Error type derives.
+thiserror = "1"
+
+# `futures-lite::future::block_on` is used in unit tests to drive the
+# async store API without pulling tokio into the production dep tree.
+futures-lite = { workspace = true }
+
+[dev-dependencies]
+# `RegistrationData` construction in tests needs a few presage / libsignal
+# constructors. They come transitively through `presage`; we only need
+# `phonenumber` for parsing the dummy E.164 in fixtures.
+phonenumber = "0.3"
+rand = "0.9"

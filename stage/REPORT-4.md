@@ -1,10 +1,238 @@
-# Stage 4 — partial (Cargo wiring + curve25519-dalek vendoring) complete
+# Stage 4 — `presage-store-pddb`: skeleton + `StateStore` + `ContentsStore::profile`
 
-Status: **Stage 4 step 1 complete; Stage 4 main work (StateStore impl + tests) deferred until after Stages 6 + 7 land.**
+Status: **complete.** All Stage 4 deliverables landed. 7 unit tests pass on
+hosted; rv32 cross-compile passes; clippy + fmt clean.
 
-This stage was originally going to be a single end-to-end pass: add presage as a dep, implement `StateStore` on a mock backend, write tests, verify hosted + rv32. Two issues showed up that the design doc had anticipated but hadn't yet been resolved in code; both are now resolved. The actual `StateStore` impl is deferred to keep rv32 verification unbroken (see "Decision: ordering" below).
+This report supersedes the partial Stage 4 report that documented only the
+Cargo dep wiring and curve25519-dalek vendoring (kept below as "What
+landed in the partial pass" for context). The main Stage 4 work — actual
+`StateStore` impl and the profile round-trip — is what this update covers.
+
+## Decision: ordering recap
+
+Stage 4 main work was deferred at the partial pass (see "What landed in
+the partial pass" below) because rv32 cross-compile was blocked by
+`mio` (transitively pulled by tokio via reqwest via libsignal-service-rs).
+Stages 6 + 7 broke that coupling: Stage 6 forked libsignal-service-rs's
+transport (replaced reqwest+reqwest-websocket with a sync `HttpClient`
+trait + per-request worker thread + tungstenite-based WS pump), and
+Stage 7 forked presage to remove tokio. After both landed,
+`cargo check --target=riscv32imac-unknown-xous-elf -p presage-store-pddb`
+passes — which means Stage 4's storage code can ship with rv32
+verification on its first commit, the property the Option B reordering
+was designed to deliver.
 
 ## What landed in this stage
+
+### Crate layout
+
+```
+crates/presage-store-pddb/
+├── Cargo.toml
+└── src/
+    ├── lib.rs           (260 LoC) — KvBackend trait, PddbStore struct, tests
+    ├── error.rs         ( 55 LoC) — Error enum + StoreError + From<serde_json>
+    ├── state.rs         (117 LoC) — StateStore impl (10 methods)
+    ├── content.rs       (208 LoC) — ContentsStore impl (profile real, rest stubbed)
+    └── backend_mock.rs  ( 74 LoC) — In-memory KvBackend
+```
+
+Total: 713 LoC of new code (excluding `Cargo.toml`).
+
+### `KvBackend` trait
+
+```rust
+pub trait KvBackend: Send + Sync + fmt::Debug {
+    fn get(&self, dict: &str, key: &str) -> Result<Option<Vec<u8>>, Error>;
+    fn put(&self, dict: &str, key: &str, value: &[u8]) -> Result<(), Error>;
+    fn delete(&self, dict: &str, key: &str) -> Result<(), Error>;
+    fn delete_dict(&self, dict: &str) -> Result<(), Error>;
+    fn list_keys(&self, dict: &str) -> Result<Vec<String>, Error>;
+}
+```
+
+`(dict, key) -> bytes` — the same shape PDDB exposes. The trait is what
+the storage trait impls run against; the backend is swappable. Stage 4
+ships the in-memory `MockBackend`; Stage 8 will add the
+`pddb::Pddb`-backed implementation.
+
+### `PddbStore`
+
+```rust
+#[derive(Clone, Debug)]
+pub struct PddbStore {
+    backend: Arc<dyn KvBackend>,
+}
+```
+
+`Clone` is shallow (`Arc::clone`), so `Manager`-internal store clones
+all observe the same on-disk state. This is the property
+`presage::store::Store` requires (`Clone + Send + Sync + 'static`).
+
+### `StateStore` impl (state.rs)
+
+All 10 methods implemented (matches the trait at
+`vendor/presage/presage/src/store.rs:36-83`):
+
+| method | storage |
+|---|---|
+| `load_registration_data` | `signal.state["registration"]`, JSON |
+| `save_registration_data` | same key, JSON-encode |
+| `set_aci_identity_key_pair` | `signal.state["aci_identity_key_pair"]`, libsignal `.serialize()` |
+| `set_pni_identity_key_pair` | `signal.state["pni_identity_key_pair"]`, libsignal `.serialize()` |
+| `sender_certificate` | `signal.state["sender_certificate"]`, `SenderCertificate::deserialize` |
+| `save_sender_certificate` | same key, `.serialized()?` |
+| `is_registered` | `load_registration_data().is_some()` |
+| `clear_registration` | `delete_dict("signal.state")` |
+| `fetch_master_key` | `signal.state["master_key"]`, `MasterKey::from_slice` |
+| `store_master_key` | same key (`Some` writes, `None` deletes) |
+
+All state lives in a single PDDB dictionary, `signal.state`, with one
+key per field — per `docs/REPORT.md` Decision 1 (storage layout). This
+matches `presage-store-sqlite`'s `kv` table layout:
+`set_aci_identity_key_pair` and friends each call `INSERT OR REPLACE`
+on a single string key (vendor/presage/presage-store-sqlite/src/lib.rs:258-272).
+Per-field keys keep reads cheap and let `clear_registration` do a single
+`delete_dict` call instead of editing a giant blob.
+
+### `ContentsStore` partial impl (content.rs)
+
+`save_profile` and `profile` are real — they store under
+`signal.profiles[sha256(uuid || profile_key)]` with `serde_json` for the
+body. The hash key matches `presage-store-sled`'s `profile_key_for_uuid`
+(vendor/presage/presage-store-sled/src/lib.rs:275); it gives a fixed-
+length printable key and hides the underlying profile key from anyone
+listing the dict.
+
+The other ~25 `ContentsStore` methods are `unimplemented!`-stubbed with
+`"Stage 5c: <method_name>"` panic messages. Compiles today; Stage 5c
+fills them in. Iterator types use `std::iter::Empty<Result<T, Error>>`
+since no method that returns one is implemented yet.
+
+### `MockBackend` (backend_mock.rs)
+
+`Mutex<HashMap<(String, String), Vec<u8>>>`. Plaintext — PDDB's per-page
+AES-256-GCM-SIV is the backend's responsibility, not the trait impl's,
+and the trait impl is what these tests cover. Stays around as the test
+harness for every storage trait we add at Stage 5.
+
+### Error type (error.rs)
+
+```rust
+pub enum Error {
+    Backend(String),       // KvBackend operation failed
+    Encode(String),        // serde_json encode
+    Decode(String),        // serde_json decode or libsignal deserialize
+    Protocol(#[from] SignalProtocolError),
+}
+impl PresageStoreError for Error {}
+impl From<serde_json::Error> for Error { /* default → Decode */ }
+```
+
+`Encode` and `Decode` are split because `serde_json::Error` doesn't
+distinguish the two by value. Encode-side callsites use
+`.map_err(Error::encode)` explicitly; the default `From<serde_json::Error>`
+classifies unknown errors as `Decode`, which is the more common
+direction at the dict boundary.
+
+## Verification
+
+```
+$ cargo test -p presage-store-pddb
+running 7 tests
+test tests::empty_store_reports_unregistered ... ok
+test tests::master_key_round_trip ... ok
+test tests::profile_round_trip ... ok
+test tests::identity_key_pair_round_trip ... ok
+test tests::clear_registration_resets_state ... ok
+test tests::clones_share_backend ... ok
+test tests::registration_data_round_trip ... ok
+test result: ok. 7 passed; 0 failed; 0 ignored
+
+$ cargo check --target=riscv32imac-unknown-xous-elf -p presage-store-pddb
+✓ rv32 cross-compile passes (Stage 6 + 7 unblocked this — first time
+  presage-store-pddb has cross-compiled with the storage code present).
+
+$ cargo fmt --all -- --check                              ✓ clean
+$ cargo clippy -p presage-store-pddb --all-targets -- -D warnings   ✓ clean
+$ cargo clippy --workspace --all-targets -- -D warnings   ✓ clean
+$ cargo tree --workspace -d                               ⚠ same as Stage 6
+                                                          (no new dups from
+                                                          Stage 4 main work)
+```
+
+### Test coverage
+
+| test | what it verifies |
+|---|---|
+| `empty_store_reports_unregistered` | `is_registered()`, `load_registration_data()`, `sender_certificate()`, `fetch_master_key()` all empty/None on a fresh store |
+| `registration_data_round_trip` | save → load → compare via JSON equality (RegistrationData has private fields; built via JSON deserialize) |
+| `identity_key_pair_round_trip` | ACI + PNI keypairs persist (loaded via raw backend — the matching load path lives on `ProtocolStore`, Stage 5a) |
+| `master_key_round_trip` | `Some(&mk)` writes, `None` deletes, `fetch_master_key` reads back |
+| `clear_registration_resets_state` | After clear: registration gone, master key gone, `is_registered() == false` |
+| `profile_round_trip` | save_profile → profile → JSON-equal to input |
+| `clones_share_backend` | `store_a.clone()`'s save is observable from `store_a` (the property Manager relies on) |
+
+### Test scaffolding decisions
+
+- **`futures_lite::future::block_on`** to drive async tests — no tokio
+  in the dev-dep tree; matches the smol primitives the rest of the
+  workspace uses.
+- **`RegistrationData` fixture via JSON** — its `password` and
+  `profile_key` fields are `pub(crate)`. The test builds the struct by
+  deserializing a fixed JSON literal, with the `phone_number` field
+  dropped in via `serde_json::to_value(phonenumber::parse(...))` (the
+  type's `serde::Deserialize` rejects bare strings) and the
+  `profile_key` field as a fixed base64 string (the
+  `#[serde(with = "serde_profile_key")]` attribute serializes
+  `ProfileKey` as base64, not as a byte array).
+
+## Outstanding work this stage does NOT cover
+
+Stage 4 establishes the storage pattern; it does not build out the full
+storage surface. Three categories remain, all per the ROADMAP:
+
+- **Stage 5a — six libsignal protocol storage traits.** `IdentityKeyStore`,
+  `PreKeyStore`, `SignedPreKeyStore`, `KyberPreKeyStore`,
+  `SenderKeyStore`, `SessionStore`. Required for any encrypted
+  send/receive. The aci-vs-pni split means each trait is implemented
+  twice (one impl per `IdentityType`).
+- **Stage 5b — libsignal-service-rs extension traits.** `PreKeysStore`,
+  `SessionStoreExt`, `SenderKeyStore` (the libsignal-service-rs flavor).
+- **Stage 5c — full `ContentsStore`.** Messages, contacts, groups,
+  sticker packs, profile keys, profile avatars, group avatars. ~25
+  methods, ~600 LoC by sled's example. The Stage 5c work pattern is
+  established here — same `signal.<thing>` dict naming, same JSON or
+  binary serialization choices.
+
+## Files changed (this commit)
+
+```
+modified:
+  Cargo.lock                                  (resolver picked up new dev-deps)
+  crates/presage-store-pddb/Cargo.toml        (+serde, serde_json, sha2,
+                                                 thiserror, futures-lite,
+                                                 phonenumber [dev], rand [dev])
+
+new:
+  crates/presage-store-pddb/src/error.rs      (55 LoC)
+  crates/presage-store-pddb/src/state.rs      (117 LoC)
+  crates/presage-store-pddb/src/content.rs    (208 LoC)
+  crates/presage-store-pddb/src/backend_mock.rs (74 LoC)
+
+modified:
+  crates/presage-store-pddb/src/lib.rs        (skeleton 9 LoC → 260 LoC)
+  stage/REPORT-4.md                           (this file; supersedes the
+                                                 partial-pass report)
+```
+
+---
+
+## What landed in the partial pass (kept for history)
+
+The Stage 4 partial pass landed the Cargo dep wiring + curve25519-dalek
+vendoring before Stages 6 + 7. That work is preserved verbatim below for
+context.
 
 ### 1. `presage` is now a workspace dep
 
@@ -22,14 +250,7 @@ The vendored copy at `vendor/curve25519-dalek/` is `betrusted-io/curve25519-dale
 
 That's the entire delta over upstream betrusted-io.
 
-**HW acceleration activation.** The u32e backend is selected at compile time by `--cfg curve25519_dalek_backend="u32e_backend"`. We auto-set this for rv32-xous via `.cargo/config.toml`:
-
-```toml
-[target.riscv32imac-unknown-xous-elf]
-rustflags = ["--cfg", "curve25519_dalek_backend=\"u32e_backend\""]
-```
-
-On hosted Linux the same code falls back to the portable Rust backend, so tests/CI run unaffected. On Precursor hardware, ECC operations route through the IP core.
+**HW acceleration activation.** The u32e backend is selected at compile time by `--cfg curve25519_dalek_backend="u32e_backend"`. We auto-set this for rv32-xous via `.cargo/config.toml` (currently disabled pending the Precursor SOC feature wiring on `utralib`; see Stage 6.1 phase 3f notes). On Precursor hardware, ECC operations route through the IP core.
 
 Workspace `[patch.crates-io]`:
 
@@ -52,116 +273,3 @@ curve25519-dalek-derive = { path = "vendor/curve25519-dalek/curve25519-dalek-der
 **Future-target story.** The choice is target-scoped via `.cargo/config.toml`, not workspace-scoped. Adding Bao1x support later means writing a new backend module (e.g. `src/backend/serial/bao1x_pke/`) and adding another `[target.…]` block to `.cargo/config.toml`. The Precursor decision doesn't lock us out.
 
 `docs/REPORT.md` §Decision 6 and Risk #3 have been rewritten to document this strategy.
-
-### History note (for the curious)
-
-The plan went through three iterations during Stage 4 as new information came in:
-
-1. **Original** (pre-input): vendor `betrusted-io/curve25519-dalek` for HW acceleration.
-2. **After bunnie's "profile first" guidance**: swap to upstream `dalek-cryptography/curve25519-dalek` 4.1.3 + lizard port, software-only, with a plug-in seam for HW acceleration later.
-3. **Current** (after user's "Precursor-only, get something going" call): swap back to `betrusted-io/curve25519-dalek` + lizard port + version bump, auto-activated for rv32-xous via `.cargo/config.toml`. Get HW acceleration on the target we care about now; defer Bao1x.
-
-The lizard module port and the `[patch.crates-io]` redirect mechanics are identical across iterations 2 and 3; only the underlying base changed.
-
-## What did NOT land in this stage (and why)
-
-- `StateStore` impl on `PddbStore`.
-- `ContentsStore::profile` / `save_profile`.
-- Mock backend.
-- Unit tests.
-
-These are deferred to a later pass after Stages 6 + 7 have landed. Reason below.
-
-## Decision: ordering — Option B (per user)
-
-Stage 4's verification step requires `cargo check --target=riscv32imac-unknown-xous-elf -p presage-store-pddb`. The dep chain on rv32 is:
-
-```
-presage-store-pddb → presage → libsignal-service-rs → reqwest-websocket
-                                                   → reqwest → hyper-util
-                                                            → tokio → mio
-```
-
-`mio` doesn't support rv32-xous (its `cfg` ladder covers Unix/Windows/WASI/hermit only). So full `cargo check` on rv32 fails with 47 type errors, even though hosted-mode builds. This is the exact coupling REPORT.md Decisions 2 (tokio removal in presage) and 3 (libsignal-service-rs transport fork) are designed to break.
-
-Per user direction: **Option B — do Stages 6 + 7 next, then come back for the actual Stage 4 implementation.** Reasoning: writing storage trait impls without per-stage rv32 verification accumulates code that's untested on the actual target. Doing 6 + 7 first restores rv32 sanity before any storage code is written.
-
-The `ROADMAP.md` has been updated to reflect this temporal order: **0 → 1 → 2 → 3 → 6 → 7 → 4 (full) → 5 → 8 → 9 → 10 → 11 → 12.** Stage numbering is preserved for section references; ordering is governed by each stage's `Prerequisites` line.
-
-## Verification (hosted; rv32 deferred)
-
-```sh
-$ cargo build -p presage-store-pddb
-   Compiling signal-crypto, zkcredential, zkgroup, libsignal-protocol,
-             libsignal-service, presage, presage-store-pddb
-   Finished `dev` profile in 16s
-✓ Hosted-mode full Whisperfish stack compiles.
-
-$ cargo run -p xous-app-signal --bin xas               ✓ "got: hello"
-$ cargo run --example https_get -p xous-net-bridge     ✓ "HTTP/1.1 200 OK"
-$ cargo run --example signal_ws_keepalive -p xous-net-bridge
-                                                       ✓ handshake 101 + 94-byte frame
-
-$ cargo check --target=riscv32imac-unknown-xous-elf -p xous-net-bridge
-✓ rv32 still passes for the network layer (rustls + ring + getrandom).
-
-$ cargo check --target=riscv32imac-unknown-xous-elf -p presage-store-pddb
-✗ DEFERRED — gated on Stage 7. Will pass once mio is removed from the
-   transitive dep tree (Stages 6 + 7 do this).
-
-$ cargo tree --workspace -d
-⚠ Two new duplicates from adding presage:
-    - thiserror v1.0.69 vs v2.0.18
-    - tungstenite v0.21 vs v0.24
-   These are version conflicts that will be resolved either via additional
-   `[patch.crates-io]` entries or by waiting for the libsignal-service-rs
-   transport fork at Stage 6 to remove the v0.24 path. Tracked as a
-   follow-up; not blocking.
-
-$ cargo fmt --all -- --check         ✓ clean
-$ cargo clippy --workspace --all-targets -- -D warnings   ✓ clean
-```
-
-## ROADMAP refinements applied (alongside this stage)
-
-The ROADMAP was edited as part of this stage's work to reflect:
-
-1. **Recommended ordering**: 0 → 1 → 2 → 3 → 6 → 7 → 4 → 5 → 8+ (Option B). Stage section numbering preserved; temporal order from `Prerequisites` lines.
-2. **Stage 4 step 1 split out** as the "Cargo wiring + curve25519-dalek vendoring" sub-step that lands early (this stage).
-3. **Stage 4 step 1 documents** the betrusted-io vendoring + version bump + lizard-port pattern.
-4. **Stage 4 / Stage 5 verification** explicitly notes rv32 cross-compile is gated on Stage 7.
-5. **Stage 6 prerequisites** changed from "Stages 3 + 5 complete" to "Stage 3 complete + Stage 4 step 1 complete".
-
-The ROADMAP refinements are in the ROADMAP.md commits; nothing in this stage requires re-reading them in isolation.
-
-## Open questions for later stages
-
-1. **Stage 9: update xous-core's `[patch.crates-io].curve25519-dalek`.** xous-core currently points at `tunnell/curve25519-dalek`; should be updated to `betrusted-io/curve25519-dalek` (or the publishable form of our vendored copy with the lizard module ported in). Coordinate with xous-core maintainers.
-
-2. **`getrandom 0.3` may resurface** when libsignal-service-rs's transport fork removes the tokio-stack but leaves modern `rand`/`getrandom` paths in. xous-core has only a `getrandom 0.2` fork. Surfacing for Stage 6.
-
-3. **`thiserror` and `tungstenite` duplicates**. Two versions of each are now in the dep graph. Likely resolves automatically when libsignal-service-rs's transport is forked (Stage 6) — that removes the v0.24 tungstenite path. If not, `[patch.crates-io]` redirects can force convergence.
-
-## Files changed (since Stage 3 commit)
-
-```
-modified:
-  Cargo.toml                                                   (+vendored curve25519-dalek patch; +signalapp git-URL patch)
-  Cargo.lock                                                   (regenerated; full Whisperfish stack)
-  crates/presage-store-pddb/Cargo.toml                         (+presage as git dep)
-
-new (vendored):
-  vendor/curve25519-dalek/                                     (betrusted-io fork, 4.1.2 → 4.1.3 bump)
-  vendor/curve25519-dalek/curve25519-dalek/src/lizard/         (ported from signalapp fork; 6 files)
-
-modified (vendored):
-  vendor/curve25519-dalek/curve25519-dalek/Cargo.toml          (version "4.1.2" → "4.1.3")
-  vendor/curve25519-dalek/curve25519-dalek/src/lib.rs          (+pub mod lizard;)
-
-new (docs):
-  stage/REPORT-4.md                                            (this file)
-
-modified (docs):
-  docs/REPORT.md                                               (Decision 6 + Risk #3 rewritten for betrusted-io strategy)
-  docs/ROADMAP.md                                              (Option B ordering; Stage 4 step 1 split out; rv32-gated notes)
-```
