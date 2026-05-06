@@ -12,6 +12,14 @@ publish.workspace = true
 name = "xas"
 path = "src/main.rs"
 
+[features]
+# Stage 13a probe: when enabled, after the worker spawns, main()
+# fires a TCP connect against a known endpoint and logs the result.
+# Used to figure out which of {Renode network emulation, the Xous
+# net service, our bridge} actually carries traffic. Default off
+# so prod / smoke builds aren't affected.
+probe-flow = []
+
 [dependencies]
 # Stage 8: spawn the manager worker thread + drive Hello/GetWhoami
 # round-trips. The presage-store-pddb dep is direct (not just

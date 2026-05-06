@@ -111,6 +111,9 @@ fn main() -> std::io::Result<()> {
     let worker = run_signal_worker(store, cmd_rx, event_tx);
     log::info!("xas: worker started");
 
+    #[cfg(feature = "probe-flow")]
+    probe_network();
+
     // The UI loop blocks on stdin (hosted) or GAM events
     // (Xous, Stage 9b/follow-up). It owns the cmd/event channel ends
     // and is responsible for sending `Cmd::Shutdown` on quit.
@@ -132,6 +135,82 @@ fn main() -> std::io::Result<()> {
 fn init_logger() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .try_init();
+}
+
+/// Stage 13a probe: TCP-connect probe used to figure out whether
+/// Renode's WF200 wifi emulation actually carries outbound traffic.
+/// Three connect targets, each logged with elapsed time and result:
+///
+/// 1. `8.8.8.8:53` — Google DNS over TCP. No DNS needed; hits the
+///    lowest-level "is there a route to the internet" question.
+/// 2. `1.1.1.1:443` — Cloudflare 1.1.1.1 over HTTPS port. Same
+///    no-DNS shape as (1) but a different provider, in case route
+///    filtering is in play.
+/// 3. `chat.signal.org:443` — the actual Signal endpoint. Requires
+///    DNS resolution, so this also probes the Xous `dns` service.
+///
+/// Each probe has a 10-second timeout. The whole sequence logs to
+/// the same `INFO:xas:` stream the Robot smoke test asserts on, so
+/// findings show up in the `xas-probe.robot` test output.
+#[cfg(feature = "probe-flow")]
+fn probe_network() {
+    use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+    use std::time::{Duration, Instant};
+
+    log::info!("probe: starting network reachability probe");
+
+    let timeout = Duration::from_secs(10);
+
+    // (label, hostport, requires_dns)
+    let probes: &[(&str, &str, bool)] = &[
+        ("google-dns", "8.8.8.8:53", false),
+        ("cloudflare-https", "1.1.1.1:443", false),
+        ("signal-prod", "chat.signal.org:443", true),
+    ];
+
+    for (label, target, _needs_dns) in probes {
+        let start = Instant::now();
+        let addrs: Result<Vec<SocketAddr>, _> = target.to_socket_addrs().map(|i| i.collect());
+        match addrs {
+            Err(e) => {
+                log::warn!(
+                    "probe: {} resolve FAIL after {:?}: {}",
+                    label,
+                    start.elapsed(),
+                    e
+                );
+                continue;
+            }
+            Ok(addrs) if addrs.is_empty() => {
+                log::warn!("probe: {} resolve EMPTY after {:?}", label, start.elapsed());
+                continue;
+            }
+            Ok(addrs) => {
+                let addr = addrs[0];
+                match TcpStream::connect_timeout(&addr, timeout) {
+                    Ok(_stream) => {
+                        log::info!(
+                            "probe: {} CONNECT OK to {} after {:?}",
+                            label,
+                            addr,
+                            start.elapsed()
+                        );
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "probe: {} CONNECT FAIL to {} after {:?}: {}",
+                            label,
+                            addr,
+                            start.elapsed(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    log::info!("probe: network probe done");
 }
 
 #[cfg(target_os = "xous")]
