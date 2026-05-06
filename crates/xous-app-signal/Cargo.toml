@@ -63,12 +63,20 @@ hosted = [
     "ux-api/hosted",
     "gam/hosted",
     "modals/hosted",
+    "graphics-server/hosted",
 ]
 precursor = [
     "blitstr2/precursor",
     "ux-api/precursor",
     "gam/precursor",
     "modals/precursor",
+    "graphics-server/precursor",
+    # utralib needs both `precursor` (for the SVD bundle) AND a
+    # specific gitrev feature to pick which SoC variant. xtask's
+    # PRECURSOR_SOC_VERSION default is `pvt`. We're a direct dep
+    # on utralib (declared just below) so we can fan out both.
+    "utralib/precursor",
+    "utralib/precursor-pvt",
 ]
 
 [dependencies]
@@ -105,6 +113,16 @@ log = "0.4"
 # no Xous infra" is detected at runtime: gam_app::run() returns
 # Err and main() falls back to stdin Ui::run.
 gam = { path = "../../../repos/xous-core/services/gam" }
+# Direct dep on graphics-server so we can fan out the
+# `precursor` feature → `utralib/precursor` (otherwise
+# gam → graphics-server's transitive utralib activation
+# bypasses our feature unification).
+graphics-server = { path = "../../../repos/xous-core/services/graphics-server", default-features = false }
+# utralib direct dep so xous-app-signal can target its
+# `precursor` + `precursor-pvt` features through our `precursor`
+# cascade (above). Default features off — without `precursor`
+# the SVD bundle isn't generated and the build script panics.
+utralib = { version = "0.1.27", default-features = false }
 # Per-board glyph + screen constants are gated on `hosted` /
 # `precursor` features. We forward via the workspace-level
 # `hosted` / `precursor` features (above) so the build invocation
