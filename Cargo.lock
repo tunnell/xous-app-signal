@@ -4482,9 +4482,8 @@ name = "xous-app-signal"
 version = "0.0.1"
 dependencies = [
  "async-channel",
- "async-executor",
- "futures-lite",
- "futures-timer",
+ "presage-store-pddb",
+ "xous-signal-bridge",
 ]
 
 [[package]]
@@ -4531,6 +4530,14 @@ dependencies = [
 [[package]]
 name = "xous-signal-bridge"
 version = "0.0.1"
+dependencies = [
+ "async-channel",
+ "async-executor",
+ "futures-lite",
+ "presage",
+ "presage-store-pddb",
+ "tracing",
+]
 
 [[package]]
 name = "yoke"

@@ -13,7 +13,15 @@ name = "xas"
 path = "src/main.rs"
 
 [dependencies]
-async-executor = { workspace = true }
+# Stage 8: spawn the manager worker thread + drive Hello/GetWhoami
+# round-trips. The presage-store-pddb dep is direct (not just
+# transitive through the bridge) because the binary owns the store
+# and hands a clone to the worker.
+xous-signal-bridge = { path = "../xous-signal-bridge" }
+presage-store-pddb = { path = "../presage-store-pddb" }
 async-channel = { workspace = true }
-futures-lite = { workspace = true }
-futures-timer = { workspace = true }
+
+# Stage 1 carry-over (the smol primitives are used by the bridge
+# transitively, but the binary references nothing from them
+# directly any more — Stage 1's smoke test moved into the bridge's
+# `tests` module).

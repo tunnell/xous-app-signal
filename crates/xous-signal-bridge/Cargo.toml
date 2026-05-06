@@ -8,3 +8,23 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# The Manager state machine + storage trait.
+presage = { git = "https://github.com/whisperfish/presage", rev = "600c4ed" }
+
+# Our PDDB-backed storage impl. Used by `run_signal_worker` to type the
+# `S: Store` parameter, even though Stage 8 only exercises the
+# `with_mock_backend` constructor.
+presage-store-pddb = { path = "../presage-store-pddb" }
+
+# Local-executor + sync→async channels. Worker thread parks on
+# `executor.run(...)`; cmd/event channels are async-channel for the
+# sync `try_send`/`send_blocking` <-> async `send`/`recv` duality
+# documented in the Stage 1 / 6.1 reports.
+async-executor = { workspace = true }
+async-channel = { workspace = true }
+futures-lite = { workspace = true }
+
+# Logging — the worker runs entirely off the main thread, so the only
+# way to debug it is through `tracing`. Production binaries route this
+# to xous logger; hosted-mode tests just need the messages to surface.
+tracing = "0.1"
