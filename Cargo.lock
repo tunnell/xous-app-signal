@@ -2410,14 +2410,19 @@ dependencies = [
 name = "presage-store-pddb"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
+ "base64",
+ "chrono",
  "futures-lite",
  "phonenumber",
  "presage",
+ "prost 0.13.5",
  "rand 0.9.4",
  "serde",
  "serde_json",
  "sha2",
  "thiserror 1.0.69",
+ "tracing",
 ]
 
 [[package]]

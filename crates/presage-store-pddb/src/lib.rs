@@ -9,29 +9,43 @@
 //!   into the `pddb::Pddb` API; the Stage 4 `MockBackend` is an
 //!   in-memory `HashMap` for hosted-mode testing.
 //!
-//! - `PddbStore` owns an `Arc<dyn KvBackend>` and implements the
-//!   presage traits over it. `Clone + Send + Sync + 'static`, the
-//!   bound demanded by `presage::store::Store`.
+//! - `PddbStore` owns an `Arc<dyn KvBackend>`, an in-memory session
+//!   cache (Decision 5: dirty-set + flush instead of write-through),
+//!   and a `trust_new_identities` policy flag. It implements the
+//!   presage traits over the backend. `Clone + Send + Sync + 'static`,
+//!   the bound demanded by `presage::store::Store`.
 //!
-//! Stage 4 only fills in `StateStore` (10 methods) and the
-//! `ContentsStore::profile` / `save_profile` round-trip path. The
-//! remaining `ContentsStore` methods compile as `unimplemented!`-stubs
-//! (Stage 5c work). The libsignal protocol stores (Stage 5a) and
-//! libsignal-service-rs extension traits (Stage 5b) are not implemented
-//! here yet.
+//! Stage 4: `StateStore` (10 methods) + `ContentsStore::profile` /
+//! `save_profile` round-trip.
+//!
+//! Stage 5a: 6 libsignal protocol storage traits + the `ProtocolStore`
+//! blanket. ACI vs PNI is a runtime split via `IdentityType`. Sessions
+//! are buffered in memory and flushed via `flush_sessions`.
+//!
+//! Stage 5b: 3 libsignal-service-rs extension traits (`PreKeysStore`,
+//! `KyberPreKeyStoreExt`, `SessionStoreExt`) on the same protocol
+//! store struct.
+//!
+//! Stage 5c: full `ContentsStore` impl — messages-by-thread, contacts,
+//! groups, profile keys, profile/group avatars, sticker packs.
 
-#![deny(missing_debug_implementations)]
-
+use std::collections::{HashMap, HashSet};
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+use presage::libsignal_service::protocol::SessionRecord;
+use presage::model::identity::OnNewIdentity;
 
 mod backend_mock;
 mod content;
 mod error;
+mod protocol;
 mod state;
+mod store;
 
 pub use backend_mock::MockBackend;
 pub use error::Error;
+pub use protocol::{IdentityType, PddbProtocolStore};
 
 /// Internal KV abstraction used by all `PddbStore` trait impls.
 ///
@@ -50,30 +64,124 @@ pub trait KvBackend: Send + Sync + fmt::Debug {
     fn list_keys(&self, dict: &str) -> Result<Vec<String>, Error>;
 }
 
-/// PDDB-backed store implementing presage's `StateStore` and
-/// `ContentsStore` traits.
+/// PDDB-backed store implementing presage's full `Store` trait.
 ///
-/// `Clone` is shallow — clones share the same backend via `Arc`.
+/// `Clone` is shallow — clones share the same backend, the same
+/// session cache, and the same trust policy via `Arc`.
 /// `presage::store::Store` requires `Clone + Send + Sync + 'static`;
 /// every clone of a `PddbStore` therefore observes the same on-disk
-/// state, which is the behaviour Manager assumes when it stashes a
-/// store handle behind shared state.
-#[derive(Clone, Debug)]
+/// state and the same in-flight session cache, which is the behaviour
+/// Manager assumes when it stashes a store handle behind shared state.
+///
+/// `Debug` is hand-rolled because `SessionRecord` (held inside the
+/// session cache) doesn't implement `Debug`. We surface only the
+/// cache cardinality, not its contents — matches the privacy
+/// expectations for a long-lived store.
+#[derive(Clone)]
 pub struct PddbStore {
-    backend: Arc<dyn KvBackend>,
+    pub(crate) backend: Arc<dyn KvBackend>,
+
+    /// In-memory dirty-set cache per Decision 5. `store_session`
+    /// writes here only; `flush_sessions` persists to the backend.
+    /// Wrapped in `Mutex` so it stays `Send + Sync` even though the
+    /// underlying `SessionRecord` is.
+    pub(crate) session_cache:
+        Arc<Mutex<HashMap<protocol::session_store::SessionKey, SessionRecord>>>,
+
+    /// Companion to `session_cache`: keys present here have unsaved
+    /// changes since the last flush. We split it from the cache itself
+    /// so that flushing only persists genuinely-dirty entries (and so
+    /// that read-through `load_session` can populate the cache without
+    /// marking the entry dirty later — a Stage 11 optimisation).
+    pub(crate) session_dirty: Arc<Mutex<HashSet<protocol::session_store::SessionKey>>>,
+
+    /// What to do when `IdentityKeyStore::is_trusted_identity` finds a
+    /// known address with a different identity key. `Trust` accepts the
+    /// change (TOFU-with-rotation); `Reject` refuses it. Per-store,
+    /// settable at construction time.
+    pub(crate) trust_new_identities: OnNewIdentity,
 }
 
 impl PddbStore {
-    /// Build a store from any `KvBackend`. Tests use `MockBackend`;
-    /// Stage 8 will add a `PddbBackend` constructor that takes a
-    /// `pddb::Pddb` handle.
+    /// Build a store from any `KvBackend` with the default trust
+    /// policy (`OnNewIdentity::Trust` — TOFU-with-rotation, what
+    /// presage-store-sled / sqlite use unless overridden).
     pub fn new(backend: Arc<dyn KvBackend>) -> Self {
-        Self { backend }
+        Self::with_options(backend, OnNewIdentity::Trust)
+    }
+
+    /// Build a store with an explicit trust policy.
+    pub fn with_options(backend: Arc<dyn KvBackend>, trust_new_identities: OnNewIdentity) -> Self {
+        Self {
+            backend,
+            session_cache: Arc::new(Mutex::new(HashMap::new())),
+            session_dirty: Arc::new(Mutex::new(HashSet::new())),
+            trust_new_identities,
+        }
     }
 
     /// Convenience for hosted-mode tests — wraps a fresh `MockBackend`.
     pub fn with_mock_backend() -> Self {
         Self::new(Arc::new(MockBackend::new()))
+    }
+
+    /// Number of entries currently in the session cache (any state —
+    /// dirty or not). Test-/debug-only convenience.
+    pub fn session_cache_len(&self) -> usize {
+        self.session_cache.lock().map(|c| c.len()).unwrap_or(0)
+    }
+
+    /// Number of dirty session entries waiting to be flushed.
+    pub fn session_dirty_len(&self) -> usize {
+        self.session_dirty.lock().map(|d| d.len()).unwrap_or(0)
+    }
+
+    /// Persist every dirty session entry to the backend, then clear
+    /// the dirty set. Cache entries themselves stay populated so
+    /// subsequent `load_session` calls hit RAM. Per Decision 5: call
+    /// on `Received::QueueEmpty`, on a debounce timer, or whenever the
+    /// dirty set crosses a high-water mark.
+    ///
+    /// Returns the number of entries written. Idempotent — calling
+    /// twice in a row is cheap (the second call sees an empty dirty
+    /// set).
+    pub fn flush_sessions(&self) -> Result<usize, Error> {
+        let mut dirty = self
+            .session_dirty
+            .lock()
+            .map_err(|_| Error::backend("session dirty mutex poisoned"))?;
+        if dirty.is_empty() {
+            return Ok(0);
+        }
+        let cache = self
+            .session_cache
+            .lock()
+            .map_err(|_| Error::backend("session cache mutex poisoned"))?;
+
+        let mut written = 0_usize;
+        for key in dirty.iter() {
+            let Some(record) = cache.get(key) else {
+                continue;
+            };
+            let dict = protocol::dict_session(key.0);
+            let bytes = record
+                .serialize()
+                .map_err(|e| Error::Encode(e.to_string()))?;
+            self.backend.put(&dict, &key.1, &bytes)?;
+            written += 1;
+        }
+        dirty.clear();
+        Ok(written)
+    }
+}
+
+impl fmt::Debug for PddbStore {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PddbStore")
+            .field("session_cache_len", &self.session_cache_len())
+            .field("session_dirty_len", &self.session_dirty_len())
+            .field("trust_new_identities", &self.trust_new_identities)
+            .finish_non_exhaustive()
     }
 }
 
@@ -254,6 +362,548 @@ mod tests {
                 .await
                 .unwrap();
             assert!(store_a.is_registered().await);
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Stage 5a: libsignal protocol storage traits
+    // ------------------------------------------------------------------
+
+    use presage::libsignal_service::pre_keys::{KyberPreKeyStoreExt, PreKeysStore};
+    use presage::libsignal_service::prelude::SessionStoreExt;
+    use presage::libsignal_service::protocol::ServiceId;
+    use presage::libsignal_service::protocol::{
+        Aci, GenericSignedPreKey, IdentityKeyStore, KeyPair, KyberPreKeyId, KyberPreKeyRecord,
+        KyberPreKeyStore, PreKeyId, PreKeyRecord, PreKeyStore, ProtocolAddress, SenderKeyRecord,
+        SenderKeyStore, SessionRecord, SessionStore, SignedPreKeyId, SignedPreKeyRecord,
+        SignedPreKeyStore, Timestamp, kem,
+    };
+    use presage::store::Store;
+
+    fn registered_store() -> PddbStore {
+        let mut store = PddbStore::with_mock_backend();
+        block_on(async {
+            store
+                .save_registration_data(&fixture_registration())
+                .await
+                .unwrap();
+        });
+        store
+    }
+
+    fn fixture_address(uuid_str: &str, device: u32) -> ProtocolAddress {
+        let aci_uuid = Uuid::from_str(uuid_str).unwrap();
+        let aci = Aci::from_uuid_bytes(aci_uuid.into_bytes());
+        ProtocolAddress::new(aci.service_id_string(), device.try_into().unwrap())
+    }
+
+    #[test]
+    fn identity_key_store_round_trip() {
+        let store = registered_store();
+        let mut rng = rand::rng();
+        let aci_kp = IdentityKeyPair::generate(&mut rng);
+
+        block_on(async {
+            store.set_aci_identity_key_pair(aci_kp).await.unwrap();
+            let mut aci = store.aci_protocol_store();
+
+            // get_identity_key_pair pulls from signal.state via the
+            // protocol-store wrapper.
+            let loaded = aci.get_identity_key_pair().await.unwrap();
+            assert_eq!(loaded.serialize(), aci_kp.serialize());
+
+            // get_local_registration_id pulls from RegistrationData.
+            assert_eq!(aci.get_local_registration_id().await.unwrap(), 1234);
+
+            // save_identity / get_identity round-trip.
+            let addr = fixture_address("00000000-0000-4000-8000-000000000010", 1);
+            let other_kp = IdentityKeyPair::generate(&mut rng);
+            let other_id = *other_kp.identity_key();
+            let change = aci.save_identity(&addr, &other_id).await.unwrap();
+            assert!(matches!(
+                change,
+                presage::libsignal_service::protocol::IdentityChange::NewOrUnchanged
+            ));
+            let loaded = aci.get_identity(&addr).await.unwrap().unwrap();
+            assert_eq!(loaded, other_id);
+
+            // Saving the same identity again is NewOrUnchanged.
+            let change = aci.save_identity(&addr, &other_id).await.unwrap();
+            assert!(matches!(
+                change,
+                presage::libsignal_service::protocol::IdentityChange::NewOrUnchanged
+            ));
+
+            // Saving a different one is ReplacedExisting.
+            let third_kp = IdentityKeyPair::generate(&mut rng);
+            let third_id = *third_kp.identity_key();
+            let change = aci.save_identity(&addr, &third_id).await.unwrap();
+            assert!(matches!(
+                change,
+                presage::libsignal_service::protocol::IdentityChange::ReplacedExisting
+            ));
+        });
+    }
+
+    #[test]
+    fn pre_key_store_round_trip_packed() {
+        let store = PddbStore::with_mock_backend();
+        let mut rng = rand::rng();
+        block_on(async {
+            let mut aci = store.aci_protocol_store();
+            for id_u32 in [1u32, 2, 3, 100] {
+                let kp = KeyPair::generate(&mut rng);
+                let record = PreKeyRecord::new(PreKeyId::from(id_u32), &kp);
+                aci.save_pre_key(PreKeyId::from(id_u32), &record)
+                    .await
+                    .unwrap();
+            }
+            // Round-trip
+            for id_u32 in [1u32, 2, 3, 100] {
+                let loaded = aci.get_pre_key(PreKeyId::from(id_u32)).await.unwrap();
+                assert_eq!(u32::from(loaded.id().unwrap()), id_u32);
+            }
+            // Remove one
+            aci.remove_pre_key(PreKeyId::from(2)).await.unwrap();
+            assert!(aci.get_pre_key(PreKeyId::from(2)).await.is_err());
+            // Other entries still present
+            assert!(aci.get_pre_key(PreKeyId::from(3)).await.is_ok());
+        });
+    }
+
+    #[test]
+    fn signed_pre_key_round_trip() {
+        let store = PddbStore::with_mock_backend();
+        let mut rng = rand::rng();
+        let identity_kp = IdentityKeyPair::generate(&mut rng);
+        block_on(async {
+            let mut aci = store.aci_protocol_store();
+            let kp = KeyPair::generate(&mut rng);
+            let sig = identity_kp
+                .private_key()
+                .calculate_signature(&kp.public_key.serialize(), &mut rng)
+                .unwrap();
+            let id = SignedPreKeyId::from(7);
+            let record = SignedPreKeyRecord::new(id, Timestamp::from_epoch_millis(1), &kp, &sig);
+            aci.save_signed_pre_key(id, &record).await.unwrap();
+            let loaded = aci.get_signed_pre_key(id).await.unwrap();
+            assert_eq!(loaded.signature().unwrap(), sig.to_vec());
+        });
+    }
+
+    #[test]
+    fn kyber_pre_key_one_time_round_trip_and_use() {
+        let store = PddbStore::with_mock_backend();
+        let mut rng = rand::rng();
+        let identity_kp = IdentityKeyPair::generate(&mut rng);
+        block_on(async {
+            let mut aci = store.aci_protocol_store();
+            let id = KyberPreKeyId::from(11);
+            let record =
+                KyberPreKeyRecord::generate(kem::KeyType::Kyber1024, id, identity_kp.private_key())
+                    .unwrap();
+            aci.save_kyber_pre_key(id, &record).await.unwrap();
+            assert!(aci.get_kyber_pre_key(id).await.is_ok());
+
+            let ec_id = SignedPreKeyId::from(13);
+            let base = KeyPair::generate(&mut rng).public_key;
+            // One-time: mark_used deletes outright.
+            aci.mark_kyber_pre_key_used(id, ec_id, &base).await.unwrap();
+            assert!(aci.get_kyber_pre_key(id).await.is_err());
+        });
+    }
+
+    #[test]
+    fn kyber_pre_key_last_resort_dedup() {
+        let store = PddbStore::with_mock_backend();
+        let mut rng = rand::rng();
+        let identity_kp = IdentityKeyPair::generate(&mut rng);
+        block_on(async {
+            let mut aci = store.aci_protocol_store();
+            let id = KyberPreKeyId::from(31);
+            let record =
+                KyberPreKeyRecord::generate(kem::KeyType::Kyber1024, id, identity_kp.private_key())
+                    .unwrap();
+            aci.store_last_resort_kyber_pre_key(id, &record)
+                .await
+                .unwrap();
+
+            let ec_id = SignedPreKeyId::from(13);
+            let base = KeyPair::generate(&mut rng).public_key;
+
+            // First use: succeeds.
+            aci.mark_kyber_pre_key_used(id, ec_id, &base).await.unwrap();
+            // Last-resort: still available after first mark.
+            assert!(aci.get_kyber_pre_key(id).await.is_ok());
+            // Second use with same base: rejected.
+            assert!(aci.mark_kyber_pre_key_used(id, ec_id, &base).await.is_err());
+
+            // load_last_resort_kyber_pre_keys returns it.
+            let lasts = aci.load_last_resort_kyber_pre_keys().await.unwrap();
+            assert_eq!(lasts.len(), 1);
+        });
+    }
+
+    #[test]
+    fn session_cache_then_flush_then_load() {
+        let store = PddbStore::with_mock_backend();
+        block_on(async {
+            let mut aci = store.aci_protocol_store();
+            let addr = fixture_address("00000000-0000-4000-8000-000000000020", 2);
+            let session = SessionRecord::new_fresh();
+            aci.store_session(&addr, &session).await.unwrap();
+
+            // store_session writes to cache only; dirty set has it.
+            assert_eq!(store.session_cache_len(), 1);
+            assert_eq!(store.session_dirty_len(), 1);
+
+            // load_session reads from cache.
+            let loaded = aci.load_session(&addr).await.unwrap().unwrap();
+            assert_eq!(loaded.serialize().unwrap(), session.serialize().unwrap());
+
+            // Flush persists; dirty set drains.
+            let written = store.flush_sessions().unwrap();
+            assert_eq!(written, 1);
+            assert_eq!(store.session_dirty_len(), 0);
+
+            // Cache stays warm; PDDB has the bytes too. Drop cache and reload to verify.
+            store.session_cache.lock().unwrap().clear();
+            let loaded = aci.load_session(&addr).await.unwrap().unwrap();
+            assert_eq!(loaded.serialize().unwrap(), session.serialize().unwrap());
+
+            // Idempotent: a second flush is cheap.
+            let written = store.flush_sessions().unwrap();
+            assert_eq!(written, 0);
+        });
+    }
+
+    #[test]
+    fn sender_key_round_trip() {
+        let store = PddbStore::with_mock_backend();
+        let mut rng = rand::rng();
+        let identity_kp = IdentityKeyPair::generate(&mut rng);
+        block_on(async {
+            let mut aci = store.aci_protocol_store();
+            let addr = fixture_address("00000000-0000-4000-8000-000000000030", 3);
+            let dist_id = Uuid::from_str("11111111-2222-3333-4444-555555555555").unwrap();
+
+            // Build a SenderKeyRecord via the SenderKeyStore's own
+            // create_sender_key_distribution_message helper. We don't
+            // exercise the message API here — just round-trip the
+            // record bytes.
+            use presage::libsignal_service::protocol::create_sender_key_distribution_message;
+            let _ = identity_kp; // unused in this construction
+            let _ = create_sender_key_distribution_message(&addr, dist_id, &mut aci, &mut rng)
+                .await
+                .unwrap();
+
+            // Subsequent load returns Some.
+            let loaded = aci.load_sender_key(&addr, dist_id).await.unwrap();
+            assert!(loaded.is_some());
+
+            // Storing a record-shaped clone round-trips.
+            let bytes = loaded.unwrap().serialize().unwrap();
+            let cloned = SenderKeyRecord::deserialize(&bytes).unwrap();
+            aci.store_sender_key(&addr, dist_id, &cloned).await.unwrap();
+            assert!(aci.load_sender_key(&addr, dist_id).await.unwrap().is_some());
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Stage 5b: extension traits
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn next_pre_key_id_increments() {
+        let store = PddbStore::with_mock_backend();
+        let mut rng = rand::rng();
+        block_on(async {
+            let mut aci = store.aci_protocol_store();
+            // Empty store: starts at 1.
+            assert_eq!(aci.next_pre_key_id().await.unwrap(), 1);
+            assert_eq!(aci.next_signed_pre_key_id().await.unwrap(), 1);
+            assert_eq!(aci.next_pq_pre_key_id().await.unwrap(), 1);
+
+            // Save id=5; next becomes 6.
+            let kp = KeyPair::generate(&mut rng);
+            aci.save_pre_key(
+                PreKeyId::from(5),
+                &PreKeyRecord::new(PreKeyId::from(5), &kp),
+            )
+            .await
+            .unwrap();
+            assert_eq!(aci.next_pre_key_id().await.unwrap(), 6);
+        });
+    }
+
+    #[test]
+    fn session_store_ext_delete_paths() {
+        let store = PddbStore::with_mock_backend();
+        block_on(async {
+            let mut aci = store.aci_protocol_store();
+            let aci_const = store.aci_protocol_store();
+            // Two devices for the same UUID.
+            let aci_uuid = "00000000-0000-4000-8000-000000000040";
+            let addr1 = fixture_address(aci_uuid, 1);
+            let addr2 = fixture_address(aci_uuid, 2);
+            aci.store_session(&addr1, &SessionRecord::new_fresh())
+                .await
+                .unwrap();
+            aci.store_session(&addr2, &SessionRecord::new_fresh())
+                .await
+                .unwrap();
+            store.flush_sessions().unwrap();
+
+            // get_sub_device_sessions: should return [2] (excluding device 1 = main).
+            let aci_id =
+                ServiceId::Aci(presage::libsignal_service::protocol::Aci::from_uuid_bytes(
+                    Uuid::from_str(aci_uuid).unwrap().into_bytes(),
+                ));
+            let subs = aci_const.get_sub_device_sessions(&aci_id).await.unwrap();
+            assert_eq!(subs.len(), 1);
+            assert_eq!(u32::from(subs[0]), 2);
+
+            // delete_session(addr1): removes that one only.
+            aci_const.delete_session(&addr1).await.unwrap();
+            assert!(aci_const.load_session(&addr1).await.unwrap().is_none());
+            assert!(aci_const.load_session(&addr2).await.unwrap().is_some());
+
+            // delete_all_sessions(uuid): removes the rest.
+            let n = aci_const.delete_all_sessions(&aci_id).await.unwrap();
+            assert_eq!(n, 1);
+            assert!(aci_const.load_session(&addr2).await.unwrap().is_none());
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // Stage 5c: ContentsStore (the rest of it)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn contact_round_trip() {
+        let mut store = PddbStore::with_mock_backend();
+        let uuid = Uuid::from_str("00000000-0000-4000-8000-000000000050").unwrap();
+        block_on(async {
+            let contact = presage::model::contacts::Contact {
+                uuid,
+                phone_number: None,
+                name: "Test User".to_string(),
+                verified: Default::default(),
+                profile_key: vec![],
+                expire_timer: 0,
+                expire_timer_version: 2,
+                inbox_position: 0,
+                avatar: None,
+            };
+            store.save_contact(&contact).await.unwrap();
+
+            let aci = ServiceId::Aci(presage::libsignal_service::protocol::Aci::from_uuid_bytes(
+                uuid.into_bytes(),
+            ));
+            let loaded = store.contact_by_id(&aci).await.unwrap().unwrap();
+            assert_eq!(loaded.name, "Test User");
+
+            let all: Vec<_> = store.contacts().await.unwrap().collect();
+            assert_eq!(all.len(), 1);
+            store.clear_contacts().await.unwrap();
+            assert!(store.contact_by_id(&aci).await.unwrap().is_none());
+        });
+    }
+
+    #[test]
+    fn group_round_trip() {
+        let store = PddbStore::with_mock_backend();
+        let mut store_mut = store.clone();
+        let master_key = [42u8; 32];
+        block_on(async {
+            let group = presage::model::groups::Group {
+                title: "Test Group".to_string(),
+                avatar: String::new(),
+                disappearing_messages_timer: None,
+                access_control: None,
+                revision: 1,
+                members: vec![],
+                pending_members: vec![],
+                requesting_members: vec![],
+                invite_link_password: vec![],
+                description: None,
+            };
+            store.save_group(master_key, group).await.unwrap();
+
+            let loaded = store.group(master_key).await.unwrap().unwrap();
+            assert_eq!(loaded.title, "Test Group");
+
+            let all: Vec<_> = store.groups().await.unwrap().collect();
+            assert_eq!(all.len(), 1);
+
+            store_mut.clear_groups().await.unwrap();
+            assert!(store.group(master_key).await.unwrap().is_none());
+        });
+    }
+
+    #[test]
+    fn profile_key_round_trip() {
+        let mut store = PddbStore::with_mock_backend();
+        let uuid = Uuid::from_str("00000000-0000-4000-8000-000000000060").unwrap();
+        let pk = ProfileKey::generate([2u8; 32]);
+        block_on(async {
+            // First save: returns true (new).
+            assert!(store.upsert_profile_key(&uuid, pk).await.unwrap());
+            // Second save (same key): returns false.
+            assert!(!store.upsert_profile_key(&uuid, pk).await.unwrap());
+
+            let aci = ServiceId::Aci(presage::libsignal_service::protocol::Aci::from_uuid_bytes(
+                uuid.into_bytes(),
+            ));
+            let loaded = store.profile_key(&aci).await.unwrap().unwrap();
+            assert_eq!(loaded.get_bytes(), pk.get_bytes());
+        });
+    }
+
+    #[test]
+    fn sticker_pack_round_trip() {
+        let mut store = PddbStore::with_mock_backend();
+        let pack = presage::store::StickerPack {
+            id: vec![1, 2, 3, 4],
+            key: vec![5, 6, 7, 8],
+            manifest: presage::store::StickerPackManifest {
+                title: "Test".to_string(),
+                author: "T".to_string(),
+                cover: None,
+                stickers: vec![],
+            },
+        };
+        block_on(async {
+            store.add_sticker_pack(&pack).await.unwrap();
+            let loaded = store.sticker_pack(&[1, 2, 3, 4]).await.unwrap().unwrap();
+            assert_eq!(loaded.manifest.title, "Test");
+
+            let all: Vec<_> = store.sticker_packs().await.unwrap().collect();
+            assert_eq!(all.len(), 1);
+
+            assert!(store.remove_sticker_pack(&[1, 2, 3, 4]).await.unwrap());
+            assert!(!store.remove_sticker_pack(&[1, 2, 3, 4]).await.unwrap());
+        });
+    }
+
+    #[test]
+    fn message_round_trip_and_range() {
+        use presage::libsignal_service::content::{Content, ContentBody, Metadata};
+        use presage::libsignal_service::proto;
+        use presage::libsignal_service::protocol::DeviceId;
+        use presage::store::Thread;
+
+        let mut store = PddbStore::with_mock_backend();
+        let aci_uuid = Uuid::from_str("00000000-0000-4000-8000-000000000080").unwrap();
+        let aci = Aci::from_uuid_bytes(aci_uuid.into_bytes());
+        let thread = Thread::Contact(ServiceId::Aci(aci));
+
+        // Build a minimal Content. ContentBody::DataMessage with just a
+        // body field — round-trips through prost.
+        fn build_content(sender: ServiceId, ts: u64) -> Content {
+            let body = ContentBody::DataMessage(proto::DataMessage {
+                body: Some(format!("hello-{ts}")),
+                ..Default::default()
+            });
+            Content {
+                metadata: Metadata {
+                    sender,
+                    destination: sender,
+                    sender_device: DeviceId::try_from(1u32).unwrap(),
+                    server_guid: None,
+                    timestamp: ts,
+                    needs_receipt: false,
+                    unidentified_sender: false,
+                    was_plaintext: false,
+                },
+                body,
+            }
+        }
+
+        block_on(async {
+            for ts in [100u64, 200, 300] {
+                store
+                    .save_message(&thread, build_content(ServiceId::Aci(aci), ts))
+                    .await
+                    .unwrap();
+            }
+
+            // Single-message lookup.
+            let msg = store.message(&thread, 200).await.unwrap().unwrap();
+            assert_eq!(msg.metadata.timestamp, 200);
+
+            // Range query: 150..=250 → just 200.
+            let msgs: Vec<_> = store
+                .messages(&thread, 150u64..=250)
+                .await
+                .unwrap()
+                .collect();
+            assert_eq!(msgs.len(), 1);
+            assert_eq!(
+                msgs.into_iter().next().unwrap().unwrap().metadata.timestamp,
+                200
+            );
+
+            // Range unbounded: all three, sorted.
+            let msgs: Vec<_> = store.messages(&thread, ..).await.unwrap().collect();
+            assert_eq!(msgs.len(), 3);
+            let timestamps: Vec<u64> = msgs
+                .into_iter()
+                .map(|r| r.unwrap().metadata.timestamp)
+                .collect();
+            assert_eq!(timestamps, vec![100, 200, 300]);
+
+            // Delete one.
+            assert!(store.delete_message(&thread, 200).await.unwrap());
+            assert!(!store.delete_message(&thread, 200).await.unwrap()); // already gone
+            assert!(store.message(&thread, 200).await.unwrap().is_none());
+
+            // clear_thread wipes the rest.
+            store.clear_thread(&thread).await.unwrap();
+            assert!(store.message(&thread, 100).await.unwrap().is_none());
+        });
+    }
+
+    #[test]
+    fn store_clear_resets_everything() {
+        let mut store = PddbStore::with_mock_backend();
+        let uuid = Uuid::from_str("00000000-0000-4000-8000-000000000070").unwrap();
+        let pk = ProfileKey::generate([3u8; 32]);
+        block_on(async {
+            // Populate StateStore + ContentsStore + ProtocolStore.
+            store
+                .save_registration_data(&fixture_registration())
+                .await
+                .unwrap();
+            store.upsert_profile_key(&uuid, pk).await.unwrap();
+            let mut aci = store.aci_protocol_store();
+            let addr = fixture_address("00000000-0000-4000-8000-000000000071", 1);
+            aci.store_session(&addr, &SessionRecord::new_fresh())
+                .await
+                .unwrap();
+            store.flush_sessions().unwrap();
+
+            assert!(store.is_registered().await);
+            assert_eq!(store.session_cache_len(), 1);
+
+            // clear() drops everything: state, contents, protocol dicts,
+            // session cache.
+            store.clear().await.unwrap();
+            assert!(!store.is_registered().await);
+            let aci2 = store.aci_protocol_store();
+            assert!(aci2.load_session(&addr).await.unwrap().is_none());
+            assert!(
+                store
+                    .profile_key(&ServiceId::Aci(
+                        presage::libsignal_service::protocol::Aci::from_uuid_bytes(
+                            uuid.into_bytes()
+                        )
+                    ))
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(store.session_cache_len(), 0);
         });
     }
 }

@@ -33,6 +33,36 @@ thiserror = "1"
 # async store API without pulling tokio into the production dep tree.
 futures-lite = { workspace = true }
 
+# Stage 5a/b uses async-trait for IdentityKeyStore / SessionStore /
+# PreKeyStore / KyberPreKeyStoreExt etc. — the libsignal protocol
+# storage traits all use #[async_trait(?Send)] in their definitions,
+# and our impls have to match.
+async-trait = "0.1"
+
+# Stage 5b: KyberPreKeyStoreExt's stale-marking methods take
+# `chrono::DateTime<Utc>` per the trait signature. We don't act on the
+# timestamps for now (matches presage-store-sqlite), but the type has
+# to be in scope for the impl to compile.
+chrono = { version = "0.4", default-features = false, features = ["serde"] }
+
+# Stage 5c: ContentBody serialization for messages — protobuf round-trip
+# via prost, matching presage-store-sled's ContentProto pattern.
+# Pinned to 0.13 to match libsignal-service-rs's `prost = "0.13"`; using
+# 0.14 here would compile but `presage::proto::Content` would only impl
+# `prost_0_13::Message`, so `encode_to_vec`/`decode` wouldn't resolve.
+prost = "0.13"
+
+# Used by IdentityKeyStore to log unrecognized-identity TOFU events.
+# Already a transitive dep through presage / libsignal-service-rs;
+# declaring it here directly so the import doesn't depend on a
+# transitive resolution that could change.
+tracing = "0.1"
+
+# Stage 5c: base64-encode the group master_key inside the per-thread
+# dictionary-name hash. Same hashing scheme presage-store-sled uses
+# (vendor/presage/presage-store-sled/src/content.rs:471-485).
+base64 = "0.22"
+
 [dev-dependencies]
 # `RegistrationData` construction in tests needs a few presage / libsignal
 # constructors. They come transitively through `presage`; we only need
