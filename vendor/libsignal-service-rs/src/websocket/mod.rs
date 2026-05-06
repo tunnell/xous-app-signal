@@ -12,7 +12,11 @@ use futures::prelude::*;
 use futures::stream::FuturesUnordered;
 use http::Method;
 use reqwest_websocket::WebSocket;
-use tokio::time::Instant;
+// Stage 6.1: Stage 6.1 removed `Instant` usage entirely. `tokio::time::Instant`
+// was only used for `interval_at(Instant::now(), ...)`, which is replaced
+// by `futures_timer::Delay::new(Duration::ZERO)` for the immediate-fire
+// shape (and `Delay::new(KEEPALIVE_TIMEOUT_SECONDS)` for the recurring
+// shape). No replacement Instant import needed.
 use tracing::debug;
 
 use crate::configuration::SignalServers;
@@ -220,14 +224,19 @@ impl SignalWebSocketProcess {
     }
 
     async fn run(mut self) -> Result<(), ServiceError> {
-        let mut ka_interval = tokio::time::interval_at(
-            Instant::now(),
-            push_service::KEEPALIVE_TIMEOUT_SECONDS,
-        );
+        // Stage 6.1: was `tokio::time::interval_at(Instant::now(),
+        // KEEPALIVE_TIMEOUT_SECONDS)` returning a `tokio::time::Interval`.
+        // Replaced with a futures-timer Delay reset on each tick — first
+        // fires immediately (Duration::ZERO), then every
+        // KEEPALIVE_TIMEOUT_SECONDS. Same external behaviour, no tokio
+        // timer reactor needed.
+        let mut ka_delay = futures_timer::Delay::new(std::time::Duration::ZERO);
 
         loop {
             futures::select! {
-                _ = ka_interval.tick().fuse() => {
+                _ = (&mut ka_delay).fuse() => {
+                    // Reset the timer for the next tick.
+                    ka_delay = futures_timer::Delay::new(push_service::KEEPALIVE_TIMEOUT_SECONDS);
                     use prost::Message;
                     if !self.outgoing_keep_alive_set.is_empty() {
                         tracing::warn!("Websocket will be closed due to failed keepalives.");

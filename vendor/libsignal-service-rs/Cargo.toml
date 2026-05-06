@@ -53,6 +53,11 @@ tracing-futures = "0.2"
 
 tokio = { version = "1.0", features = ["macros"] }
 
+# Stage 6.1: replaces tokio::time::interval_at in src/websocket/mod.rs.
+# futures-timer is sync at the leaf (single OS-thread parker) but
+# integrates with futures::select! the same way tokio's Interval does.
+futures-timer = { git = "https://github.com/async-rs/futures-timer", rev = "07dbe53" }
+
 [build-dependencies]
 prost-build = "0.13"
 

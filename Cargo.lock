@@ -1984,6 +1984,7 @@ dependencies = [
  "ctr",
  "derive_more",
  "futures",
+ "futures-timer",
  "hex",
  "hkdf",
  "hmac",
