@@ -1,6 +1,6 @@
-# Project conventions for AI agents
+# Project conventions
 
-These conventions apply to any agent (Claude Code, etc.) working in this repo.
+These conventions apply to anyone (or any tool) doing work in this repo.
 The driving value is **end-user verifiability** — see `docs/REPORT.md` §1.
 Every convention below serves that goal.
 
