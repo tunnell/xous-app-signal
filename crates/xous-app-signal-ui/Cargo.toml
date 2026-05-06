@@ -1,0 +1,17 @@
+[package]
+name = "xous-app-signal-ui"
+description = "UI layer for xas — screen state machine and renderer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# We depend on the bridge for the Cmd/Event vocabulary the UI sends and
+# receives. No external UI dependencies on purpose — every line of
+# rendering and input handling has to be auditable; pulling in `crossterm`
+# / `tui-rs` / `ratatui` would defeat the design goal stated in
+# docs/UI.md §9.
+xous-signal-bridge = { path = "../xous-signal-bridge" }
+async-channel = { workspace = true }

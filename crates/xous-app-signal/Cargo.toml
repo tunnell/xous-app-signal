@@ -21,6 +21,10 @@ xous-signal-bridge = { path = "../xous-signal-bridge" }
 presage-store-pddb = { path = "../presage-store-pddb" }
 async-channel = { workspace = true }
 
+# Stage 9c: the UI layer. main.rs constructs the worker, then hands
+# the cmd/event channels to Ui::new and calls Ui::run.
+xous-app-signal-ui = { path = "../xous-app-signal-ui" }
+
 # Stage 1 carry-over (the smol primitives are used by the bridge
 # transitively, but the binary references nothing from them
 # directly any more — Stage 1's smoke test moved into the bridge's

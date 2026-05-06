@@ -5,6 +5,7 @@ members = [
     "crates/xous-net-bridge",
     "crates/xous-signal-bridge",
     "crates/xous-app-signal",
+    "crates/xous-app-signal-ui",
     "vendor/libsignal-service-rs",
 ]
 exclude = [
