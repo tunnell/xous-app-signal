@@ -1,157 +1,149 @@
-# Stage 4 — Stop and surface: the design question is now active
+# Stage 4 — partial (Cargo wiring + curve25519-dalek vendoring) complete
 
-Status: **partial / blocked on user decision**.
+Status: **Stage 4 step 1 complete; Stage 4 main work (StateStore impl + tests) deferred until after Stages 6 + 7 land.**
 
-## What was attempted
+This stage was originally going to be a single end-to-end pass: add presage as a dep, implement `StateStore` on a mock backend, write tests, verify hosted + rv32. Two issues showed up that the design doc had anticipated but hadn't yet been resolved in code; both are now resolved. The actual `StateStore` impl is deferred to keep rv32 verification unbroken (see "Decision: ordering" below).
 
-Started Stage 4: add `presage` as a dep, build, then implement `StateStore` against a mock backend.
+## What landed in this stage
 
-Adding presage immediately exposed two issues that REPORT.md anticipated:
+### 1. `presage` is now a workspace dep
 
-1. **`curve25519-dalek` fork conflict** (REPORT.md Risk #3, predicted). Two copies of `curve25519-dalek 4.1.3` in the dep graph: one from crates.io (transitively pulled), one from `signalapp/curve25519-dalek` (libsignal's `[patch.crates-io]`). zkgroup compiled against the fork; other consumers compiled against crates.io. Result: 220 errors all variants of "found `RistrettoPoint`, expected `RistrettoPoint`" (same name, two different concrete types).
+`crates/presage-store-pddb/Cargo.toml` declares `presage = { git = "https://github.com/whisperfish/presage", rev = "600c4ed" }`. The full Whisperfish stack (libsignal v0.91.0 by tag, libsignal-service-rs HEAD by rev, presage HEAD by rev) is now resolvable. Hosted-mode `cargo build -p presage-store-pddb` succeeds.
 
-   **Cause.** libsignal's own `[patch.crates-io]` (at `libsignal/Cargo.toml:237`) only applies when libsignal is the build root. When libsignal is consumed as a dep (as we do, via presage → libsignal-service-rs), patches don't propagate.
+### 2. curve25519-dalek strategy resolved: vendored `betrusted-io/curve25519-dalek`
 
-   **Fix.** Mirrored libsignal's `curve25519-dalek` patch into our workspace `Cargo.toml`:
-   ```toml
-   [patch.crates-io.curve25519-dalek]
-   git = "https://github.com/signalapp/curve25519-dalek"
-   tag = "signal-curve25519-4.1.3"
-   ```
-   After this, hosted-mode build of the full Whisperfish stack succeeds:
-   ```
-   Compiling signal-crypto, zkcredential, zkgroup, libsignal-protocol,
-             libsignal-service, presage, presage-store-pddb
-   Finished `dev` profile in 19s
-   ```
+This is the canonical Xous-targeted fork. It carries the driver for Precursor's curve25519 IP-core HW accelerator at [`curve25519-dalek/src/backend/serial/u32e/`](https://github.com/betrusted-io/curve25519-dalek/tree/main/curve25519-dalek/src/backend/serial/u32e). The accelerator backend is selected at compile time by `RUSTFLAGS=--cfg curve25519_dalek_backend="u32e_backend"` on rv32-xous; on hosted Linux the same code falls back to the portable Rust impl. Without this, ECC operations on real hardware would be very slow.
 
-2. **`mio` does not support `riscv32imac-unknown-xous-elf`** (REPORT.md Decision 2 + 3 predicted). Trying `cargo check --target=riscv32imac-unknown-xous-elf -p presage-store-pddb` produced 47 errors in mio:
-   ```
-   error[E0308]: mismatched types
-      --> mio-1.2.0/src/net/udp.rs:768:9
-   768 | /         unsafe {
-   769 | |             #[cfg(any(unix, target_os = "hermit", target_os = "wasi"))]
-   ...
-   = expected `UdpSocket`, found `()`
-   ```
-   mio's `cfg` ladder covers Unix, Windows, WASI, hermit. Xous is none of those, so the function bodies are cfg-removed, leaving placeholders that don't satisfy the function signatures.
+Vendored at `vendor/curve25519-dalek/` (rather than git-pinned) because we needed two changes:
 
-   **Cause.** Dep chain (verified by `cargo tree -e all --invert`):
-   ```
-   mio v1.2.0
-   └── tokio v1.52.2
-       └── hyper-util v0.1.20
-           └── reqwest v0.12.28
-               └── reqwest-websocket v0.4.4
-                   └── libsignal-service v0.1.0
-                       └── presage v0.8.0-dev
-                           └── presage-store-pddb (us)
-   ```
-   This is the exact tokio + reqwest + reqwest-websocket coupling that REPORT.md Decision 3 (replace transport) and Decision 2 (remove tokio from presage) are designed to break.
+- **Version bump** from upstream `4.1.2` to `4.1.3` so that libsignal's `zkgroup` (which declares `curve25519-dalek = "4.1.3"`) sees the patch as version-compatible.
+- **Lizard module port** from `signalapp/curve25519-dalek` (`signal-curve25519-4.1.3` tag): `src/lizard/{mod.rs, lizard_ristretto.rs, lizard_constants.rs, jacobi_quartic.rs, u32_constants.rs, u64_constants.rs}`. Adds 4 methods on `RistrettoPoint` (`lizard_encode<H>`, `lizard_decode<H>`, `from_uniform_bytes_single_elligator`, `decode_253_bits`) used by `zkgroup`. The patches are additive — no API conflicts with the betrusted-io fork's own changes. Always-on (no feature gate) so libsignal compiles unconditionally.
 
-## The design question to surface
+Workspace `[patch.crates-io]` redirects both:
 
-**rv32 cross-compile of `presage-store-pddb` is gated on Stage 6 (libsignal-service-rs transport fork) + Stage 7 (presage tokio removal).** The ROADMAP currently ordered work as 4 → 5 → 6 → 7. We can:
+```toml
+[patch.crates-io.curve25519-dalek]
+path = "vendor/curve25519-dalek/curve25519-dalek"
 
-### Option A — Continue Stage 4 hosted-mode-only
+[patch.crates-io.curve25519-dalek-derive]
+path = "vendor/curve25519-dalek/curve25519-dalek-derive"
 
-Implement `StateStore` + `ContentsStore::profile` against the mock backend. Verify hosted-mode tests pass. Skip the rv32 cross-compile verification step for Stage 4 (and Stage 5) with a documented "gated on Stage 6+7" caveat. Add the rv32 verification back in once Stages 6+7 land.
+# libsignal also imports curve25519-dalek directly via the git URL alias
+# `curve25519-dalek-signal = { git = "...signalapp/...", package = "curve25519-dalek" }`
+# at libsignal/Cargo.toml:90. [patch.crates-io] doesn't redirect git sources,
+# so we additionally patch the git URL.
+[patch."https://github.com/signalapp/curve25519-dalek"]
+curve25519-dalek = { path = "vendor/curve25519-dalek/curve25519-dalek" }
+curve25519-dalek-derive = { path = "vendor/curve25519-dalek/curve25519-dalek-derive" }
+```
 
-- **Pros**: linear progress; Stage 4–5 are mostly mechanical trait impls and don't need network at all.
-- **Cons**: we lose the per-stage rv32 sanity check for two stages.
+This is per dev guidance: "the correct thing to patch with is `betrusted-io/curve25519-dalek`. Using this version gives you access to the curve25519 accelerator on the precursor. If there is any issue preventing your applying that patch, then we should fix that fork to enable this." The version bump + lizard-module port are exactly that fix.
 
-### Option B — Reorder: do Stage 6+7 next, return to 4–5 after
+`docs/REPORT.md` §Decision 6 and Risk #3 have been rewritten to document this strategy.
 
-Skip ahead and tackle the libsignal-service-rs transport fork + presage tokio removal first. After those, Stage 4–5's storage-trait impls automatically get rv32 verification.
+### Open follow-up: is the curve25519 IP core on Bao1x?
 
-- **Pros**: rv32 cross-compile is restored before any storage code is written; we don't accumulate rv32-untested code.
-- **Cons**: Stage 6 is the largest single piece of forking work in the project (~2 kLoC patch on libsignal-service-rs); doing it before any storage work means we don't have a full integration target until much later. Higher risk of the fork-rebase getting stale.
+Per dev: "I don't know if this IP core made it onto the tapped out chip. I think it was a precursor only feature. bunnie would know if that is true." If Bao1x doesn't carry the IP core, the `u32e_backend` cfg should not be set on Bao1x builds; the same vendored fork falls back to the portable Rust backend automatically.
 
-### Option C — Parallel: do 4-5 (hosted) and 6-7 in parallel
+## What did NOT land in this stage (and why)
 
-Write the storage trait impls (Stages 4–5) and the transport fork (Stage 6) simultaneously, on different branches. They're independent at the trait-boundary level. Merge when both ready.
-
-- **Pros**: parallelism; rv32 verification restored on a similar timeline; Stage 4 impls are straightforward and unblock other work.
-- **Cons**: requires two separate concurrent agent contexts; more bookkeeping; if the fork's API changes diverge from what the storage impl expects, mid-stream coordination is needed.
-
-## Recommendation
-
-**Option A** is the lowest-risk path forward for an agent-driven sequence. Stage 4–5 are highly mechanical (~50 trait method impls, mostly `serde::serialize` / `bincode::deserialize` plumbing), and shipping them on hosted-mode-only doesn't accumulate technical debt — the same code will pass rv32 verification automatically once Stages 6+7 land. Add a TODO marker at every Stage 4–5 verification step listing the gated rv32 check, so we don't lose track. Then attack Stage 6+7 with the storage layer already done and exercisable via mocks.
-
-This is also the order that mirrors how the dev community builds these things: storage layer first, then transport. Reversing it (Option B) would mean writing the transport fork against a still-evolving storage trait surface.
-
-Option C is appealing on paper but requires more coordination than feels worth it for a small project.
-
-## What was committed for Stage 4 so far
-
-- Workspace `Cargo.toml`: added `[patch.crates-io].curve25519-dalek = signalapp-fork @ signal-curve25519-4.1.3` with a comment pointing at the long-term resolution at Stage 9 (xous-core fork conflict per REPORT.md Risk #3).
-- `crates/presage-store-pddb/Cargo.toml`: added `presage = { git = "https://github.com/whisperfish/presage", rev = "600c4ed" }`.
-- `Cargo.lock`: regenerated. The Whisperfish stack (libsignal v0.91.0 by tag, libsignal-service-rs HEAD pinned by rev, presage HEAD pinned by rev) is fully resolvable on hosted x86_64.
-
-What's NOT committed yet:
 - `StateStore` impl on `PddbStore`.
-- `ContentsStore::profile` / `save_profile` impl.
+- `ContentsStore::profile` / `save_profile`.
 - Mock backend.
-- Tests.
+- Unit tests.
 
-These are deferred until the user picks Option A / B / C.
+These are deferred to a later pass after Stages 6 + 7 have landed. Reason below.
 
-## Verification status (partial)
+## Decision: ordering — Option B (per user)
+
+Stage 4's verification step requires `cargo check --target=riscv32imac-unknown-xous-elf -p presage-store-pddb`. The dep chain on rv32 is:
+
+```
+presage-store-pddb → presage → libsignal-service-rs → reqwest-websocket
+                                                   → reqwest → hyper-util
+                                                            → tokio → mio
+```
+
+`mio` doesn't support rv32-xous (its `cfg` ladder covers Unix/Windows/WASI/hermit only). So full `cargo check` on rv32 fails with 47 type errors, even though hosted-mode builds. This is the exact coupling REPORT.md Decisions 2 (tokio removal in presage) and 3 (libsignal-service-rs transport fork) are designed to break.
+
+Per user direction: **Option B — do Stages 6 + 7 next, then come back for the actual Stage 4 implementation.** Reasoning: writing storage trait impls without per-stage rv32 verification accumulates code that's untested on the actual target. Doing 6 + 7 first restores rv32 sanity before any storage code is written.
+
+The `ROADMAP.md` has been updated to reflect this temporal order: **0 → 1 → 2 → 3 → 6 → 7 → 4 (full) → 5 → 8 → 9 → 10 → 11 → 12.** Stage numbering is preserved for section references; ordering is governed by each stage's `Prerequisites` line.
+
+## Verification (hosted; rv32 deferred)
 
 ```sh
 $ cargo build -p presage-store-pddb
-    ...
-    Compiling presage-store-pddb v0.0.1
-    Finished `dev` profile in 19s
-✓ Hosted-mode build of full Whisperfish stack works.
+   Compiling signal-crypto, zkcredential, zkgroup, libsignal-protocol,
+             libsignal-service, presage, presage-store-pddb
+   Finished `dev` profile in 16s
+✓ Hosted-mode full Whisperfish stack compiles.
+
+$ cargo run -p xous-app-signal --bin xas               ✓ "got: hello"
+$ cargo run --example https_get -p xous-net-bridge     ✓ "HTTP/1.1 200 OK"
+$ cargo run --example signal_ws_keepalive -p xous-net-bridge
+                                                       ✓ handshake 101 + 94-byte frame
+
+$ cargo check --target=riscv32imac-unknown-xous-elf -p xous-net-bridge
+✓ rv32 still passes for the network layer (rustls + ring + getrandom).
 
 $ cargo check --target=riscv32imac-unknown-xous-elf -p presage-store-pddb
-✗ FAILS — 47 errors in mio (transitively via tokio via reqwest via libsignal-service-rs)
-   Gated on Stage 6 (libsignal-service-rs transport fork) + Stage 7
-   (presage tokio removal). Per REPORT.md Decisions 2 & 3.
+✗ DEFERRED — gated on Stage 7. Will pass once mio is removed from the
+   transitive dep tree (Stages 6 + 7 do this).
 
-$ cargo run -p xous-app-signal --bin xas      ✓ still works
-$ cargo run --example https_get -p xous-net-bridge   ✓ still works
-$ cargo run --example signal_ws_keepalive -p xous-net-bridge   ✓ still works
-$ cargo tree --workspace -d                   ✓ no duplicates
-$ cargo fmt --all -- --check                  ✓ clean
+$ cargo tree --workspace -d
+⚠ Two new duplicates from adding presage:
+    - thiserror v1.0.69 vs v2.0.18
+    - tungstenite v0.21 vs v0.24
+   These are version conflicts that will be resolved either via additional
+   `[patch.crates-io]` entries or by waiting for the libsignal-service-rs
+   transport fork at Stage 6 to remove the v0.24 path. Tracked as a
+   follow-up; not blocking.
+
+$ cargo fmt --all -- --check         ✓ clean
 $ cargo clippy --workspace --all-targets -- -D warnings   ✓ clean
 ```
 
-## Suggested ROADMAP refinements
+## ROADMAP refinements applied (alongside this stage)
 
-These should be applied regardless of which option (A/B/C) the user picks:
+The ROADMAP was edited as part of this stage's work to reflect:
 
-1. **Stage 4 should add `[patch.crates-io].curve25519-dalek` to its deliverable list.** Currently the curve25519-dalek conflict is mentioned only in the Risk register; Stage 4 is the stage that makes it active. Suggested addition to Stage 4 step 1:
+1. **Recommended ordering**: 0 → 1 → 2 → 3 → 6 → 7 → 4 → 5 → 8+ (Option B). Stage section numbering preserved; temporal order from `Prerequisites` lines.
+2. **Stage 4 step 1 split out** as the "Cargo wiring + curve25519-dalek vendoring" sub-step that lands early (this stage).
+3. **Stage 4 step 1 documents** the betrusted-io vendoring + version bump + lizard-port pattern.
+4. **Stage 4 / Stage 5 verification** explicitly notes rv32 cross-compile is gated on Stage 7.
+5. **Stage 6 prerequisites** changed from "Stages 3 + 5 complete" to "Stage 3 complete + Stage 4 step 1 complete".
 
-   > Step 1.5: Add `[patch.crates-io].curve25519-dalek = git=signalapp/curve25519-dalek, tag=signal-curve25519-4.1.3` to the workspace `Cargo.toml`. Without this, zkgroup fails to compile with 220 type-mismatch errors because libsignal's own `[patch.crates-io]` doesn't propagate when libsignal is consumed as a dep. Per REPORT.md Risk #3, this conflicts with xous-core's `tunnell/curve25519-dalek` fork; resolution deferred to Stage 9.
+The ROADMAP refinements are in the ROADMAP.md commits; nothing in this stage requires re-reading them in isolation.
 
-2. **Stages 4 and 5 should explicitly note that rv32 cross-compile is gated on Stages 6+7.** Add to the verification block:
+## Open questions for later stages
 
-   > ```
-   > # cargo check --target=riscv32imac-unknown-xous-elf
-   > # gated on Stage 6 (libsignal-service-rs transport fork) — mio doesn't
-   > # support Xous; replacing reqwest_websocket+reqwest with our sync pump
-   > # at Stage 6 removes mio from the dep tree. Defer this verification
-   > # step until Stage 7 lands; for now, rely on hosted-mode tests.
-   > ```
+1. **Stage 9: update xous-core's `[patch.crates-io].curve25519-dalek`.** xous-core currently points at `tunnell/curve25519-dalek`; should be updated to `betrusted-io/curve25519-dalek` (or the publishable form of our vendored copy with the lizard module ported in). Coordinate with xous-core maintainers.
 
-3. **Stage 6 prerequisites should explicitly link back to Stages 4–5's gated rv32 verification.** When Stage 6 lands, the agent should re-run rv32 cross-compile of all earlier stages and confirm they now pass.
+2. **`getrandom 0.3` may resurface** when libsignal-service-rs's transport fork removes the tokio-stack but leaves modern `rand`/`getrandom` paths in. xous-core has only a `getrandom 0.2` fork. Surfacing for Stage 6.
 
-## Open questions / things to revisit
+3. **`thiserror` and `tungstenite` duplicates**. Two versions of each are now in the dep graph. Likely resolves automatically when libsignal-service-rs's transport is forked (Stage 6) — that removes the v0.24 tungstenite path. If not, `[patch.crates-io]` redirects can force convergence.
 
-1. **Same `curve25519-dalek` conflict at Stage 9 (rv32 hardware bring-up).** xous-core's own `[patch.crates-io].curve25519-dalek` (`tunnell/curve25519-dalek`) is incompatible with libsignal's. We've adopted Signal's fork now to make zkgroup compile; at Stage 9 we'll need to reconcile. Two paths: (a) at the merge-into-xous-core point, override xous-core's patch with Signal's — losing whatever Xous-specific patches the `tunnell/curve25519-dalek` fork carries; (b) rebase one fork on top of the other into a meta-fork that carries both sets of patches. **Decision needed before Stage 9.**
-
-2. **Same `getrandom 0.3` issue may resurface in libsignal-service-rs's transitive deps.** Stage 3 hit this with tungstenite 0.29 and downgraded to 0.21. libsignal-service-rs pulls reqwest which may transitively pull `getrandom 0.3` somewhere. We can't see this at Stage 4 because tokio fails first; once tokio is gone (Stage 7), getrandom 0.3 may become the next blocker. Surfacing for awareness.
-
-## Files changed (since Stage 3)
+## Files changed (since Stage 3 commit)
 
 ```
 modified:
-  Cargo.toml                                   (+[patch.crates-io].curve25519-dalek)
-  Cargo.lock                                   (regenerated; full Whisperfish stack)
-  crates/presage-store-pddb/Cargo.toml        (+presage as git dep)
+  Cargo.toml                                                   (+vendored curve25519-dalek patch; +signalapp git-URL patch)
+  Cargo.lock                                                   (regenerated; full Whisperfish stack)
+  crates/presage-store-pddb/Cargo.toml                         (+presage as git dep)
 
-new:
-  stage/REPORT-4.md                            (this file)
+new (vendored):
+  vendor/curve25519-dalek/                                     (betrusted-io fork, 4.1.2 → 4.1.3 bump)
+  vendor/curve25519-dalek/curve25519-dalek/src/lizard/         (ported from signalapp fork; 6 files)
+
+modified (vendored):
+  vendor/curve25519-dalek/curve25519-dalek/Cargo.toml          (version "4.1.2" → "4.1.3")
+  vendor/curve25519-dalek/curve25519-dalek/src/lib.rs          (+pub mod lizard;)
+
+new (docs):
+  stage/REPORT-4.md                                            (this file)
+
+modified (docs):
+  docs/REPORT.md                                               (Decision 6 + Risk #3 rewritten for betrusted-io strategy)
+  docs/ROADMAP.md                                              (Option B ordering; Stage 4 step 1 split out; rv32-gated notes)
 ```

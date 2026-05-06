@@ -412,24 +412,26 @@ dependencies = [
 [[package]]
 name = "curve25519-dalek"
 version = "4.1.3"
-source = "git+https://github.com/signalapp/curve25519-dalek?tag=signal-curve25519-4.1.3#7c6d34756355a3566a704da84dce7b1c039a6572"
 dependencies = [
  "cfg-if",
  "cpufeatures",
  "curve25519-dalek-derive",
  "digest",
+ "engine25519-as",
  "fiat-crypto",
+ "log",
  "rand_core 0.6.4",
  "rustc_version",
  "serde",
  "subtle",
+ "utralib",
+ "xous",
  "zeroize",
 ]
 
 [[package]]
 name = "curve25519-dalek-derive"
 version = "0.1.1"
-source = "git+https://github.com/signalapp/curve25519-dalek?tag=signal-curve25519-4.1.3#7c6d34756355a3566a704da84dce7b1c039a6572"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -534,6 +536,11 @@ name = "embedded-io"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
+
+[[package]]
+name = "engine25519-as"
+version = "0.1.0"
+source = "git+https://github.com/betrusted-io/engine25519-as.git?rev=775e8406eb4aad08f05ae10619fcb4ca891ba0a6#775e8406eb4aad08f05ae10619fcb4ca891ba0a6"
 
 [[package]]
 name = "equivalent"
@@ -1775,7 +1782,7 @@ dependencies = [
  "nom",
  "once_cell",
  "postcard",
- "quick-xml",
+ "quick-xml 0.38.4",
  "regex",
  "regex-cache",
  "serde",
@@ -2133,6 +2140,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.28.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce5e73202a820a31f8a0ee32ada5e21029c81fd9e3ebf668a40832e4219d9d1"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -2843,6 +2859,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "svd2utra"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f5054c6a4cbd947df3e6f976b0484bcace8835e2031e64551c7dc1d5d161b2a"
+dependencies = [
+ "quick-xml 0.28.2",
+]
+
+[[package]]
 name = "syn"
 version = "1.0.109"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3256,6 +3281,15 @@ name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
+
+[[package]]
+name = "utralib"
+version = "0.1.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4fa025e57b78dd5178c313d35bb2888b20485fa513a8d7f89bd1747ddfc3d73e"
+dependencies = [
+ "svd2utra",
+]
 
 [[package]]
 name = "uuid"

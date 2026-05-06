@@ -81,20 +81,39 @@ futures-timer = { git = "https://github.com/async-rs/futures-timer", rev = "07db
 git = "https://github.com/betrusted-io/ring-xous"
 rev = "5f86cb10bebd521a45fb3abb06995200aeda2948"
 
-# Mirror libsignal's curve25519-dalek pin
-# (https://github.com/signalapp/libsignal/blob/v0.91.0/Cargo.toml#L237).
-# libsignal's [patch.crates-io] only applies when libsignal is the build
-# root; when consumed as a dep (as we do here), the patch doesn't inherit,
-# and zkgroup ends up compiling against two different RistrettoPoint types
-# (one from crates.io, one from the fork). This patch deduplicates by
-# routing every consumer to the Signal fork. Per docs/REPORT.md Risk #3,
-# this conflicts with xous-core's `tunnell/curve25519-dalek` fork; the
-# resolution at Stage 9 (rv32 hw bring-up) is to either rebase one fork on
-# the other, or have one fork carry both sets of patches. For now we use
-# Signal's fork unilaterally — it's required to make zkgroup compile.
+# curve25519-dalek: vendored betrusted-io fork at vendor/curve25519-dalek.
+# This fork carries the driver for Precursor's curve25519 IP-core HW
+# accelerator at curve25519-dalek/src/backend/serial/u32e/. The accelerator
+# backend is selected by `RUSTFLAGS=--cfg curve25519_dalek_backend="u32e_backend"`
+# on rv32-xous builds; everywhere else falls back to the portable Rust
+# implementation, so hosted Linux gets the same code as upstream.
+#
+# Vendored (not git-pinned) because we needed a small local change: bumping
+# the upstream version field from 4.1.2 to 4.1.3 so that libsignal's
+# zkgroup, which depends on `curve25519-dalek = "4.1.3"`, sees the patch
+# match. Per dev guidance: "If there is any issue preventing your applying
+# that patch, then we should fix that fork to enable this, as that was the
+# purpose of the work."
+#
+# This supersedes the earlier choice of `signalapp/curve25519-dalek` and
+# the (incorrect) earlier reference to `tunnell/curve25519-dalek` in
+# xous-core's Cargo.toml. The betrusted-io fork is the canonical
+# Xous-targeted fork.
 [patch.crates-io.curve25519-dalek]
-git = "https://github.com/signalapp/curve25519-dalek"
-tag = "signal-curve25519-4.1.3"
+path = "vendor/curve25519-dalek/curve25519-dalek"
+
+[patch.crates-io.curve25519-dalek-derive]
+path = "vendor/curve25519-dalek/curve25519-dalek-derive"
+
+# libsignal's Cargo.toml also imports curve25519-dalek directly via the
+# git URL `https://github.com/signalapp/curve25519-dalek` (aliased as
+# `curve25519-dalek-signal`). [patch.crates-io] doesn't redirect git
+# sources, so we additionally patch the git URL here. Both pointers now
+# resolve to the same vendored crate, eliminating the two-RistrettoPoint
+# duplicate-types error.
+[patch."https://github.com/signalapp/curve25519-dalek"]
+curve25519-dalek = { path = "vendor/curve25519-dalek/curve25519-dalek" }
+curve25519-dalek-derive = { path = "vendor/curve25519-dalek/curve25519-dalek-derive" }
 
 # Stage 2 forced an earlier resolution of one of the path-based patches
 # we deferred at Stage 0: cross-compiling rustls/ring for rv32 pulls in
