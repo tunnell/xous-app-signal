@@ -5,6 +5,12 @@ members = [
     "crates/xous-net-bridge",
     "crates/xous-signal-bridge",
     "crates/xous-app-signal",
+    "vendor/libsignal-service-rs",
+]
+exclude = [
+    # Vendored as a whole workspace; we consume specific crates from it.
+    # Other vendored copies we don't want to recompile on every cargo cmd.
+    "vendor/curve25519-dalek",
 ]
 
 [workspace.package]
@@ -123,6 +129,12 @@ path = "vendor/curve25519-dalek/curve25519-dalek-derive"
 [patch."https://github.com/signalapp/curve25519-dalek"]
 curve25519-dalek = { path = "vendor/curve25519-dalek/curve25519-dalek" }
 curve25519-dalek-derive = { path = "vendor/curve25519-dalek/curve25519-dalek-derive" }
+
+# Stage 6: redirect presage's git dep on libsignal-service-rs to our
+# vendored, forked copy at vendor/libsignal-service-rs/. This is where the
+# Decision 3 transport patches live (in progress this stage).
+[patch."https://github.com/whisperfish/libsignal-service-rs"]
+libsignal-service = { path = "vendor/libsignal-service-rs" }
 
 # Stage 2 forced an earlier resolution of one of the path-based patches
 # we deferred at Stage 0: cross-compiling rustls/ring for rv32 pulls in
