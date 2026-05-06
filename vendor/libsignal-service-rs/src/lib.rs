@@ -24,10 +24,12 @@ pub mod proto;
 pub mod provisioning;
 pub mod push_service;
 pub mod receiver;
+// Stage 6.1: sync transport abstraction. See docs/REPORT.md Decision 3.
 pub mod sender;
 pub mod service_address;
 pub mod session_store;
 mod timestamp;
+pub mod transport;
 pub mod unidentified_access;
 pub mod utils;
 pub mod websocket;
