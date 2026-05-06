@@ -248,24 +248,46 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
                     handle_keys(&mut app, keys, &cmd_tx, &event_rx, &modals_xns);
                 });
                 if app.quit_requested {
-                    break;
+                    // Quit on Xous means "hide and go back to
+                    // shellchat" — the process stays alive so the
+                    // launcher can re-raise us. (Xous doesn't
+                    // auto-relaunch terminated app processes; if we
+                    // exit here, clicking Signal again from the
+                    // launcher silently does nothing because our
+                    // server is gone.) Reset menu state so the next
+                    // time the user comes back they see a clean
+                    // menu, then keep looping.
+                    let _ = app.gam.switch_to_app(gam::APP_NAME_SHELLCHAT, token);
+                    log::info!("xas/gam_app: hidden via Quit; staying alive");
+                    app.screen = Screen::Menu;
+                    app.selected = MenuItem::Link;
+                    app.last_status.clear();
+                    app.quit_requested = false;
                 }
             }
             Some(XasOp::FocusChange) => {
-                log::debug!("xas/gam_app: focus change");
+                // GAM sends FocusChange when our context moves to
+                // Foreground (e.g. user re-launched us from the
+                // launcher after we hid via Quit) or Background
+                // (we just lost focus to something else). Foreground
+                // requires us to redraw — GAM doesn't follow up
+                // with a Redraw on its own. Background is a no-op
+                // for us currently.
+                xous::msg_scalar_unpack!(msg, new_state_code, _, _, _, {
+                    let new_state = gam::FocusState::convert_focus_change(new_state_code);
+                    log::info!("xas/gam_app: focus change -> {:?}", new_state);
+                    if matches!(new_state, gam::FocusState::Foreground) {
+                        if let Err(e) = app.render() {
+                            log::warn!("xas/gam_app: render after focus: {}", e);
+                        }
+                    }
+                });
             }
             _ => {
                 log::debug!("xas/gam_app: unknown msg id={}", msg.body.id());
             }
         }
     }
-
-    // On Quit, switch focus back to shellchat so the launcher menu
-    // remains reachable. If this fails (shellchat not running),
-    // exit anyway — the OS-level kernel terminates xas regardless.
-    let _ = app.gam.switch_to_app(gam::APP_NAME_SHELLCHAT, token);
-    log::info!("xas/gam_app: returning to shellchat");
-    Ok(())
 }
 
 fn handle_keys(
