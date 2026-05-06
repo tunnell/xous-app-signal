@@ -229,7 +229,10 @@ impl<S: Store> Manager<S, Registered> {
             Some(ws) => Ok(ws.clone()),
             None => {
                 let headers = &[("X-Signal-Receive-Stories", "false")];
-                let ws = self
+                // Stage 6.1 (Xous fork): ws() now returns (ws, task). The
+                // task drives the SignalWebSocketProcess loop and must be
+                // spawned on the local executor.
+                let (ws, ws_task) = self
                     .identified_push_service()
                     .ws(
                         "/v1/websocket/",
@@ -238,6 +241,7 @@ impl<S: Store> Manager<S, Registered> {
                         Some(self.credentials()),
                     )
                     .await?;
+                crate::runtime::spawn_detached(ws_task);
                 identified_ws.replace(ws.clone());
                 debug!("initialized identified websocket");
 
@@ -256,10 +260,11 @@ impl<S: Store> Manager<S, Registered> {
         match unidentified_ws.as_ref().filter(|ws| !ws.is_closed()) {
             Some(ws) => Ok(ws.clone()),
             None => {
-                let ws = self
+                let (ws, ws_task) = self
                     .unidentified_push_service()
                     .ws("/v1/websocket/", "/v1/keepalive", &[], None)
                     .await?;
+                crate::runtime::spawn_detached(ws_task);
                 unidentified_ws.replace(ws.clone());
                 debug!("initialized unidentified websocket");
 

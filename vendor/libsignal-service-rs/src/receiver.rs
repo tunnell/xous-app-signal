@@ -30,7 +30,9 @@ impl MessageReceiver {
             "X-Signal-Receive-Stories",
             if allow_stories { "true" } else { "false" },
         )];
-        let ws = self
+        // Stage 6.1: ws() now returns (ws, task). Spawn the task on the
+        // transport's per-thread task-spawner so it outlives this scope.
+        let (ws, ws_task) = self
             .service
             .ws(
                 "/v1/websocket/",
@@ -39,6 +41,7 @@ impl MessageReceiver {
                 Some(credentials),
             )
             .await?;
+        crate::transport::spawn_detached(ws_task);
         Ok(MessagePipe::from_socket(ws))
     }
 

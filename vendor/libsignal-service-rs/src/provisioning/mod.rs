@@ -160,7 +160,11 @@ pub async fn link_device<
     mut tx: Sender<SecondaryDeviceProvisioning>,
 ) -> Result<(), ProvisioningError> {
     // open a websocket without authentication, to receive a tsurl://
-    let ws = push_service
+    // Stage 6.1: ws() now returns (ws, task). The task drives the
+    // SignalWebSocket process loop and must outlive the ws value.
+    // We spawn it via the transport's per-thread task-spawner registered
+    // by the worker-thread bootstrap.
+    let (ws, ws_task) = push_service
         .ws(
             "/v1/websocket/provisioning/",
             "/v1/keepalive/provisioning",
@@ -168,6 +172,7 @@ pub async fn link_device<
             None,
         )
         .await?;
+    crate::transport::spawn_detached(ws_task);
 
     let registration_id = csprng.random_range(1..256);
     let pni_registration_id = csprng.random_range(1..256);

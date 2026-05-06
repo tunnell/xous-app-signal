@@ -1,16 +1,16 @@
-use std::{sync::LazyLock, time::Duration};
+use std::{sync::Arc, sync::LazyLock, time::Duration};
 
 use crate::{
     configuration::{Endpoint, ServiceCredentials, SignalServers},
     prelude::ServiceConfiguration,
+    transport::{self, BasicAuth, HeaderMap, HttpClient, RequestBuilder},
     utils::serde_device_id_vec,
     websocket::{SignalWebSocket, WebSocketType},
 };
 
+use http::Method;
 use libsignal_core::DeviceId;
 use protobuf::ProtobufResponseExt;
-use reqwest::{Method, RequestBuilder};
-use reqwest_websocket::RequestBuilderExt;
 use serde::{Deserialize, Serialize};
 use tracing::{debug_span, Instrument};
 
@@ -27,7 +27,7 @@ pub(crate) mod response;
 pub use account::*;
 pub use cdn::*;
 pub use error::*;
-pub(crate) use response::{ReqwestExt, SignalServiceResponse};
+pub(crate) use response::{HttpResponseExt, ReqwestExt, SignalServiceResponse};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ProofRequired {
@@ -77,36 +77,31 @@ pub struct PushService {
     pub(crate) servers: SignalServers,
     cfg: ServiceConfiguration,
     credentials: Option<HttpAuth>,
-    client: reqwest::Client,
+    // Stage 6.1: was `client: reqwest::Client`. Now an Arc'd HttpClient
+    // pulled from the per-thread `transport::set_http_client` registration
+    // (typically a UreqHttpClient set up by xous-net-bridge). The pinned
+    // CA + connect/total timeouts + user-agent that used to go through
+    // reqwest::ClientBuilder are now responsibilities of the HttpClient
+    // implementation.
+    client: Arc<dyn HttpClient + Send + Sync>,
 }
 
 impl PushService {
     pub fn new(
         env: SignalServers,
         credentials: Option<ServiceCredentials>,
-        user_agent: impl AsRef<str>,
+        // Stage 6.1: user_agent is no longer used here — it's a property
+        // of the HttpClient implementation, set when the implementation
+        // is constructed (in xous-net-bridge::http::UreqHttpClient::new
+        // or similar).
+        _user_agent: impl AsRef<str>,
     ) -> Self {
         let cfg: ServiceConfiguration = env.into();
-        let client = reqwest::ClientBuilder::new()
-            .tls_built_in_root_certs(false)
-            .add_root_certificate(
-                reqwest::Certificate::from_pem(
-                    cfg.certificate_authority.as_bytes(),
-                )
-                .unwrap(),
-            )
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(65))
-            .user_agent(user_agent.as_ref())
-            .http1_only()
-            .build()
-            .unwrap();
-
         Self {
             servers: env,
             cfg,
             credentials: credentials.and_then(|c| c.authorization()),
-            client,
+            client: transport::get_http_client(),
         }
     }
 
@@ -118,14 +113,14 @@ impl PushService {
         auth_override: HttpAuthOverride,
     ) -> Result<RequestBuilder, ServiceError> {
         let url = endpoint.into_url(&self.cfg)?;
-        let mut builder = self.client.request(method, url);
+        let mut builder = RequestBuilder::new(self.client.clone(), method, url);
 
         builder = match auth_override {
             HttpAuthOverride::NoOverride => {
                 if let Some(HttpAuth { username, password }) =
                     self.credentials.as_ref()
                 {
-                    builder.basic_auth(username, Some(password))
+                    builder.basic_auth(username.clone(), Some(password.clone()))
                 } else {
                     builder
                 }
@@ -139,35 +134,49 @@ impl PushService {
         Ok(builder)
     }
 
+    /// Open an authenticated WebSocket. Returns `(SignalWebSocket, task)`
+    /// where `task` is a future the caller must drive (typically by
+    /// spawning on the local executor — for our Xous integration that's
+    /// `presage::runtime::spawn_detached(task)`). Stage 6.1: was
+    /// `tokio::task::spawn(task)`-ing internally.
     pub async fn ws<C: WebSocketType>(
         &mut self,
         path: &str,
         keepalive_path: &str,
         additional_headers: &[(&'static str, &str)],
         credentials: Option<ServiceCredentials>,
-    ) -> Result<SignalWebSocket<C>, ServiceError> {
+    ) -> Result<
+        (
+            SignalWebSocket<C>,
+            std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>,
+        ),
+        ServiceError,
+    > {
         let span = debug_span!("websocket");
 
         let mut url = Endpoint::service(path).into_url(&self.cfg)?;
         url.set_scheme("wss").expect("valid https base url");
 
-        let mut builder = self.client.get(url);
+        let mut headers = HeaderMap::new();
         for (key, value) in additional_headers {
-            builder = builder.header(*key, *value);
+            if let (Ok(name), Ok(val)) = (
+                http::HeaderName::try_from(*key),
+                http::HeaderValue::try_from(*value),
+            ) {
+                headers.insert(name, val);
+            }
         }
 
-        if let Some(credentials) = credentials {
-            builder =
-                builder.basic_auth(credentials.login(), credentials.password);
-        }
+        let auth = credentials.map(|c| BasicAuth {
+            username: c.login(),
+            password: c.password.unwrap_or_default(),
+        });
 
-        let ws = builder
-            .upgrade()
-            .send()
-            .await?
-            .into_websocket()
-            .instrument(span.clone())
-            .await?;
+        let channels = self
+            .client
+            .connect_websocket(url, headers, auth)
+            .await
+            .map_err(ServiceError::HttpTransport)?;
 
         let unidentified_push_service = PushService {
             servers: self.servers,
@@ -176,13 +185,12 @@ impl PushService {
             client: self.client.clone(),
         };
         let (ws, task) = SignalWebSocket::new(
-            ws,
+            channels,
             keepalive_path.to_owned(),
             unidentified_push_service,
         );
         let task = task.instrument(span);
-        tokio::task::spawn(task);
-        Ok(ws)
+        Ok((ws, Box::pin(task)))
     }
 
     pub(crate) async fn get_group(
@@ -205,10 +213,11 @@ impl PushService {
 
 pub(crate) mod protobuf {
     use async_trait::async_trait;
+    use http::header;
     use prost::{EncodeError, Message};
-    use reqwest::{header, RequestBuilder, Response};
 
     use super::ServiceError;
+    use crate::transport::{HttpResponse, RequestBuilder};
 
     pub(crate) trait ProtobufRequestBuilderExt
     where
@@ -223,7 +232,7 @@ pub(crate) mod protobuf {
         ) -> Result<Self, EncodeError>;
     }
 
-    #[async_trait::async_trait]
+    #[async_trait(?Send)]
     pub(crate) trait ProtobufResponseExt {
         /// Get the response body decoded from Protobuf
         async fn protobuf<T>(self) -> Result<T, ServiceError>
@@ -244,14 +253,14 @@ pub(crate) mod protobuf {
         }
     }
 
-    #[async_trait]
-    impl ProtobufResponseExt for Response {
+    #[async_trait(?Send)]
+    impl ProtobufResponseExt for HttpResponse {
         async fn protobuf<T>(self) -> Result<T, ServiceError>
         where
             T: Message + Default,
         {
             let body = self.bytes().await?;
-            let decoded = T::decode(body)?;
+            let decoded = T::decode(body.as_slice())?;
             Ok(decoded)
         }
     }

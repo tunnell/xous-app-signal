@@ -70,9 +70,11 @@ impl<S: Store> Manager<S, Confirmation> {
             crate::USER_AGENT,
         );
 
-        let mut identified_websocket = identified_push_service
+        // Stage 6.1 (Xous fork): ws() returns (ws, task); spawn the task.
+        let (mut identified_websocket, ws_task) = identified_push_service
             .ws("/v1/websocket/", "/v1/keepalive", &[], Some(credentials))
             .await?;
+        crate::runtime::spawn_detached(ws_task);
 
         let session = identified_websocket
             .submit_verification_code(session_id, confirmation_code.as_ref())

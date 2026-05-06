@@ -8,7 +8,7 @@ use crate::{
     },
     prelude::{PushService, ServiceError},
     proto::GroupContextV2,
-    push_service::{HttpAuth, HttpAuthOverride, ReqwestExt, ServiceIds},
+    push_service::{HttpAuth, HttpAuthOverride, HttpResponseExt, ServiceIds},
     utils::BASE64_RELAXED,
     websocket::{self, SignalWebSocket},
 };

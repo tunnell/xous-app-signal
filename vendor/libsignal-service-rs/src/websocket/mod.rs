@@ -11,12 +11,10 @@ use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesUnordered;
 use http::Method;
-use reqwest_websocket::WebSocket;
-// Stage 6.1: Stage 6.1 removed `Instant` usage entirely. `tokio::time::Instant`
-// was only used for `interval_at(Instant::now(), ...)`, which is replaced
-// by `futures_timer::Delay::new(Duration::ZERO)` for the immediate-fire
-// shape (and `Delay::new(KEEPALIVE_TIMEOUT_SECONDS)` for the recurring
-// shape). No replacement Instant import needed.
+// Stage 6.1: WebSocket transport replaced. Was reqwest_websocket::WebSocket
+// (async, tokio-coupled); now a channel pair from xous-net-bridge's WS
+// pump. WsFrame enum mirrors the reqwest_websocket::Message variants.
+use crate::transport::WsFrame;
 use tracing::debug;
 
 use crate::configuration::SignalServers;
@@ -26,6 +24,7 @@ use crate::proto::{
     WebSocketResponseMessage,
 };
 use crate::push_service::{self, ServiceError, SignalServiceResponse};
+use crate::transport::WebSocketChannels;
 
 pub mod account;
 #[cfg(feature = "cdsi")]
@@ -118,7 +117,12 @@ struct SignalWebSocketProcess {
         BoxFuture<'static, Result<WebSocketResponseMessage, Canceled>>,
     >,
 
-    ws: WebSocket,
+    // Stage 6.1: was `ws: WebSocket` (reqwest_websocket). Now the two
+    // channel ends from `xous-net-bridge`'s sync-tungstenite worker pump.
+    // The pump worker thread translates between `WsFrame` and the
+    // wire-level frames; this loop sees only frame values.
+    ws_outgoing: mpsc::Sender<WsFrame>,
+    ws_incoming: mpsc::Receiver<Result<WsFrame, crate::transport::HttpError>>,
 }
 
 impl SignalWebSocketProcess {
@@ -240,9 +244,8 @@ impl SignalWebSocketProcess {
                     use prost::Message;
                     if !self.outgoing_keep_alive_set.is_empty() {
                         tracing::warn!("Websocket will be closed due to failed keepalives.");
-                        if let Err(e) = self.ws.close(reqwest_websocket::CloseCode::Away, None).await {
-                            tracing::debug!("Could not close WebSocket: {:?}", e);
-                        }
+                        // Stage 6.1: send a Close frame (code 1001 = Going Away).
+                        let _ = self.ws_outgoing.send(WsFrame::Close { code: 1001, reason: String::new() }).await;
                         self.outgoing_keep_alive_set.clear();
                         break;
                     }
@@ -258,7 +261,7 @@ impl SignalWebSocketProcess {
                         ..Default::default()
                     };
                     let buffer = msg.encode_to_vec();
-                    if let Err(e) = self.ws.send(reqwest_websocket::Message::Binary(buffer)).await {
+                    if let Err(e) = self.ws_outgoing.send(WsFrame::Binary(buffer)).await {
                         tracing::info!("Websocket sink has closed: {:?}.", e);
                         break;
                     };
@@ -292,7 +295,8 @@ impl SignalWebSocketProcess {
                                 ..Default::default()
                             };
                             let buffer = msg.encode_to_vec();
-                            self.ws.send(reqwest_websocket::Message::Binary(buffer)).await?
+                            self.ws_outgoing.send(WsFrame::Binary(buffer)).await
+                                .map_err(|_| ServiceError::WsClosing { reason: "ws sink closed" })?;
                         }
                         None => {
                             debug!("end of application request stream; websocket closing");
@@ -301,26 +305,25 @@ impl SignalWebSocketProcess {
                     }
                 }
                 // Incoming websocket message
-                web_socket_item = self.ws.next().fuse() => {
-                    use reqwest_websocket::Message;
+                web_socket_item = self.ws_incoming.next().fuse() => {
                     match web_socket_item {
-                        Some(Ok(Message::Close { code, reason })) => {
+                        Some(Ok(WsFrame::Close { code, reason })) => {
                             tracing::warn!(%code, reason, "websocket closed");
                             break;
                         },
-                        Some(Ok(Message::Binary(frame))) => {
+                        Some(Ok(WsFrame::Binary(frame))) => {
                             self.process_frame(frame).await?;
                         }
-                        Some(Ok(Message::Ping(_))) => {
+                        Some(Ok(WsFrame::Ping(_))) => {
                             tracing::trace!("received ping");
                         }
-                        Some(Ok(Message::Pong(_))) => {
+                        Some(Ok(WsFrame::Pong(_))) => {
                             tracing::trace!("received pong");
                         }
-                        Some(Ok(Message::Text(_))) => {
+                        Some(Ok(WsFrame::Text(_))) => {
                             tracing::trace!("received text (unsupported, skipping)");
                         }
-                        Some(Err(e)) => return Err(e.into()),
+                        Some(Err(e)) => return Err(ServiceError::HttpTransport(e)),
                         None => {
                             return Err(ServiceError::WsClosing {
                                 reason: "end of web request stream; socket closing"
@@ -340,7 +343,8 @@ impl SignalWebSocketProcess {
                                 ..Default::default()
                             };
                             let buffer = msg.encode_to_vec();
-                            self.ws.send(buffer.into()).await?;
+                            self.ws_outgoing.send(WsFrame::Binary(buffer)).await
+                                .map_err(|_| ServiceError::WsClosing { reason: "ws sink closed" })?;
                         }
                         Some(Err(error)) => {
                             tracing::error!(%error, "could not generate response to a Signal request; responder was canceled. continuing.");
@@ -361,8 +365,11 @@ impl<C: WebSocketType> SignalWebSocket<C> {
         self.inner.lock().unwrap()
     }
 
+    /// Stage 6.1: was `(ws: WebSocket, ...)`. Now takes the channel pair
+    /// from the transport's `connect_websocket`. The pump runs on a worker
+    /// thread inside `xous-net-bridge`; this struct only sees the channels.
     pub fn new(
-        ws: WebSocket,
+        channels: WebSocketChannels,
         keep_alive_path: String,
         unidentified_push_service: PushService,
     ) -> (Self, impl Future<Output = ()>) {
@@ -384,7 +391,8 @@ impl<C: WebSocketType> SignalWebSocket<C> {
             ]
             .into_iter()
             .collect(),
-            ws,
+            ws_outgoing: channels.outgoing,
+            ws_incoming: channels.incoming,
         };
         let process = process.run().map(|x| match x {
             Ok(()) => (),

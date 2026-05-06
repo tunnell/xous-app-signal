@@ -30,7 +30,7 @@ use crate::proto::sync_message::PniChangeNumber;
 use crate::proto::{DeviceName, SyncMessage};
 use crate::provisioning::generate_registration_id;
 use crate::push_service::{
-    AvatarWrite, HttpAuthOverride, ReqwestExt, DEFAULT_DEVICE_ID,
+    AvatarWrite, HttpAuthOverride, HttpResponseExt, DEFAULT_DEVICE_ID,
 };
 use crate::sender::OutgoingPushMessage;
 use crate::service_address::ServiceIdExt;

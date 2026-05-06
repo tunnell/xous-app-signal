@@ -87,9 +87,11 @@ impl<S: Store> Manager<S, Registration> {
 
         let mut unidentified_push_service =
             PushService::new(signal_servers, None, crate::USER_AGENT);
-        let mut unidentified_websocket = unidentified_push_service
+        // Stage 6.1 (Xous fork): ws() returns (ws, task); spawn the task.
+        let (mut unidentified_websocket, ws_task) = unidentified_push_service
             .ws("/v1/websocket/", "/v1/keepalive", &[], None)
             .await?;
+        crate::runtime::spawn_detached(ws_task);
 
         trace!("creating registration verification session");
 

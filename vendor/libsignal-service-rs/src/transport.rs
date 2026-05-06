@@ -310,3 +310,54 @@ pub(crate) fn get_http_client() -> Arc<dyn HttpClient + Send + Sync> {
             .clone()
     })
 }
+
+// ---------------------------------------------------------------------------
+// Task spawner — for libsignal-service-rs functions that need to spawn
+// the WebSocket-pump background task without taking a runtime parameter.
+//
+// Functions like `provisioning::link_device` and `PushService::ws` produce
+// a `Future<Output = ()>` task that drives the WS process loop. Upstream
+// would `tokio::task::spawn(task)` it. We don't have an ambient tokio
+// runtime; instead, the worker thread registers a spawner closure once at
+// startup, and these internal functions call it.
+//
+// Symmetry with `presage::runtime`: ideally there would be one shared
+// registration that both crates use, but presage depends on
+// libsignal-service-rs (not the other way), so we keep them separate and
+// the worker-thread bootstrap calls both.
+// ---------------------------------------------------------------------------
+
+type TaskFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>;
+type SpawnerFn = Box<dyn Fn(TaskFuture)>;
+
+thread_local! {
+    static TASK_SPAWNER: RefCell<Option<SpawnerFn>> = const { RefCell::new(None) };
+}
+
+/// Install the per-thread task-spawner closure used by libsignal-service-rs
+/// internals (e.g., `provisioning::link_device`, `PushService::ws`) to
+/// spawn fire-and-forget background tasks on the local executor. Call once
+/// on the worker thread before any libsignal-service-rs API is invoked.
+///
+/// Typical setup:
+/// ```ignore
+/// let exec: &'static LocalExecutor<'static> = ...;
+/// libsignal_service::transport::set_task_spawner(Box::new(|task| {
+///     exec.spawn(task).detach();
+/// }));
+/// ```
+pub fn set_task_spawner(spawner: SpawnerFn) {
+    TASK_SPAWNER.with(|cell| *cell.borrow_mut() = Some(spawner));
+}
+
+/// Spawn `task` as a detached background task on the per-thread spawner.
+/// Panics if `set_task_spawner` was not called on this thread.
+pub(crate) fn spawn_detached(task: TaskFuture) {
+    TASK_SPAWNER.with(|cell| {
+        let spawner = cell.borrow();
+        let spawner = spawner.as_ref().expect(
+            "libsignal_service::transport::set_task_spawner must be called on this thread first",
+        );
+        spawner(task);
+    });
+}

@@ -9,7 +9,8 @@ use crate::{
 };
 
 use super::{
-    response::ReqwestExt, HttpAuth, HttpAuthOverride, PushService, ServiceError,
+    response::HttpResponseExt, HttpAuth, HttpAuthOverride, PushService,
+    ServiceError,
 };
 
 #[derive(Debug, Serialize)]
