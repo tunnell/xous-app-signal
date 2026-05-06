@@ -29,7 +29,10 @@ pub struct ProvisioningPipe {
     provisioning_cipher: ProvisioningCipher,
 }
 
-#[expect(clippy::large_enum_variant)]
+// `#[expect]` is target-dependent — the lint fires on hosted but
+// not on rv32-xous, which makes `#[expect]` itself an error there.
+// `#[allow]` is target-stable.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum ProvisioningStep {
     Url(Url),

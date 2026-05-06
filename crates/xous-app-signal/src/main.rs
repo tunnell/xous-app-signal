@@ -16,6 +16,7 @@
 
 use async_channel::bounded;
 use presage_store_pddb::PddbStore;
+#[cfg(not(all(feature = "auto-link", target_os = "xous")))]
 use xous_app_signal_ui::Ui;
 use xous_signal_bridge::{Cmd, Event, run_signal_worker};
 
@@ -150,10 +151,22 @@ fn main() -> std::io::Result<()> {
     #[cfg(all(feature = "probe-pddb-real", target_os = "xous"))]
     probe_pddb_real();
 
-    // The UI loop blocks on stdin (hosted) or GAM events
-    // (Xous, Stage 9b/follow-up). It owns the cmd/event channel ends
-    // and is responsible for sending `Cmd::Shutdown` on quit.
-    Ui::new(cmd_tx, event_rx).run()?;
+    // Stage 14a: auto-link feature drives the link flow + QR modal
+    // on real hardware. When enabled, we *replace* the regular UI
+    // loop — the auto-link probe is the UI for this build mode. On
+    // success, it logs LinkComplete details to UART and lets main()
+    // continue to the worker shutdown path.
+    #[cfg(all(feature = "auto-link", target_os = "xous"))]
+    auto_link(cmd_tx.clone(), event_rx.clone());
+
+    #[cfg(not(all(feature = "auto-link", target_os = "xous")))]
+    {
+        // Regular UI loop blocks on stdin (hosted) or GAM events
+        // (Xous follow-up work). On Xous without auto-link the loop
+        // EOFs on stdin and returns immediately — fine for the
+        // smoke / probe builds that just assert on boot lines.
+        Ui::new(cmd_tx, event_rx).run()?;
+    }
 
     // Worker has been told to shut down; join it. If the join hangs
     // it's a worker-side bug — surface as a nonzero exit, not a
@@ -405,6 +418,122 @@ fn probe_pddb_real() {
     }
 
     log::info!("probe-pddb-real: probe done in {:?}", start.elapsed());
+}
+
+/// Stage 14a hardware auto-link probe.
+///
+/// Fires `Cmd::LinkDevice` and drives the resulting event stream
+/// to either `Event::LinkComplete` or `Event::LinkError`. On
+/// `Event::LinkUrl(url)`, opens a `xous-modals-ipc` notification
+/// modal that displays the URL as a QR code (rendered by the
+/// upstream modals server's `notification.set_qrcode` call). User
+/// scans the QR with their Signal phone, then presses any key to
+/// dismiss the modal — meanwhile the worker is parked on the
+/// provisioning WebSocket waiting for the encrypted envelope.
+///
+/// Failure modes worth distinguishing in the UART log:
+/// - **No modals response**: server isn't running or our wire
+///   protocol drifted. Stage 14a precedent (`xous-pddb-ipc`)
+///   makes wire drift unlikely; missing server means the image
+///   wasn't built with `services/modals` (always present in our
+///   `cargo xtask app-image` flow).
+/// - **`Event::LinkError(_)`**: worker-side failure (DNS, TLS,
+///   WS, or libsignal protocol error). The error string identifies
+///   the layer.
+/// - **`Event::LinkComplete`**: success. The aci/phone fields are
+///   logged so the next flash iteration can verify
+///   `with_pddb_backend` actually persisted the registration data.
+#[cfg(all(feature = "auto-link", target_os = "xous"))]
+fn auto_link(cmd_tx: async_channel::Sender<Cmd>, event_rx: async_channel::Receiver<Event>) {
+    use xous_modals_ipc::ModalsClient;
+
+    log::info!("auto-link: starting");
+
+    let xns = match xous_names::XousNames::new() {
+        Ok(x) => x,
+        Err(e) => {
+            log::error!("auto-link: XousNames::new failed: {:?}", e);
+            return;
+        }
+    };
+    let trng_client = match trng::Trng::new(&xns) {
+        Ok(t) => t,
+        Err(e) => {
+            log::error!("auto-link: Trng::new failed: {:?}", e);
+            return;
+        }
+    };
+    let modals = match ModalsClient::new(&xns, &trng_client) {
+        Ok(m) => m,
+        Err(e) => {
+            log::error!("auto-link: ModalsClient::new failed: {}", e);
+            return;
+        }
+    };
+
+    let device_name = "xas-hardware-probe".to_string();
+    log::info!("auto-link: sending Cmd::LinkDevice {{ device_name = {:?} }}", device_name);
+    if let Err(e) = cmd_tx.send_blocking(Cmd::LinkDevice { device_name }) {
+        log::error!("auto-link: cmd_tx.send_blocking failed: {:?}", e);
+        return;
+    }
+
+    loop {
+        let event = match event_rx.recv_blocking() {
+            Ok(ev) => ev,
+            Err(e) => {
+                log::error!("auto-link: event_rx.recv_blocking failed: {:?}", e);
+                return;
+            }
+        };
+        match event {
+            Event::LinkUrl(url) => {
+                log::info!("auto-link: link URL = {}", url);
+                // Show the QR modal. Blocks until user presses any
+                // key — meanwhile the worker is parked on WS, so
+                // the order of (modal-dismiss, link-complete) can
+                // interleave either way; both events get drained
+                // by the loop.
+                if let Err(e) = modals.show_notification(
+                    "Scan with the Signal phone app, then press any key.",
+                    Some(&url),
+                ) {
+                    log::warn!("auto-link: QR modal failed: {}; continuing", e);
+                }
+            }
+            Event::LinkComplete { device_name, aci, phone } => {
+                log::info!(
+                    "auto-link: LinkComplete device={} aci={} phone={}",
+                    device_name, aci, phone
+                );
+                let summary = format!("Linked!\n  device: {}\n  aci:    {}\n  phone:  {}", device_name, aci, phone);
+                let _ = modals.show_notification(&summary, None);
+                break;
+            }
+            Event::LinkError(msg) => {
+                log::warn!("auto-link: LinkError: {}", msg);
+                let _ = modals.show_notification(
+                    &format!("Link failed: {}", msg),
+                    None,
+                );
+                break;
+            }
+            other => {
+                log::info!("auto-link: drained event {:?}", other);
+            }
+        }
+    }
+
+    // Tell the worker to shut down so main() can join it cleanly.
+    let _ = cmd_tx.send_blocking(Cmd::Shutdown);
+    // Drain remaining events so the worker can exit.
+    while let Ok(ev) = event_rx.recv_blocking() {
+        log::info!("auto-link: post-shutdown event {:?}", ev);
+        if matches!(ev, Event::ShuttingDown) {
+            break;
+        }
+    }
+    log::info!("auto-link: done");
 }
 
 #[cfg(target_os = "xous")]

@@ -39,6 +39,18 @@ probe-pddb = []
 pddb-real = ["presage-store-pddb/pddb-backend"]
 probe-pddb-real = ["pddb-real"]
 
+# Stage 14a: hardware auto-link probe.
+# When enabled (rv32-xous only), main() fires Cmd::LinkDevice after
+# worker spawn and renders a QR code on the LCD via xous-modals-ipc
+# (hand-rolled client over `services/modals`). User scans with the
+# Signal phone, taps any key to dismiss, link completes (or fails)
+# and the worker emits Event::LinkComplete / LinkError.
+#
+# Recommended build for hardware deploy:
+#   cargo build --target=riscv32imac-unknown-xous-elf --release \
+#               -p xous-app-signal --features pddb-real,auto-link
+auto-link = []
+
 [dependencies]
 # Stage 8: spawn the manager worker thread + drive Hello/GetWhoami
 # round-trips. The presage-store-pddb dep is direct (not just
@@ -107,6 +119,12 @@ xous = "0.9.70"
 xous-api-susres = { path = "../../../repos/xous-core/api/xous-api-susres" }
 flatipc = { path = "../../../repos/xous-core/libs/flatipc" }
 flatipc-derive = { path = "../../../repos/xous-core/libs/flatipc-derive" }
+
+# Stage 14a: hand-rolled modals IPC for the QR-code provisioning
+# screen. Used only when `auto-link` is enabled, but listed
+# unconditionally because Cargo features can't add target-cfg-gated
+# deps from a non-target-cfg-gated feature flag.
+xous-modals-ipc = { path = "../xous-modals-ipc" }
 # (utralib was added in a Phase C-3 first-attempt and removed when
 # u32e_backend turned out to be incompatible with the vendored
 # libsignal lizard port. Re-add when u32e is unblocked — see

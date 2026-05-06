@@ -4,6 +4,7 @@ members = [
     "crates/presage-store-pddb",
     "crates/xous-net-bridge",
     "crates/xous-pddb-ipc",
+    "crates/xous-modals-ipc",
     "crates/xous-signal-bridge",
     "crates/xous-app-signal",
     "crates/xous-app-signal-ui",
