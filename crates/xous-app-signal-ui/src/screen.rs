@@ -12,7 +12,14 @@
 //! state, returns a transition; the `Ui` driver applies the transition.
 
 use crate::screens::{
-    about::AboutScreen, empty_list::EmptyListScreen, menu::MenuScreen, splash::SplashScreen,
+    about::AboutScreen,
+    empty_list::EmptyListScreen,
+    link::{
+        LinkConfirmingScreen, LinkDoneScreen, LinkErrorScreen, LinkShowUrlScreen,
+        LinkStartingScreen,
+    },
+    menu::MenuScreen,
+    splash::SplashScreen,
 };
 
 /// One screen state.
@@ -23,14 +30,14 @@ pub enum Screen {
     About(AboutScreen),
     EmptyList(EmptyListScreen),
 
-    // --- Stage 10/11/12 placeholders ---
-    // Each renders a "not yet implemented" notice when reached. Keeping
-    // them in the enum makes the state graph visible. Add real fields
-    // (URL string, message list, etc.) as the corresponding stages land.
-    LinkShowUrl,
-    LinkConfirming,
-    LinkDone,
-    LinkError(String),
+    // Stage 10 — populated.
+    LinkStarting(LinkStartingScreen),
+    LinkShowUrl(LinkShowUrlScreen),
+    LinkConfirming(LinkConfirmingScreen),
+    LinkDone(LinkDoneScreen),
+    LinkError(LinkErrorScreen),
+
+    // --- Stage 11/12 placeholders ---
     Conversation,
     Compose,
 }
@@ -61,12 +68,13 @@ impl Screen {
             Screen::Menu(m) => m.render(),
             Screen::About(a) => a.render(),
             Screen::EmptyList(e) => e.render(),
+            Screen::LinkStarting(s) => s.render(),
+            Screen::LinkShowUrl(s) => s.render(),
+            Screen::LinkConfirming(s) => s.render(),
+            Screen::LinkDone(s) => s.render(),
+            Screen::LinkError(s) => s.render(),
 
-            // Placeholder screens — Stage 10/11/12 fill these in.
-            Screen::LinkShowUrl => placeholder("Link — show URL", "Stage 10"),
-            Screen::LinkConfirming => placeholder("Link — confirming", "Stage 10"),
-            Screen::LinkDone => placeholder("Link — done", "Stage 10"),
-            Screen::LinkError(msg) => placeholder("Link — error", msg),
+            // Stage 11/12 placeholders.
             Screen::Conversation => placeholder("Conversation", "Stage 11"),
             Screen::Compose => placeholder("Compose", "Stage 12"),
         }
@@ -82,9 +90,11 @@ impl Screen {
             Screen::Menu(_) => "Up/Down Select   Home Choose   Left Close",
             Screen::About(_) => "Left Back",
             Screen::EmptyList(_) => "Menu",
-            Screen::LinkShowUrl | Screen::LinkConfirming => "Home OK   Left Cancel",
-            Screen::LinkDone => "Home Continue",
-            Screen::LinkError(_) => "Home Retry   Left Cancel",
+            Screen::LinkStarting(_) | Screen::LinkShowUrl(_) | Screen::LinkConfirming(_) => {
+                "Left Cancel"
+            }
+            Screen::LinkDone(_) => "Home Continue",
+            Screen::LinkError(_) => "Up/Down Select   Home Choose",
             Screen::Conversation => "Up/Down Scroll   Left Back   Home Reply",
             Screen::Compose => "Home Send   Left Back   Esc Discard",
         }
@@ -100,9 +110,14 @@ impl Screen {
             Screen::Menu(m) => m.handle_key(key),
             Screen::About(a) => a.handle_key(key),
             Screen::EmptyList(e) => e.handle_key(key),
+            Screen::LinkStarting(s) => s.handle_key(key),
+            Screen::LinkShowUrl(s) => s.handle_key(key),
+            Screen::LinkConfirming(s) => s.handle_key(key),
+            Screen::LinkDone(s) => s.handle_key(key),
+            Screen::LinkError(s) => s.handle_key(key),
 
-            // Placeholders: any key returns to the previous screen.
-            // Stage 10/11/12 replace these with proper state machines.
+            // Stage 11/12 placeholders: any key returns to the
+            // previous screen.
             _ => Transition::Pop,
         }
     }

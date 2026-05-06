@@ -4543,10 +4543,13 @@ version = "0.0.1"
 dependencies = [
  "async-channel",
  "async-executor",
+ "futures",
  "futures-lite",
  "presage",
  "presage-store-pddb",
  "tracing",
+ "url",
+ "xous-net-bridge",
 ]
 
 [[package]]

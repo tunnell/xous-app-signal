@@ -31,6 +31,9 @@ pub use key::Key;
 pub use screen::{Screen, Transition};
 
 use std::io::{self, BufRead, Write};
+use std::sync::mpsc as std_mpsc;
+use std::thread;
+use std::time::Duration;
 
 use async_channel::{Receiver, Sender};
 use xous_signal_bridge::{Cmd, Event};
@@ -53,45 +56,89 @@ impl Ui {
         }
     }
 
-    /// Hosted-mode loop. Reads stdin a line at a time; treats the
-    /// first character of each line as the key, with bare empty
-    /// lines mapping to `Home`. Exits on `Transition::Quit`.
+    /// Hosted-mode loop. The main thread renders + handles events;
+    /// a background thread reads stdin and forwards each line via
+    /// `std::sync::mpsc`. The main loop polls both channels with a
+    /// short timeout, redrawing whenever a worker `Event` arrives so
+    /// the linking flow's state changes are visible without forcing
+    /// the user to press a key.
     ///
-    /// This is intentionally minimal — no termios, no escape-code
-    /// parsing. A full keyboard binding (arrow-key escape sequences,
-    /// printable chars in real-time) lives in the GAM renderer the
-    /// on-device build uses; the hosted-mode loop just needs enough
-    /// to drive integration tests and human-readable smoke runs.
+    /// Stage 10 is the first stage where this matters — earlier
+    /// screens were synchronous on stdin alone. The two-channel poll
+    /// is intentionally minimal: no termios, no escape-code parsing,
+    /// no select primitive. A full keyboard binding (arrow-key escape
+    /// sequences, printable chars in real-time) lives in the GAM
+    /// renderer the on-device build uses; the hosted-mode loop just
+    /// needs enough to drive integration tests.
     pub fn run(mut self) -> io::Result<()> {
-        let stdin = io::stdin();
-        let mut stdin_lock = stdin.lock();
         let mut stdout = io::stdout().lock();
+        let (line_tx, line_rx) = std_mpsc::channel::<String>();
 
-        while let Some(top) = self.stack.last() {
-            let chips = "[OFF]"; // Stage 10+ wires real conn-state here.
-            let body = top.render();
-            let hint = top.hint();
-            render::render_frame(&mut stdout, chips, &body, hint)?;
+        // Stdin reader. Forwards lines until stdin EOFs, then drops
+        // its sender; the main loop notices via Disconnected.
+        thread::Builder::new()
+            .name("xas-ui-stdin".into())
+            .spawn(move || {
+                let stdin = io::stdin();
+                let lock = stdin.lock();
+                for line in lock.lines() {
+                    let Ok(line) = line else { return };
+                    if line_tx.send(line).is_err() {
+                        return;
+                    }
+                }
+            })
+            .map_err(|e| io::Error::other(format!("stdin reader thread spawn: {e}")))?;
 
-            // Read one line of input. EOF (Ctrl-D / closed pipe) =
-            // graceful quit, same shape as Transition::Quit.
-            let mut line = String::new();
-            match stdin_lock.read_line(&mut line) {
-                Ok(0) => break,
-                Ok(_) => {}
-                Err(e) => return Err(e),
+        // Render once before the first poll so the user sees the
+        // splash without having to press a key.
+        let mut needs_render = true;
+
+        loop {
+            if self.stack.is_empty() {
+                break;
             }
 
-            // Drain any pending events from the worker before handling
-            // input. Stage 9c doesn't act on them — they're just
-            // logged so the human running the binary can see the
-            // worker is alive.
+            if needs_render {
+                let top = self.stack.last().expect("non-empty");
+                let chips = "[OFF]"; // Stage 11+ wires real conn-state.
+                let body = top.render();
+                let hint = top.hint();
+                render::render_frame(&mut stdout, chips, &body, hint)?;
+                needs_render = false;
+            }
+
+            // Drain any pending worker events. Each one may transition
+            // the stack and forces a re-render before we go back to
+            // waiting for input.
+            let mut got_event = false;
             while let Ok(evt) = self.event_rx.try_recv() {
                 writeln!(stdout, "[event] {evt:?}")?;
+                self.handle_event(evt);
+                got_event = true;
+            }
+            if got_event {
+                needs_render = true;
+                continue;
             }
 
-            let key = parse_key(&line);
-            self.dispatch(key);
+            // Wait for stdin or an event with a short timeout.
+            // 50ms is fast enough that worker events appear without
+            // jitter, slow enough that we don't busy-spin.
+            match line_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(line) => {
+                    let key = parse_key(&line);
+                    self.dispatch(key);
+                    needs_render = true;
+                }
+                Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                    // Loop and re-poll the event channel.
+                }
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                    // stdin EOF — graceful quit.
+                    break;
+                }
+            }
         }
 
         // Final shutdown to the worker. Best-effort; if the channel
@@ -100,16 +147,94 @@ impl Ui {
         Ok(())
     }
 
+    /// Apply a worker `Event` to the screen stack. Stage 10 acts on
+    /// the link-flow events; other events are logged but ignored
+    /// (they were emitted by side channels — `Event::Pong` etc. —
+    /// and don't affect the user-visible screen).
+    fn handle_event(&mut self, evt: Event) {
+        use crate::screens::link::{LinkDoneScreen, LinkErrorScreen, LinkShowUrlScreen};
+        match evt {
+            Event::LinkUrl(url) => {
+                if matches!(self.stack.last(), Some(Screen::LinkStarting(_))) {
+                    self.apply(Transition::Replace(Screen::LinkShowUrl(
+                        LinkShowUrlScreen::new(url),
+                    )));
+                } else {
+                    // User navigated away. The link future runs to
+                    // completion in the worker; we ignore the URL.
+                }
+            }
+            Event::LinkComplete {
+                device_name,
+                aci,
+                phone,
+            } => {
+                if matches!(
+                    self.stack.last(),
+                    Some(Screen::LinkStarting(_))
+                        | Some(Screen::LinkShowUrl(_))
+                        | Some(Screen::LinkConfirming(_))
+                ) {
+                    self.apply(Transition::Replace(Screen::LinkDone(LinkDoneScreen::new(
+                        device_name,
+                        aci,
+                        phone,
+                    ))));
+                }
+            }
+            Event::LinkError(reason) => {
+                if matches!(
+                    self.stack.last(),
+                    Some(Screen::LinkStarting(_))
+                        | Some(Screen::LinkShowUrl(_))
+                        | Some(Screen::LinkConfirming(_))
+                ) {
+                    self.apply(Transition::Replace(Screen::LinkError(
+                        LinkErrorScreen::new(reason),
+                    )));
+                }
+            }
+            // Pong / Whoami / ShuttingDown — no UI effect for Stage 10.
+            // Stage 11 will route Whoami / NewMessage etc.
+            _ => {}
+        }
+    }
+
     /// Visible-for-tests entry point. Apply a single key event to the
     /// current screen and return how many screens are on the stack
     /// after. Tests use this to assert on transitions without
-    /// touching stdin/stdout.
+    /// touching stdin/stdout. Side-effects (e.g. sending
+    /// `Cmd::LinkDevice` when the user enters the LinkStarting screen)
+    /// are dispatched here too so test invocations exercise the same
+    /// path the live driver takes.
     pub fn dispatch(&mut self, key: Key) -> usize {
-        if let Some(top) = self.stack.last_mut() {
-            let transition = top.handle_key(key);
-            self.apply(transition);
+        let prev_top_id = top_id(self.stack.last());
+        let transition = match self.stack.last_mut() {
+            Some(top) => top.handle_key(key),
+            None => return self.stack.len(),
+        };
+        self.apply(transition);
+        if prev_top_id != top_id(self.stack.last()) {
+            self.on_screen_entered();
         }
         self.stack.len()
+    }
+
+    /// Called by `dispatch` when the top screen changes. If the new
+    /// top is a screen with a one-shot side-effect (currently:
+    /// `LinkStarting` triggers `Cmd::LinkDevice`), emit the Cmd here.
+    /// Audit story: every screen→Cmd binding lives in this one
+    /// function.
+    fn on_screen_entered(&self) {
+        if let Some(Screen::LinkStarting(_)) = self.stack.last() {
+            let _ = self.cmd_tx.send_blocking(Cmd::LinkDevice {
+                // Stage 10 hosted-mode hardcodes the device name.
+                // A future stage (or a direct UI flow) lets the user
+                // customise it via a text-input screen.
+                device_name: "Precursor".to_string(),
+            });
+        }
+        // Other screens have no side-effect on entry.
     }
 
     /// Visible-for-tests: peek the top screen's discriminant.
@@ -136,6 +261,26 @@ impl Ui {
             }
             Transition::Quit => self.stack.clear(),
         }
+    }
+}
+
+/// Discriminant id for a `Screen`. Used by `dispatch` to detect
+/// "top changed" without comparing whole `Screen` values (which
+/// would require `PartialEq` on every payload).
+fn top_id(s: Option<&Screen>) -> u8 {
+    match s {
+        None => 0,
+        Some(Screen::Splash(_)) => 1,
+        Some(Screen::Menu(_)) => 2,
+        Some(Screen::About(_)) => 3,
+        Some(Screen::EmptyList(_)) => 4,
+        Some(Screen::LinkStarting(_)) => 5,
+        Some(Screen::LinkShowUrl(_)) => 6,
+        Some(Screen::LinkConfirming(_)) => 7,
+        Some(Screen::LinkDone(_)) => 8,
+        Some(Screen::LinkError(_)) => 9,
+        Some(Screen::Conversation) => 10,
+        Some(Screen::Compose) => 11,
     }
 }
 
@@ -252,5 +397,115 @@ mod tests {
         assert_eq!(parse_key("j\n"), Key::Down);
         assert_eq!(parse_key("k\n"), Key::Up);
         assert_eq!(parse_key("q\n"), Key::Char('q'));
+    }
+
+    // ----- Stage 10 -----
+
+    #[test]
+    fn splash_link_pushes_link_starting_and_emits_cmd() {
+        let (cmd_tx, cmd_rx) = bounded::<Cmd>(4);
+        let (_event_tx, event_rx) = bounded::<Event>(4);
+        let mut ui = Ui::new(cmd_tx, event_rx);
+
+        // Splash: Home selects "Link this device" (focus=0).
+        ui.dispatch(Key::Home);
+        assert!(matches!(ui.top(), Some(Screen::LinkStarting(_))));
+
+        // Side-effect: Cmd::LinkDevice should be in the queue.
+        match cmd_rx.try_recv() {
+            Ok(Cmd::LinkDevice { device_name }) => assert_eq!(device_name, "Precursor"),
+            other => panic!("expected LinkDevice cmd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn link_url_event_replaces_link_starting() {
+        let (cmd_tx, _cmd_rx) = bounded::<Cmd>(4);
+        let (_event_tx, event_rx) = bounded::<Event>(4);
+        let mut ui = Ui::new(cmd_tx, event_rx);
+
+        // Push LinkStarting.
+        ui.dispatch(Key::Home);
+        assert!(matches!(ui.top(), Some(Screen::LinkStarting(_))));
+
+        // Worker emits LinkUrl.
+        ui.handle_event(Event::LinkUrl(
+            "tsdevice://?uuid=deadbeef&pubkey=cafebabe".to_string(),
+        ));
+        match ui.top() {
+            Some(Screen::LinkShowUrl(s)) => {
+                assert!(s.url.starts_with("tsdevice://"));
+            }
+            other => panic!("expected LinkShowUrl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn link_complete_event_replaces_with_done() {
+        let (cmd_tx, _cmd_rx) = bounded::<Cmd>(4);
+        let (_event_tx, event_rx) = bounded::<Event>(4);
+        let mut ui = Ui::new(cmd_tx, event_rx);
+
+        ui.dispatch(Key::Home);
+        ui.handle_event(Event::LinkUrl("tsdevice://test".to_string()));
+        ui.handle_event(Event::LinkComplete {
+            device_name: "Precursor".to_string(),
+            aci: "00000000-0000-4000-8000-000000000001".to_string(),
+            phone: "+15555550100".to_string(),
+        });
+        match ui.top() {
+            Some(Screen::LinkDone(s)) => {
+                assert_eq!(s.device_name, "Precursor");
+                assert!(s.phone.starts_with("+1"));
+            }
+            other => panic!("expected LinkDone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn link_error_event_replaces_with_error() {
+        let (cmd_tx, _cmd_rx) = bounded::<Cmd>(4);
+        let (_event_tx, event_rx) = bounded::<Event>(4);
+        let mut ui = Ui::new(cmd_tx, event_rx);
+
+        ui.dispatch(Key::Home);
+        ui.handle_event(Event::LinkError("network unreachable".to_string()));
+        match ui.top() {
+            Some(Screen::LinkError(s)) => assert_eq!(s.reason, "network unreachable"),
+            other => panic!("expected LinkError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn link_done_home_transitions_to_empty_list() {
+        let (cmd_tx, _cmd_rx) = bounded::<Cmd>(4);
+        let (_event_tx, event_rx) = bounded::<Event>(4);
+        let mut ui = Ui::new(cmd_tx, event_rx);
+
+        ui.dispatch(Key::Home);
+        ui.handle_event(Event::LinkComplete {
+            device_name: "P".into(),
+            aci: "x".into(),
+            phone: "+1".into(),
+        });
+        ui.dispatch(Key::Home);
+        assert!(matches!(ui.top(), Some(Screen::EmptyList(_))));
+    }
+
+    #[test]
+    fn link_url_event_ignored_if_user_navigated_away() {
+        let (cmd_tx, _cmd_rx) = bounded::<Cmd>(4);
+        let (_event_tx, event_rx) = bounded::<Event>(4);
+        let mut ui = Ui::new(cmd_tx, event_rx);
+
+        // Enter link flow, then back out (user pressed Cancel).
+        ui.dispatch(Key::Home);
+        assert!(matches!(ui.top(), Some(Screen::LinkStarting(_))));
+        ui.dispatch(Key::Left);
+        assert!(matches!(ui.top(), Some(Screen::Splash(_))));
+
+        // Stale event arrives. Should be a no-op — UI is on splash.
+        ui.handle_event(Event::LinkUrl("tsdevice://stale".to_string()));
+        assert!(matches!(ui.top(), Some(Screen::Splash(_))));
     }
 }

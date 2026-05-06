@@ -65,8 +65,13 @@ impl SplashScreen {
                 Transition::None
             }
             Key::Home | Key::Right => match self.focus {
-                0 => Transition::Push(Screen::LinkShowUrl), // Stage 10
-                1 => Transition::None,                      // Register: greyed, no-op
+                // Stage 10: Push LinkStarting; the driver issues
+                // `Cmd::LinkDevice` and replaces the screen with
+                // LinkShowUrl when the worker emits `Event::LinkUrl`.
+                0 => Transition::Push(Screen::LinkStarting(
+                    crate::screens::link::LinkStartingScreen::new(),
+                )),
+                1 => Transition::None, // Register: greyed, no-op
                 2 => Transition::Push(Screen::About(AboutScreen::new())),
                 3 => Transition::Quit,
                 _ => Transition::None,

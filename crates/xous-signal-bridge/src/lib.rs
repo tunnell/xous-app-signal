@@ -20,13 +20,18 @@ mod cmd;
 
 pub use cmd::{Cmd, Event};
 
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use async_channel::{Receiver, Sender};
 use async_executor::LocalExecutor;
 use futures_lite::future::block_on;
 use presage::Manager;
+use presage::libsignal_service::configuration::SignalServers;
+use presage::libsignal_service::transport;
+use presage::manager::Registered;
 use presage_store_pddb::PddbStore;
+use xous_net_bridge::{SyncHttpClient, signal_production_roots};
 
 /// Initial worker-thread stack size. Comfortable headroom for
 /// zkgroup batch ops (the heaviest compute presage triggers) and
@@ -68,8 +73,36 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
     // test established.
     let executor: &'static LocalExecutor<'static> = Box::leak(Box::new(LocalExecutor::new()));
 
+    // Stage 10: register two thread-locals that libsignal-service-rs
+    // expects on every thread that touches its API. Both are set
+    // here because the worker is the only thread that ever does.
+    //
+    // 1. `HttpClient` — the sync HTTP/1.1 + WebSocket transport we
+    //    forked at Stage 6. Cloning is cheap (Arc-shaped).
+    // 2. `TaskSpawner` — a closure used by libsignal-service-rs's
+    //    internals (`provisioning::link_device`, WS handlers) to
+    //    fire-and-forget detached tasks onto our local executor.
+    //
+    // Without either, `Manager::link_secondary_device` panics on its
+    // first internal `PushService` construction or `ws()` call.
+    transport::set_http_client(Arc::new(SyncHttpClient::new(
+        signal_production_roots(),
+        format!("xas/{}", env!("CARGO_PKG_VERSION")),
+    )));
+    transport::set_task_spawner(Box::new(|task| {
+        executor.spawn(task).detach();
+    }));
+
     block_on(executor.run(async move {
         tracing::debug!("signal-worker: ready");
+
+        // Stage 10: when `LinkDevice` succeeds the resulting
+        // `Manager<S, Registered>` is retained here so subsequent
+        // Stage 11+ Cmds (StartReceive, SendMessage) reuse the same
+        // session state instead of re-running `load_registered`.
+        // `None` means we haven't linked (or failed to).
+        let mut linked: Option<Manager<PddbStore, Registered>> = None;
+
         loop {
             match cmd_rx.recv().await {
                 Ok(Cmd::Hello) => {
@@ -85,6 +118,34 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                         break;
                     }
                 }
+                Ok(Cmd::LinkDevice { device_name }) => {
+                    let outcome =
+                        handle_link_device(store.clone(), event_tx.clone(), device_name).await;
+                    match outcome {
+                        Ok(manager) => {
+                            // We already sent Event::LinkComplete from
+                            // inside handle_link_device. Retain the
+                            // Manager so Stage 11+ Cmds can use it.
+                            linked = Some(manager);
+                        }
+                        Err(()) => {
+                            // handle_link_device already sent
+                            // Event::LinkError. Drop any half-linked
+                            // state on the floor; retry by sending
+                            // another Cmd::LinkDevice.
+                        }
+                    }
+                }
+                Ok(Cmd::LinkCancel) => {
+                    // No-op for Stage 10. presage's link_secondary_device
+                    // doesn't expose a cancel handle; the in-flight task
+                    // runs to completion or HTTP timeout. The UI side
+                    // already navigates away on Cancel; a stale
+                    // LinkComplete/LinkError eventually arriving is
+                    // ignored by the UI (it's no longer on a Link*
+                    // screen).
+                    tracing::debug!("LinkCancel received; in-flight link runs to completion");
+                }
                 Ok(Cmd::Shutdown) => {
                     let _ = event_tx.send(Event::ShuttingDown).await;
                     break;
@@ -97,7 +158,84 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                 }
             }
         }
+
+        // `linked` drops here. Pre-Stage-11 we may want a graceful
+        // Manager teardown (close WS, flush sessions); for now drop
+        // semantics are sufficient.
+        drop(linked);
     }));
+}
+
+/// Stage 10: run `Manager::link_secondary_device`. Forwards the
+/// provisioning URL to the UI as `Event::LinkUrl(...)` as soon as it
+/// arrives, then awaits the user-confirmation step. Returns the linked
+/// `Manager` on success (worker keeps it for Stage 11+ Cmds) or `Err`
+/// after sending `Event::LinkError`.
+///
+/// We use `futures::channel::oneshot` for the URL handoff (same type
+/// presage's API expects) and `futures::future::join` to drive the
+/// link future and the URL forwarder concurrently. The store is
+/// cloned for the call — `link_secondary_device` consumes its `S`
+/// argument by clearing the registration on entry, then writing fresh
+/// keys; cloning means the worker's outer `store` (still owned, used
+/// for `whoami`/etc. paths) stays usable if linking fails.
+async fn handle_link_device(
+    store: PddbStore,
+    event_tx: Sender<Event>,
+    device_name: String,
+) -> Result<Manager<PddbStore, Registered>, ()> {
+    use futures::channel::oneshot;
+    use futures::future;
+
+    let (url_tx, url_rx) = oneshot::channel::<url::Url>();
+    let event_tx_for_url = event_tx.clone();
+
+    // Two concurrent futures:
+    //  - `link_secondary_device` runs the linking flow, writes its
+    //    URL to `url_tx`, and resolves with `Manager<S, Registered>`.
+    //  - The forwarder awaits `url_rx`, sends `Event::LinkUrl`. Stays
+    //    alive after sending; that's intentional — `future::join`
+    //    requires both futures to resolve before returning.
+    let forwarder = async move {
+        match url_rx.await {
+            Ok(url) => {
+                let _ = event_tx_for_url.send(Event::LinkUrl(url.to_string())).await;
+            }
+            Err(_) => {
+                // Sender dropped (the link future completed without
+                // emitting a URL — usually an early HTTP error).
+                // No URL to forward; the link future's own error will
+                // come back via the outer match.
+            }
+        }
+    };
+
+    let (link_result, _) = future::join(
+        Manager::link_secondary_device(store, SignalServers::Production, device_name, url_tx),
+        forwarder,
+    )
+    .await;
+
+    match link_result {
+        Ok(manager) => {
+            let data = manager.registration_data();
+            let device_name = data.device_name.clone().unwrap_or_default();
+            let aci = data.service_ids.aci.to_string();
+            let phone = data.phone_number.to_string();
+            let _ = event_tx
+                .send(Event::LinkComplete {
+                    device_name,
+                    aci,
+                    phone,
+                })
+                .await;
+            Ok(manager)
+        }
+        Err(e) => {
+            let _ = event_tx.send(Event::LinkError(format!("{e}"))).await;
+            Err(())
+        }
+    }
 }
 
 /// Run `Manager::load_registered` and stringify the result. Stage 8

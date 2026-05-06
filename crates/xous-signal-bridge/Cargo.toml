@@ -24,6 +24,27 @@ async-executor = { workspace = true }
 async-channel = { workspace = true }
 futures-lite = { workspace = true }
 
+# Stage 10: presage's `Manager::link_secondary_device` takes a
+# `futures::channel::oneshot::Sender<Url>` for the provisioning-URL
+# handoff and runs two sub-futures concurrently. We use the same
+# `futures` 0.3 primitives the upstream API expects rather than
+# reinventing oneshot via async-channel; the dep is already
+# transitive through presage so it's free in dep-graph terms.
+futures = { version = "0.3", default-features = false, features = ["std"] }
+
+# Stage 10: the provisioning URL is a `url::Url` (presage's API
+# uses it directly via the `url` 2.x crate). We hold the import
+# explicitly so the worker doesn't depend on transitive resolution.
+url = "2.5"
+
+# Stage 10: register a real `HttpClient` with libsignal-service's
+# thread-local so `Manager::link_secondary_device` can reach
+# chat.signal.org. SyncHttpClient + signal_production_roots come
+# from our Stage 6 sync transport. Without this dep the Manager
+# panics with "set_http_client must be called on this thread
+# first" the moment it tries to issue the registration HTTP.
+xous-net-bridge = { path = "../xous-net-bridge" }
+
 # Logging — the worker runs entirely off the main thread, so the only
 # way to debug it is through `tracing`. Production binaries route this
 # to xous logger; hosted-mode tests just need the messages to surface.
