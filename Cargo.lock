@@ -4486,6 +4486,7 @@ dependencies = [
  "log",
  "presage-store-pddb",
  "trng",
+ "xous",
  "xous-api-log",
  "xous-api-names",
  "xous-api-susres",

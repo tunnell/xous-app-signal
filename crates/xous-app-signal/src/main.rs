@@ -114,6 +114,9 @@ fn main() -> std::io::Result<()> {
     #[cfg(feature = "probe-flow")]
     probe_network();
 
+    #[cfg(all(feature = "probe-pddb", target_os = "xous"))]
+    probe_pddb();
+
     // The UI loop blocks on stdin (hosted) or GAM events
     // (Xous, Stage 9b/follow-up). It owns the cmd/event channel ends
     // and is responsible for sending `Cmd::Shutdown` on quit.
@@ -211,6 +214,86 @@ fn probe_network() {
     }
 
     log::info!("probe: network probe done");
+}
+
+/// Stage 13b probe: poll xous-core's PDDB Mount Poller via raw
+/// `xous` IPC and log the result. This verifies the
+/// "hand-rolled PDDB client" path before we commit to writing
+/// it for real — the Mount Poller's `Poll` opcode (0) is the
+/// simplest IPC roundtrip we can do against PDDB, taking no
+/// payload and returning a `Scalar1(0|1)` mount state.
+///
+/// Implementation mirrors `services/pddb/src/lib.rs:30–60`
+/// (`PddbMountPoller::new` + `is_mounted_nonblocking`) but does
+/// not depend on the `pddb` crate — only on `xous`,
+/// `xous-api-names`, and `xous_ipc` (all of which we already
+/// path-dep'd or pulled from crates.io for the trng client).
+///
+/// Two outcomes are interesting:
+///   - `OK true` / `OK false` — the IPC plumbing works; the
+///     value tells us whether the image autobases or expects
+///     password-driven mount.
+///   - `panic` / `connection refused` — protocol replication
+///     issue (rkyv version, Buffer layout, or SID name typo).
+#[cfg(all(feature = "probe-pddb", target_os = "xous"))]
+fn probe_pddb() {
+    use std::time::Instant;
+    use xous::{Message, send_message};
+
+    log::info!("probe-pddb: starting PDDB mount-poller probe");
+    let start = Instant::now();
+
+    let xns = match xous_names::XousNames::new() {
+        Ok(x) => x,
+        Err(e) => {
+            log::warn!("probe-pddb: XousNames::new FAIL: {:?}", e);
+            return;
+        }
+    };
+
+    // SID name copied from `services/pddb/src/api.rs:19`. If this
+    // doesn't match the running PDDB server's registered SID,
+    // request_connection_blocking will block forever — which is
+    // why this probe runs after the smoke boot lines, on a path
+    // the Robot test can time out on.
+    let conn = match xns.request_connection_blocking("_PDDB Mount Poller_") {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!(
+                "probe-pddb: request_connection FAIL after {:?}: {:?}",
+                start.elapsed(),
+                e
+            );
+            return;
+        }
+    };
+    log::info!("probe-pddb: connected to PDDB Mount Poller in {:?}", start.elapsed());
+
+    // PollOp::Poll = 0, per `services/pddb/src/api.rs` PollOp enum.
+    // Args are all unused (server reads only the opcode).
+    let poll_start = Instant::now();
+    let resp = send_message(conn, Message::new_blocking_scalar(0, 0, 0, 0, 0));
+    match resp {
+        Ok(xous::Result::Scalar1(v)) => {
+            log::info!(
+                "probe-pddb: Poll OK is_mounted={} after {:?}",
+                v != 0,
+                poll_start.elapsed()
+            );
+        }
+        Ok(other) => {
+            log::warn!(
+                "probe-pddb: Poll unexpected response {:?} after {:?}",
+                other,
+                poll_start.elapsed()
+            );
+        }
+        Err(e) => {
+            log::warn!("probe-pddb: Poll FAIL after {:?}: {:?}", poll_start.elapsed(), e);
+        }
+    }
+
+    log::info!("probe-pddb: probe done in {:?}", start.elapsed());
 }
 
 #[cfg(target_os = "xous")]

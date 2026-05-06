@@ -20,6 +20,13 @@ path = "src/main.rs"
 # so prod / smoke builds aren't affected.
 probe-flow = []
 
+# Stage 13b probe: when enabled, after the worker spawns, main()
+# pings xous-core's PDDB Mount Poller via raw `xous` IPC and logs
+# the mount state (`true` / `false`). Verifies the IPC protocol
+# replication path (which is what a hand-rolled PDDB client would
+# use) before committing to the full KvBackend implementation.
+probe-pddb = []
+
 [dependencies]
 # Stage 8: spawn the manager worker thread + drive Hello/GetWhoami
 # round-trips. The presage-store-pddb dep is direct (not just
@@ -80,6 +87,11 @@ trng = { path = "../../../repos/xous-core/services/trng" }
 # xous-api-names is renamed `xous-names` in scope to match the
 # convention every other Xous app uses (mirrors apps/repl/Cargo.toml).
 xous-names = { package = "xous-api-names", version = "0.9.71" }
+# Direct dep on the `xous` kernel API. Stage 13b probe-pddb uses
+# `xous::send_message` to drive raw IPC against the PDDB Mount
+# Poller. The crate is already transitive via trng, but Rust needs
+# it as a direct dep to be importable from main.rs.
+xous = "0.9.70"
 xous-api-susres = { path = "../../../repos/xous-core/api/xous-api-susres" }
 flatipc = { path = "../../../repos/xous-core/libs/flatipc" }
 flatipc-derive = { path = "../../../repos/xous-core/libs/flatipc-derive" }
