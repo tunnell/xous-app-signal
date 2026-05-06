@@ -1,0 +1,16 @@
+[package]
+name = "xtask"
+description = "Build glue for xas: cross-compile, image bundling, Renode tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Stage 9b: deliberately *no* dependencies. xtask drives `cargo`,
+# `cp`, and `renode-test` via std::process::Command + std::fs +
+# std::env::args. Audit story: every external invocation is one
+# `Command::new("...")` that the reader can inspect at the call
+# site. Pulling in `clap` / `xshell` / `cargo-metadata` would
+# obscure that.

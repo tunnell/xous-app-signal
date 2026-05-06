@@ -1,3 +1,9 @@
+[alias]
+# Stage 9b: `cargo xtask <subcommand>` runs the build-glue crate
+# at `xtask/`. Subcommands: build-rv32, dist, renode-test, help.
+# See xtask/src/main.rs for the full surface.
+xtask = "run --package xtask --"
+
 # Per-target Cargo flags.
 #
 # `curve25519_dalek_backend = "u32e_backend"` activates the Precursor-only

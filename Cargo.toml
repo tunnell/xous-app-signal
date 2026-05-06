@@ -7,6 +7,7 @@ members = [
     "crates/xous-app-signal",
     "crates/xous-app-signal-ui",
     "vendor/libsignal-service-rs",
+    "xtask",
 ]
 exclude = [
     # Vendored as a whole workspace; we consume specific crates from it.

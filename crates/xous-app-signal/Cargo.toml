@@ -25,6 +25,18 @@ async-channel = { workspace = true }
 # the cmd/event channels to Ui::new and calls Ui::run.
 xous-app-signal-ui = { path = "../xous-app-signal-ui" }
 
+# Stage 9b: log facade. Boot events log::info! through here so the
+# Renode UART tester can assert on them. Hosted binds env_logger
+# below; rv32-xous binds xous-api-log via the integration step
+# (Stage 9b follow-up at hardware-deploy time).
+log = "0.4"
+
+[target.'cfg(not(target_os = "xous"))'.dependencies]
+# Stage 9b: env_logger initializes from RUST_LOG; defaults to
+# info-level. Pulled only for hosted builds to keep the rv32 dep
+# graph clean. Stage 9b follow-up swaps in xous-api-log.
+env_logger = { version = "0.11", default-features = false }
+
 # Stage 1 carry-over (the smol primitives are used by the bridge
 # transitively, but the binary references nothing from them
 # directly any more — Stage 1's smoke test moved into the bridge's

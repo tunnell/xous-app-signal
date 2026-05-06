@@ -67,10 +67,7 @@ pub enum Cmd {
     /// task is the only place the Manager is reachable. Sending
     /// before receive starts gets a `SendError("not receiving;
     /// send Cmd::StartReceive first")`.
-    SendMessage {
-        recipient: String,
-        body: String,
-    },
+    SendMessage { recipient: String, body: String },
 
     /// Tell the worker to drain its event channel and exit. The main
     /// thread sends this before joining the worker handle so we don't
@@ -149,9 +146,7 @@ pub enum Event {
     /// server-side timestamp the message was tagged with — useful
     /// to the UI for echoing the sent message into the conversation
     /// list as an outgoing entry.
-    SendComplete {
-        timestamp: u64,
-    },
+    SendComplete { timestamp: u64 },
 
     /// Stage 12: a `Cmd::SendMessage` failed. Common reasons:
     /// invalid recipient UUID, network error, recipient session

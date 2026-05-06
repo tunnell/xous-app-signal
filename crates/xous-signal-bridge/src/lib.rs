@@ -186,8 +186,7 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                     let Some(send_tx) = send_to_manager.as_ref() else {
                         let _ = event_tx
                             .send(Event::SendError(
-                                "not receiving; send Cmd::StartReceive first"
-                                    .to_string(),
+                                "not receiving; send Cmd::StartReceive first".to_string(),
                             ))
                             .await;
                         continue;
@@ -195,11 +194,7 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                     // Forward to the manager task. If the channel is
                     // closed (manager task exited) we drop the
                     // send_to_manager handle and surface the error.
-                    if send_tx
-                        .send(InnerSend { recipient, body })
-                        .await
-                        .is_err()
-                    {
+                    if send_tx.send(InnerSend { recipient, body }).await.is_err() {
                         send_to_manager = None;
                         let _ = event_tx
                             .send(Event::SendError("manager task died".to_string()))
@@ -497,7 +492,10 @@ async fn handle_send(
         ..Default::default()
     });
 
-    match manager.send_message(recipient, content_body, timestamp).await {
+    match manager
+        .send_message(recipient, content_body, timestamp)
+        .await
+    {
         Ok(()) => {
             let _ = event_tx.send(Event::SendComplete { timestamp }).await;
         }

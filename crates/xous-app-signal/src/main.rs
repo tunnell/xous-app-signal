@@ -48,12 +48,16 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
 const CHAN_CAP: usize = 16;
 
 fn main() -> std::io::Result<()> {
+    init_logger();
+    log::info!("xas: starting");
+
     let store = PddbStore::with_mock_backend();
 
     let (cmd_tx, cmd_rx) = bounded::<Cmd>(CHAN_CAP);
     let (event_tx, event_rx) = bounded::<Event>(CHAN_CAP);
 
     let worker = run_signal_worker(store, cmd_rx, event_tx);
+    log::info!("xas: worker started");
 
     // The UI loop blocks on stdin (hosted) or GAM events
     // (Xous, Stage 9b/follow-up). It owns the cmd/event channel ends
@@ -64,5 +68,25 @@ fn main() -> std::io::Result<()> {
     // it's a worker-side bug — surface as a nonzero exit, not a
     // silent hang.
     let _ = worker.join();
+    log::info!("xas: exiting");
     Ok(())
+}
+
+/// Stage 9b: install a `log` implementation. Hosted picks
+/// `env_logger`; rv32-xous binds `xous-api-log` via the integration
+/// step (Stage 9b follow-up at hardware-deploy time — needs a
+/// path-dep that resolves only inside xous-core's tree).
+#[cfg(not(target_os = "xous"))]
+fn init_logger() {
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .try_init();
+}
+
+#[cfg(target_os = "xous")]
+fn init_logger() {
+    // TODO Stage 9b follow-up: when this binary lands inside
+    // xous-core's tree (or with a path-dep on `services/xous-log`),
+    // wire `log_server::init_wait()` here and route through
+    // `xous-api-log`. Until then the rv32 build prints log calls
+    // to wherever Xous's default-stdio binds (typically the UART).
 }
