@@ -51,6 +51,26 @@ probe-pddb-real = ["pddb-real"]
 #               -p xous-app-signal --features pddb-real,auto-link
 auto-link = []
 
+# Stage 14b: build profiles for the two Xous environments.
+# Mirror the older xous-signal-client's pattern (Cargo.toml had its
+# own precursor/hosted features cascading to each Xous service).
+# On a Xous-emulation hosted build we activate `hosted`; for real
+# rv32 deploy we activate `precursor`. The xtask `app-image` flow
+# wants `precursor`; `cargo xtask run` (hosted emulation) wants
+# `hosted`.
+hosted = [
+    "blitstr2/hosted",
+    "ux-api/hosted",
+    "gam/hosted",
+    "modals/hosted",
+]
+precursor = [
+    "blitstr2/precursor",
+    "ux-api/precursor",
+    "gam/precursor",
+    "modals/precursor",
+]
+
 [dependencies]
 # Stage 8: spawn the manager worker thread + drive Hello/GetWhoami
 # round-trips. The presage-store-pddb dep is direct (not just
@@ -69,6 +89,42 @@ xous-app-signal-ui = { path = "../xous-app-signal-ui" }
 # below; rv32-xous binds xous-api-log via the integration step
 # (Stage 9b follow-up at hardware-deploy time).
 log = "0.4"
+
+# Stage 14b: GAM client for proper LCD rendering inside the Xous
+# environment (hosted emulation OR rv32 hardware). Modeled on
+# apps/hello/Cargo.toml. Verified via `cargo tree -p gam` that
+# gam does NOT depend on services/aes, root-keys, or pddb — the
+# Stage 9b workspace-merge blocker doesn't apply here. The cascade
+# is graphics-server + blitstr2 + ux-api + com + ime-plugin-* +
+# locales + tts-frontend + spinor — all path-deps inside xous-core,
+# bounded surface.
+#
+# Unconditional (not target-cfg-gated): gam is needed for both the
+# hosted-Xous emulation (target=linux, running inside cargo xtask
+# run) AND rv32 hardware. The fallback for "running standalone with
+# no Xous infra" is detected at runtime: gam_app::run() returns
+# Err and main() falls back to stdin Ui::run.
+gam = { path = "../../../repos/xous-core/services/gam" }
+# Per-board glyph + screen constants are gated on `hosted` /
+# `precursor` features. We forward via the workspace-level
+# `hosted` / `precursor` features (above) so the build invocation
+# picks the right one. Default features in these path-deps stay
+# off so we don't accidentally pull both.
+ux-api = { path = "../../../repos/xous-core/libs/ux-api", default-features = false }
+blitstr2 = { path = "../../../repos/xous-core/libs/blitstr2", default-features = false }
+num-derive = { version = "0.4.2", default-features = false }
+num-traits = { version = "0.2.14", default-features = false }
+# xous + xous-names also needed unconditionally (gam_app uses
+# them for IPC). Previously target-cfg-gated to rv32 only;
+# moved to unconditional for the hosted-Xous emulation path.
+xous = "0.9.70"
+xous-names = { package = "xous-api-names", version = "0.9.71" }
+# Stage 14b menu actions: modals client for the device-name TextEntry
+# prompt + QR-code Notification on link. Same API as
+# `xous-modals-ipc` (which we keep for the rv32 auto-link path)
+# but uses the upstream gam-aware client directly.
+modals = { path = "../../../repos/xous-core/services/modals" }
+locales = { path = "../../../repos/xous-core/locales" }
 
 [target.'cfg(not(target_os = "xous"))'.dependencies]
 # Stage 9b: env_logger initializes from RUST_LOG; defaults to
@@ -108,14 +164,8 @@ xous-api-log = "0.1.69"
 # is also transitive via trng's Cargo.toml; carrying it explicitly
 # keeps the path-dep declaration self-contained.
 trng = { path = "../../../repos/xous-core/services/trng" }
-# xous-api-names is renamed `xous-names` in scope to match the
-# convention every other Xous app uses (mirrors apps/repl/Cargo.toml).
-xous-names = { package = "xous-api-names", version = "0.9.71" }
-# Direct dep on the `xous` kernel API. Stage 13b probe-pddb uses
-# `xous::send_message` to drive raw IPC against the PDDB Mount
-# Poller. The crate is already transitive via trng, but Rust needs
-# it as a direct dep to be importable from main.rs.
-xous = "0.9.70"
+# (xous-names + xous moved to unconditional deps above so gam_app
+# can use them on hosted-Xous emulation as well.)
 xous-api-susres = { path = "../../../repos/xous-core/api/xous-api-susres" }
 flatipc = { path = "../../../repos/xous-core/libs/flatipc" }
 flatipc-derive = { path = "../../../repos/xous-core/libs/flatipc-derive" }

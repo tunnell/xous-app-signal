@@ -14,6 +14,8 @@
 //!
 //! See docs/ROADMAP.md Stage 9c and docs/UI.md for the design.
 
+mod gam_app;
+
 use async_channel::bounded;
 use presage_store_pddb::PddbStore;
 #[cfg(not(all(feature = "auto-link", target_os = "xous")))]
@@ -161,11 +163,21 @@ fn main() -> std::io::Result<()> {
 
     #[cfg(not(all(feature = "auto-link", target_os = "xous")))]
     {
-        // Regular UI loop blocks on stdin (hosted) or GAM events
-        // (Xous follow-up work). On Xous without auto-link the loop
-        // EOFs on stdin and returns immediately — fine for the
-        // smoke / probe builds that just assert on boot lines.
-        Ui::new(cmd_tx, event_rx).run()?;
+        // Try to run as a real GAM-rendered Xous app first
+        // (works for both hosted Xous emulation and rv32 hardware
+        // when running inside a Xous environment). If we're not
+        // inside Xous (no xous-names server reachable, e.g.
+        // running standalone for unit tests), fall back to the
+        // stdin-driven hosted UI.
+        let cmd_tx_for_gam = cmd_tx.clone();
+        let event_rx_for_gam = event_rx.clone();
+        match gam_app::run(cmd_tx_for_gam, event_rx_for_gam) {
+            Ok(()) => {}
+            Err(e) => {
+                log::info!("xas: GAM UI unavailable ({}); falling back to stdin Ui", e);
+                Ui::new(cmd_tx, event_rx).run()?;
+            }
+        }
     }
 
     // Worker has been told to shut down; join it. If the join hangs
