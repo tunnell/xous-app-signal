@@ -1,5 +1,5 @@
+use http::Method;
 use libsignal_protocol::Aci;
-use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use zkgroup::profiles::{ProfileKeyCommitment, ProfileKeyVersion};
 

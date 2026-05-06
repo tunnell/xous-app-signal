@@ -1,5 +1,5 @@
+use http::Method;
 use libsignal_core::DeviceId;
-use reqwest::Method;
 
 use crate::websocket::{self, SignalWebSocket};
 

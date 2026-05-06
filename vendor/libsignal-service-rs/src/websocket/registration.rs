@@ -1,5 +1,5 @@
+use http::Method;
 use libsignal_protocol::IdentityKey;
-use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

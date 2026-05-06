@@ -1987,6 +1987,7 @@ dependencies = [
  "hex",
  "hkdf",
  "hmac",
+ "http",
  "libsignal-core",
  "libsignal-net",
  "libsignal-net-infra",

@@ -41,6 +41,10 @@ url = { version = "2.1", features = ["serde"] }
 uuid = { version = "1", features = ["serde"] }
 
 # http
+# Stage 6.1: add explicit `http` dep for the type-only Method/StatusCode/header
+# references that used to flow through reqwest's re-exports. Same crate either
+# way — `reqwest::Method` and `http::Method` are literally the same type.
+http = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls-manual-roots", "stream"] }
 reqwest-websocket = { version = "0.4.2", features = ["json"] }
 

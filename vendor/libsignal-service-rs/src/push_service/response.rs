@@ -1,4 +1,4 @@
-use reqwest::StatusCode;
+use http::StatusCode;
 
 use crate::proto::WebSocketResponseMessage;
 

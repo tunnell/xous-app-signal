@@ -1,7 +1,7 @@
 use crate::utils::serde_base64;
 use base64::{prelude::BASE64_URL_SAFE_NO_PAD, Engine};
+use http::Method;
 use libsignal_core::{Aci, ServiceIdKind};
-use reqwest::Method;
 
 use crate::content::ServiceError;
 

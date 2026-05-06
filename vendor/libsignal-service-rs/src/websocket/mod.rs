@@ -10,7 +10,7 @@ use futures::channel::{mpsc, oneshot};
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesUnordered;
-use reqwest::Method;
+use http::Method;
 use reqwest_websocket::WebSocket;
 use tokio::time::Instant;
 use tracing::debug;

@@ -1,7 +1,7 @@
 use base64::prelude::*;
+use http::Method;
 use libsignal_core::{DeviceId, E164};
 use rand::{CryptoRng, Rng};
-use reqwest::Method;
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 
