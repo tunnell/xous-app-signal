@@ -1,0 +1,661 @@
+info: syncing channel updates for stable-x86_64-unknown-linux-gnu
+info: latest update on 2026-04-16 for version 1.95.0 (59807616e 2026-04-14)
+info: component clippy is up to date
+info: component rustfmt is up to date
+warn: skipping unavailable component rust-std for target riscv32imac-unknown-xous-elf
+warning: patch for the non root package will be ignored, specify patch at the workspace root:
+package:   /home/tunnell/precursor-signal/xous-app-signal/vendor/libsignal-service-rs/Cargo.toml
+workspace: /home/tunnell/precursor-signal/xous-app-signal/Cargo.toml
+libsignal-service v0.1.0 (/home/tunnell/precursor-signal/xous-app-signal/vendor/libsignal-service-rs)
+├── aes v0.8.4
+│   ├── cfg-if v1.0.4
+│   ├── cipher v0.4.4
+│   │   ├── crypto-common v0.1.7
+│   │   │   ├── generic-array v0.14.7
+│   │   │   │   └── typenum v1.20.0
+│   │   │   │   [build-dependencies]
+│   │   │   │   └── version_check v0.9.5
+│   │   │   ├── rand_core v0.6.4
+│   │   │   │   └── getrandom v0.2.12 (/home/tunnell/precursor-signal/repos/xous-core/imports/getrandom)
+│   │   │   │       ├── cfg-if v1.0.4
+│   │   │   │       ├── flatipc v0.1.0 (/home/tunnell/precursor-signal/repos/xous-core/libs/flatipc)
+│   │   │   │       │   ├── flatipc-derive v0.1.2 (proc-macro) (/home/tunnell/precursor-signal/repos/xous-core/libs/flatipc-derive)
+│   │   │   │       │   │   ├── proc-macro2 v1.0.106
+│   │   │   │       │   │   │   └── unicode-ident v1.0.24
+│   │   │   │       │   │   ├── quote v1.0.45
+│   │   │   │       │   │   │   └── proc-macro2 v1.0.106 (*)
+│   │   │   │       │   │   └── syn v2.0.117
+│   │   │   │       │   │       ├── proc-macro2 v1.0.106 (*)
+│   │   │   │       │   │       ├── quote v1.0.45 (*)
+│   │   │   │       │   │       └── unicode-ident v1.0.24
+│   │   │   │       │   └── xous v0.9.70
+│   │   │   │       ├── rkyv v0.8.16
+│   │   │   │       │   ├── hashbrown v0.17.0
+│   │   │   │       │   ├── munge v0.4.7
+│   │   │   │       │   │   └── munge_macro v0.4.7 (proc-macro)
+│   │   │   │       │   │       ├── proc-macro2 v1.0.106 (*)
+│   │   │   │       │   │       ├── quote v1.0.45 (*)
+│   │   │   │       │   │       └── syn v2.0.117 (*)
+│   │   │   │       │   ├── ptr_meta v0.3.1
+│   │   │   │       │   │   └── ptr_meta_derive v0.3.1 (proc-macro)
+│   │   │   │       │   │       ├── proc-macro2 v1.0.106 (*)
+│   │   │   │       │   │       ├── quote v1.0.45 (*)
+│   │   │   │       │   │       └── syn v2.0.117 (*)
+│   │   │   │       │   ├── rancor v0.1.1
+│   │   │   │       │   │   └── ptr_meta v0.3.1 (*)
+│   │   │   │       │   ├── rend v0.5.3
+│   │   │   │       │   └── rkyv_derive v0.8.16 (proc-macro)
+│   │   │   │       │       ├── proc-macro2 v1.0.106 (*)
+│   │   │   │       │       ├── quote v1.0.45 (*)
+│   │   │   │       │       └── syn v2.0.117 (*)
+│   │   │   │       ├── xous v0.9.70
+│   │   │   │       └── xous-api-names v0.9.71
+│   │   │   │           ├── log v0.4.29
+│   │   │   │           ├── num-derive v0.4.2 (proc-macro)
+│   │   │   │           │   ├── proc-macro2 v1.0.106 (*)
+│   │   │   │           │   ├── quote v1.0.45 (*)
+│   │   │   │           │   └── syn v2.0.117 (*)
+│   │   │   │           ├── num-traits v0.2.19
+│   │   │   │           │   [build-dependencies]
+│   │   │   │           │   └── autocfg v1.5.0
+│   │   │   │           ├── rkyv v0.8.16 (*)
+│   │   │   │           ├── xous v0.9.70
+│   │   │   │           ├── xous-api-log v0.1.69
+│   │   │   │           │   ├── log v0.4.29
+│   │   │   │           │   ├── num-derive v0.4.2 (proc-macro) (*)
+│   │   │   │           │   ├── num-traits v0.2.19 (*)
+│   │   │   │           │   ├── xous v0.9.70
+│   │   │   │           │   └── xous-ipc v0.10.10
+│   │   │   │           │       ├── bitflags v1.3.2
+│   │   │   │           │       ├── rkyv v0.8.16 (*)
+│   │   │   │           │       └── xous v0.9.70
+│   │   │   │           └── xous-ipc v0.10.10 (*)
+│   │   │   └── typenum v1.20.0
+│   │   ├── inout v0.1.4
+│   │   │   ├── block-padding v0.3.3
+│   │   │   │   └── generic-array v0.14.7 (*)
+│   │   │   └── generic-array v0.14.7 (*)
+│   │   └── zeroize v1.8.2
+│   │       └── zeroize_derive v1.4.3 (proc-macro)
+│   │           ├── proc-macro2 v1.0.106 (*)
+│   │           ├── quote v1.0.45 (*)
+│   │           └── syn v2.0.117 (*)
+│   └── zeroize v1.8.2 (*)
+├── aes-gcm v0.10.3
+│   ├── aead v0.5.2
+│   │   ├── crypto-common v0.1.7 (*)
+│   │   └── generic-array v0.14.7 (*)
+│   ├── aes v0.8.4 (*)
+│   ├── cipher v0.4.4 (*)
+│   ├── ctr v0.9.2
+│   │   └── cipher v0.4.4 (*)
+│   ├── ghash v0.5.1
+│   │   ├── opaque-debug v0.3.1
+│   │   ├── polyval v0.6.2
+│   │   │   ├── cfg-if v1.0.4
+│   │   │   ├── opaque-debug v0.3.1
+│   │   │   └── universal-hash v0.5.1
+│   │   │       ├── crypto-common v0.1.7 (*)
+│   │   │       └── subtle v2.6.1
+│   │   └── zeroize v1.8.2 (*)
+│   └── subtle v2.6.1
+├── async-channel v2.5.0 (https://github.com/smol-rs/async-channel?rev=35a63c4#35a63c45)
+│   ├── concurrent-queue v2.5.0
+│   │   └── crossbeam-utils v0.8.21
+│   ├── event-listener-strategy v0.5.4
+│   │   ├── event-listener v5.4.1 (https://github.com/smol-rs/event-listener?rev=2e9db21#2e9db212)
+│   │   │   ├── parking v2.2.1
+│   │   │   └── pin-project-lite v0.2.17
+│   │   └── pin-project-lite v0.2.17
+│   ├── futures-core v0.3.32
+│   └── pin-project-lite v0.2.17
+├── async-trait v0.1.89 (proc-macro)
+│   ├── proc-macro2 v1.0.106 (*)
+│   ├── quote v1.0.45 (*)
+│   └── syn v2.0.117 (*)
+├── base64 v0.22.1
+├── bincode v1.3.3
+│   └── serde v1.0.228
+│       ├── serde_core v1.0.228
+│       └── serde_derive v1.0.228 (proc-macro)
+│           ├── proc-macro2 v1.0.106 (*)
+│           ├── quote v1.0.45 (*)
+│           └── syn v2.0.117 (*)
+├── bytes v1.11.1
+├── cbc v0.1.2
+│   └── cipher v0.4.4 (*)
+├── chrono v0.4.44
+│   ├── num-traits v0.2.19 (*)
+│   └── serde v1.0.228 (*)
+├── ctr v0.9.2 (*)
+├── derive_more v2.1.1
+│   └── derive_more-impl v2.1.1 (proc-macro)
+│       ├── proc-macro2 v1.0.106 (*)
+│       ├── quote v1.0.45 (*)
+│       ├── syn v2.0.117 (*)
+│       └── unicode-xid v0.2.6
+│       [build-dependencies]
+│       └── rustc_version v0.4.1
+│           └── semver v1.0.28
+├── futures v0.3.32
+│   ├── futures-channel v0.3.32
+│   │   ├── futures-core v0.3.32
+│   │   └── futures-sink v0.3.32
+│   ├── futures-core v0.3.32
+│   ├── futures-executor v0.3.32
+│   │   ├── futures-core v0.3.32
+│   │   ├── futures-task v0.3.32
+│   │   └── futures-util v0.3.32
+│   │       ├── futures-channel v0.3.32 (*)
+│   │       ├── futures-core v0.3.32
+│   │       ├── futures-io v0.3.32
+│   │       ├── futures-macro v0.3.32 (proc-macro)
+│   │       │   ├── proc-macro2 v1.0.106 (*)
+│   │       │   ├── quote v1.0.45 (*)
+│   │       │   └── syn v2.0.117 (*)
+│   │       ├── futures-sink v0.3.32
+│   │       ├── futures-task v0.3.32
+│   │       ├── memchr v2.8.0
+│   │       ├── pin-project-lite v0.2.17
+│   │       └── slab v0.4.12
+│   ├── futures-io v0.3.32
+│   ├── futures-sink v0.3.32
+│   ├── futures-task v0.3.32
+│   └── futures-util v0.3.32 (*)
+├── futures-timer v3.0.3 (https://github.com/async-rs/futures-timer?rev=07dbe53#07dbe53d)
+├── hex v0.4.3
+├── hkdf v0.12.4
+│   └── hmac v0.12.1
+│       └── digest v0.10.7
+│           ├── block-buffer v0.10.4
+│           │   └── generic-array v0.14.7 (*)
+│           ├── crypto-common v0.1.7 (*)
+│           └── subtle v2.6.1
+├── hmac v0.12.1 (*)
+├── http v1.4.0
+│   ├── bytes v1.11.1
+│   └── itoa v1.0.18
+├── libsignal-core v0.1.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45)
+│   ├── curve25519-dalek v4.1.3 (/home/tunnell/precursor-signal/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek)
+│   │   ├── cfg-if v1.0.4
+│   │   ├── digest v0.10.7 (*)
+│   │   ├── rand_core v0.6.4 (*)
+│   │   ├── serde v1.0.228 (*)
+│   │   ├── subtle v2.6.1
+│   │   └── zeroize v1.8.2 (*)
+│   │   [build-dependencies]
+│   │   └── rustc_version v0.4.1 (*)
+│   ├── derive_more v2.1.1 (*)
+│   ├── displaydoc v0.2.5 (proc-macro)
+│   │   ├── proc-macro2 v1.0.106 (*)
+│   │   ├── quote v1.0.45 (*)
+│   │   └── syn v2.0.117 (*)
+│   ├── libsignal-debug v0.91.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45)
+│   │   └── cfg-if v1.0.4
+│   ├── log v0.4.29
+│   ├── rand v0.9.4
+│   │   ├── rand_chacha v0.9.0
+│   │   │   ├── ppv-lite86 v0.2.21
+│   │   │   │   └── zerocopy v0.8.48
+│   │   │   │       └── zerocopy-derive v0.8.48 (proc-macro)
+│   │   │   │           ├── proc-macro2 v1.0.106 (*)
+│   │   │   │           ├── quote v1.0.45 (*)
+│   │   │   │           └── syn v2.0.117 (*)
+│   │   │   └── rand_core v0.9.5
+│   │   │       └── getrandom v0.3.4
+│   │   │           └── cfg-if v1.0.4
+│   │   └── rand_core v0.9.5 (*)
+│   ├── sha2 v0.10.8 (https://github.com/betrusted-io/hashes.git?branch=sha2-v0.10.8-xous#161da48e)
+│   │   ├── cfg-if v1.0.4
+│   │   └── digest v0.10.7 (*)
+│   ├── subtle v2.6.1
+│   ├── thiserror v2.0.18
+│   │   └── thiserror-impl v2.0.18 (proc-macro)
+│   │       ├── proc-macro2 v1.0.106 (*)
+│   │       ├── quote v1.0.45 (*)
+│   │       └── syn v2.0.117 (*)
+│   ├── uuid v1.23.1
+│   │   └── serde_core v1.0.228
+│   ├── x25519-dalek v2.0.1
+│   │   ├── curve25519-dalek v4.1.3 (/home/tunnell/precursor-signal/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek) (*)
+│   │   ├── rand_core v0.6.4 (*)
+│   │   └── zeroize v1.8.2 (*)
+│   └── zerocopy v0.8.48 (*)
+├── libsignal-protocol v0.1.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45)
+│   ├── aes v0.8.4 (*)
+│   ├── aes-gcm-siv v0.11.1
+│   │   ├── aead v0.5.2 (*)
+│   │   ├── aes v0.8.4 (*)
+│   │   ├── cipher v0.4.4 (*)
+│   │   ├── ctr v0.9.2 (*)
+│   │   ├── polyval v0.6.2 (*)
+│   │   ├── subtle v2.6.1
+│   │   └── zeroize v1.8.2 (*)
+│   ├── assert_matches v1.5.0
+│   ├── async-trait v0.1.89 (proc-macro) (*)
+│   ├── bitflags v2.11.1
+│   ├── const-str v1.1.0
+│   ├── ctr v0.9.2 (*)
+│   ├── data-encoding-macro v0.1.20
+│   │   ├── data-encoding v2.11.0
+│   │   └── data-encoding-macro-internal v0.1.18 (proc-macro)
+│   │       ├── data-encoding v2.11.0
+│   │       └── syn v1.0.109
+│   │           ├── proc-macro2 v1.0.106 (*)
+│   │           ├── quote v1.0.45 (*)
+│   │           └── unicode-ident v1.0.24
+│   ├── derive-where v1.6.1 (proc-macro)
+│   │   ├── proc-macro2 v1.0.106 (*)
+│   │   ├── quote v1.0.45 (*)
+│   │   └── syn v2.0.117 (*)
+│   ├── derive_more v2.1.1 (*)
+│   ├── displaydoc v0.2.5 (proc-macro) (*)
+│   ├── hex v0.4.3
+│   ├── hkdf v0.12.4 (*)
+│   ├── hmac v0.12.1 (*)
+│   ├── indexmap v2.14.0
+│   │   ├── equivalent v1.0.2
+│   │   └── hashbrown v0.17.0
+│   ├── itertools v0.14.0
+│   │   └── either v1.15.0
+│   ├── libcrux-ml-kem v0.0.8
+│   │   ├── hax-lib v0.3.6
+│   │   │   └── hax-lib-macros v0.3.6 (proc-macro)
+│   │   │       ├── proc-macro2 v1.0.106 (*)
+│   │   │       ├── quote v1.0.45 (*)
+│   │   │       └── syn v2.0.117 (*)
+│   │   ├── libcrux-intrinsics v0.0.6
+│   │   │   └── hax-lib v0.3.6 (*)
+│   │   ├── libcrux-platform v0.0.3
+│   │   │   └── libc v0.2.186
+│   │   ├── libcrux-secrets v0.0.5
+│   │   │   └── hax-lib v0.3.6 (*)
+│   │   ├── libcrux-sha3 v0.0.8
+│   │   │   ├── hax-lib v0.3.6 (*)
+│   │   │   ├── libcrux-intrinsics v0.0.6 (*)
+│   │   │   ├── libcrux-platform v0.0.3 (*)
+│   │   │   └── libcrux-traits v0.0.6
+│   │   │       ├── libcrux-secrets v0.0.5 (*)
+│   │   │       └── rand v0.9.4 (*)
+│   │   └── libcrux-traits v0.0.6 (*)
+│   ├── libsignal-core v0.1.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45) (*)
+│   ├── libsignal-debug v0.91.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45) (*)
+│   ├── log v0.4.29
+│   ├── prost v0.14.3
+│   │   ├── bytes v1.11.1
+│   │   └── prost-derive v0.14.3 (proc-macro)
+│   │       ├── anyhow v1.0.102
+│   │       ├── itertools v0.14.0
+│   │       │   └── either v1.15.0
+│   │       ├── proc-macro2 v1.0.106 (*)
+│   │       ├── quote v1.0.45 (*)
+│   │       └── syn v2.0.117 (*)
+│   ├── rand v0.9.4 (*)
+│   ├── rayon v1.12.0
+│   │   ├── either v1.15.0
+│   │   └── rayon-core v1.13.0
+│   │       ├── crossbeam-deque v0.8.6
+│   │       │   ├── crossbeam-epoch v0.9.18
+│   │       │   │   └── crossbeam-utils v0.8.21
+│   │       │   └── crossbeam-utils v0.8.21
+│   │       └── crossbeam-utils v0.8.21
+│   ├── serde v1.0.228 (*)
+│   ├── sha2 v0.10.8 (https://github.com/betrusted-io/hashes.git?branch=sha2-v0.10.8-xous#161da48e) (*)
+│   ├── signal-crypto v0.1.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45)
+│   │   ├── aes v0.8.4 (*)
+│   │   ├── cbc v0.1.2 (*)
+│   │   ├── ctr v0.9.2 (*)
+│   │   ├── derive_more v2.1.1 (*)
+│   │   ├── displaydoc v0.2.5 (proc-macro) (*)
+│   │   ├── ghash v0.5.1 (*)
+│   │   ├── hkdf v0.12.4 (*)
+│   │   ├── hmac v0.12.1 (*)
+│   │   ├── hpke-rs v0.6.1
+│   │   │   ├── hpke-rs-crypto v0.6.1
+│   │   │   │   ├── rand_core v0.9.5 (*)
+│   │   │   │   └── zeroize v1.8.2 (*)
+│   │   │   ├── libcrux-sha3 v0.0.8 (*)
+│   │   │   ├── log v0.4.29
+│   │   │   ├── rand_core v0.9.5 (*)
+│   │   │   ├── subtle v2.6.1
+│   │   │   └── zeroize v1.8.2 (*)
+│   │   ├── hpke-rs-crypto v0.6.1 (*)
+│   │   ├── libsignal-core v0.1.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45) (*)
+│   │   ├── libsignal-debug v0.91.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45) (*)
+│   │   ├── rand_chacha v0.9.0 (*)
+│   │   ├── rand_core v0.9.5 (*)
+│   │   ├── sha1 v0.10.6
+│   │   │   ├── cfg-if v1.0.4
+│   │   │   └── digest v0.10.7 (*)
+│   │   ├── sha2 v0.10.8 (https://github.com/betrusted-io/hashes.git?branch=sha2-v0.10.8-xous#161da48e) (*)
+│   │   ├── subtle v2.6.1
+│   │   ├── thiserror v2.0.18 (*)
+│   │   └── zeroize v1.8.2 (*)
+│   ├── spqr v1.5.1 (https://github.com/signalapp/SparsePostQuantumRatchet.git?tag=v1.5.1#f2589fef)
+│   │   ├── curve25519-dalek v4.1.3 (/home/tunnell/precursor-signal/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek) (*)
+│   │   ├── displaydoc v0.2.5 (proc-macro) (*)
+│   │   ├── hax-lib v0.3.6 (*)
+│   │   ├── hkdf v0.12.4 (*)
+│   │   ├── libcrux-hmac v0.0.6
+│   │   │   ├── libcrux-hacl-rs v0.0.4
+│   │   │   │   └── libcrux-macros v0.0.3 (proc-macro)
+│   │   │   │       ├── quote v1.0.45 (*)
+│   │   │   │       └── syn v2.0.117 (*)
+│   │   │   ├── libcrux-macros v0.0.3 (proc-macro) (*)
+│   │   │   └── libcrux-sha2 v0.0.6
+│   │   │       ├── libcrux-hacl-rs v0.0.4 (*)
+│   │   │       ├── libcrux-macros v0.0.3 (proc-macro) (*)
+│   │   │       └── libcrux-traits v0.0.6 (*)
+│   │   ├── libcrux-ml-kem v0.0.8 (*)
+│   │   ├── log v0.4.29
+│   │   ├── num_enum v0.7.6
+│   │   │   ├── num_enum_derive v0.7.6 (proc-macro)
+│   │   │   │   ├── proc-macro-crate v3.5.0
+│   │   │   │   │   └── toml_edit v0.25.11+spec-1.1.0
+│   │   │   │   │       ├── indexmap v2.14.0
+│   │   │   │   │       │   ├── equivalent v1.0.2
+│   │   │   │   │       │   └── hashbrown v0.17.0
+│   │   │   │   │       ├── toml_datetime v1.1.1+spec-1.1.0
+│   │   │   │   │       ├── toml_parser v1.1.2+spec-1.1.0
+│   │   │   │   │       │   └── winnow v1.0.2
+│   │   │   │   │       └── winnow v1.0.2
+│   │   │   │   ├── proc-macro2 v1.0.106 (*)
+│   │   │   │   ├── quote v1.0.45 (*)
+│   │   │   │   └── syn v2.0.117 (*)
+│   │   │   └── rustversion v1.0.22 (proc-macro)
+│   │   ├── prost v0.14.3 (*)
+│   │   ├── rand v0.9.4 (*)
+│   │   ├── rand_core v0.9.5 (*)
+│   │   ├── sha2 v0.10.8 (https://github.com/betrusted-io/hashes.git?branch=sha2-v0.10.8-xous#161da48e) (*)
+│   │   ├── sorted-vec v0.8.10
+│   │   └── thiserror v2.0.18 (*)
+│   │   [build-dependencies]
+│   │   └── prost-build v0.14.3
+│   │       ├── heck v0.5.0
+│   │       ├── itertools v0.14.0 (*)
+│   │       ├── log v0.4.29
+│   │       ├── multimap v0.10.1
+│   │       ├── petgraph v0.8.3
+│   │       │   ├── fixedbitset v0.5.7
+│   │       │   ├── hashbrown v0.15.5
+│   │       │   │   └── foldhash v0.1.5
+│   │       │   └── indexmap v2.14.0 (*)
+│   │       ├── prettyplease v0.2.37
+│   │       │   ├── proc-macro2 v1.0.106 (*)
+│   │       │   └── syn v2.0.117 (*)
+│   │       ├── prost v0.14.3
+│   │       │   ├── bytes v1.11.1
+│   │       │   └── prost-derive v0.14.3 (proc-macro) (*)
+│   │       ├── prost-types v0.14.3
+│   │       │   └── prost v0.14.3 (*)
+│   │       ├── regex v1.12.3
+│   │       │   ├── aho-corasick v1.1.4
+│   │       │   │   └── memchr v2.8.0
+│   │       │   ├── memchr v2.8.0
+│   │       │   ├── regex-automata v0.4.14
+│   │       │   │   ├── aho-corasick v1.1.4 (*)
+│   │       │   │   ├── memchr v2.8.0
+│   │       │   │   └── regex-syntax v0.8.10
+│   │       │   └── regex-syntax v0.8.10
+│   │       ├── syn v2.0.117 (*)
+│   │       └── tempfile v3.27.0
+│   │           ├── fastrand v2.4.1
+│   │           ├── getrandom v0.4.2
+│   │           │   ├── cfg-if v1.0.4
+│   │           │   └── libc v0.2.186
+│   │           ├── once_cell v1.21.4
+│   │           └── rustix v1.1.4
+│   │               ├── bitflags v2.11.1
+│   │               └── linux-raw-sys v0.12.1
+│   ├── subtle v2.6.1
+│   ├── thiserror v2.0.18 (*)
+│   ├── uuid v1.23.1 (*)
+│   └── zerocopy v0.8.48 (*)
+│   [build-dependencies]
+│   └── prost-build v0.14.3 (*)
+├── prost v0.13.5
+│   ├── bytes v1.11.1
+│   └── prost-derive v0.13.5 (proc-macro)
+│       ├── anyhow v1.0.102
+│       ├── itertools v0.14.0 (*)
+│       ├── proc-macro2 v1.0.106 (*)
+│       ├── quote v1.0.45 (*)
+│       └── syn v2.0.117 (*)
+├── rand v0.9.4 (*)
+├── rand_core v0.6.4 (*)
+├── serde v1.0.228 (*)
+├── serde_json v1.0.149
+│   ├── itoa v1.0.18
+│   ├── memchr v2.8.0
+│   ├── serde_core v1.0.228
+│   └── zmij v1.0.21
+├── sha2 v0.10.8 (https://github.com/betrusted-io/hashes.git?branch=sha2-v0.10.8-xous#161da48e) (*)
+├── signal-crypto v0.1.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45) (*)
+├── thiserror v2.0.18 (*)
+├── tracing v0.1.44
+│   ├── log v0.4.29
+│   ├── pin-project-lite v0.2.17
+│   ├── tracing-attributes v0.1.31 (proc-macro)
+│   │   ├── proc-macro2 v1.0.106 (*)
+│   │   ├── quote v1.0.45 (*)
+│   │   └── syn v2.0.117 (*)
+│   └── tracing-core v0.1.36
+│       └── once_cell v1.21.4
+├── tracing-futures v0.2.5
+│   ├── pin-project v1.1.12
+│   │   └── pin-project-internal v1.1.12 (proc-macro)
+│   │       ├── proc-macro2 v1.0.106 (*)
+│   │       ├── quote v1.0.45 (*)
+│   │       └── syn v2.0.117 (*)
+│   └── tracing v0.1.44 (*)
+├── url v2.5.8
+│   ├── form_urlencoded v1.2.2
+│   │   └── percent-encoding v2.3.2
+│   ├── idna v1.1.0
+│   │   ├── idna_adapter v1.2.2
+│   │   │   ├── icu_normalizer v2.2.0
+│   │   │   │   ├── icu_collections v2.2.0
+│   │   │   │   │   ├── displaydoc v0.2.5 (proc-macro) (*)
+│   │   │   │   │   ├── potential_utf v0.1.5
+│   │   │   │   │   │   └── zerovec v0.11.6
+│   │   │   │   │   │       ├── yoke v0.8.2
+│   │   │   │   │   │       │   ├── stable_deref_trait v1.2.1
+│   │   │   │   │   │       │   ├── yoke-derive v0.8.2 (proc-macro)
+│   │   │   │   │   │       │   │   ├── proc-macro2 v1.0.106 (*)
+│   │   │   │   │   │       │   │   ├── quote v1.0.45 (*)
+│   │   │   │   │   │       │   │   ├── syn v2.0.117 (*)
+│   │   │   │   │   │       │   │   └── synstructure v0.13.2
+│   │   │   │   │   │       │   │       ├── proc-macro2 v1.0.106 (*)
+│   │   │   │   │   │       │   │       ├── quote v1.0.45 (*)
+│   │   │   │   │   │       │   │       └── syn v2.0.117 (*)
+│   │   │   │   │   │       │   └── zerofrom v0.1.7
+│   │   │   │   │   │       │       └── zerofrom-derive v0.1.7 (proc-macro)
+│   │   │   │   │   │       │           ├── proc-macro2 v1.0.106 (*)
+│   │   │   │   │   │       │           ├── quote v1.0.45 (*)
+│   │   │   │   │   │       │           ├── syn v2.0.117 (*)
+│   │   │   │   │   │       │           └── synstructure v0.13.2 (*)
+│   │   │   │   │   │       ├── zerofrom v0.1.7 (*)
+│   │   │   │   │   │       └── zerovec-derive v0.11.3 (proc-macro)
+│   │   │   │   │   │           ├── proc-macro2 v1.0.106 (*)
+│   │   │   │   │   │           ├── quote v1.0.45 (*)
+│   │   │   │   │   │           └── syn v2.0.117 (*)
+│   │   │   │   │   ├── utf8_iter v1.0.4
+│   │   │   │   │   ├── yoke v0.8.2 (*)
+│   │   │   │   │   ├── zerofrom v0.1.7 (*)
+│   │   │   │   │   └── zerovec v0.11.6 (*)
+│   │   │   │   ├── icu_normalizer_data v2.2.0
+│   │   │   │   ├── icu_provider v2.2.0
+│   │   │   │   │   ├── displaydoc v0.2.5 (proc-macro) (*)
+│   │   │   │   │   ├── icu_locale_core v2.2.0
+│   │   │   │   │   │   ├── displaydoc v0.2.5 (proc-macro) (*)
+│   │   │   │   │   │   ├── litemap v0.8.2
+│   │   │   │   │   │   ├── tinystr v0.8.3
+│   │   │   │   │   │   │   ├── displaydoc v0.2.5 (proc-macro) (*)
+│   │   │   │   │   │   │   └── zerovec v0.11.6 (*)
+│   │   │   │   │   │   ├── writeable v0.6.3
+│   │   │   │   │   │   └── zerovec v0.11.6 (*)
+│   │   │   │   │   ├── writeable v0.6.3
+│   │   │   │   │   ├── yoke v0.8.2 (*)
+│   │   │   │   │   ├── zerofrom v0.1.7 (*)
+│   │   │   │   │   ├── zerotrie v0.2.4
+│   │   │   │   │   │   ├── displaydoc v0.2.5 (proc-macro) (*)
+│   │   │   │   │   │   ├── yoke v0.8.2 (*)
+│   │   │   │   │   │   └── zerofrom v0.1.7 (*)
+│   │   │   │   │   └── zerovec v0.11.6 (*)
+│   │   │   │   ├── smallvec v1.15.1
+│   │   │   │   └── zerovec v0.11.6 (*)
+│   │   │   └── icu_properties v2.2.0
+│   │   │       ├── icu_collections v2.2.0 (*)
+│   │   │       ├── icu_locale_core v2.2.0 (*)
+│   │   │       ├── icu_properties_data v2.2.0
+│   │   │       ├── icu_provider v2.2.0 (*)
+│   │   │       ├── zerotrie v0.2.4 (*)
+│   │   │       └── zerovec v0.11.6 (*)
+│   │   ├── smallvec v1.15.1
+│   │   └── utf8_iter v1.0.4
+│   ├── percent-encoding v2.3.2
+│   ├── serde v1.0.228 (*)
+│   └── serde_derive v1.0.228 (proc-macro) (*)
+├── usernames v0.1.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45)
+│   ├── curve25519-dalek v4.1.3 (/home/tunnell/precursor-signal/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek) (*)
+│   ├── displaydoc v0.2.5 (proc-macro) (*)
+│   ├── hkdf v0.12.4 (*)
+│   ├── hmac v0.12.1 (*)
+│   ├── log v0.4.29
+│   ├── poksho v0.7.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45)
+│   │   ├── curve25519-dalek v4.1.3 (/home/tunnell/precursor-signal/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek) (*)
+│   │   ├── hmac v0.12.1 (*)
+│   │   └── sha2 v0.10.8 (https://github.com/betrusted-io/hashes.git?branch=sha2-v0.10.8-xous#161da48e) (*)
+│   ├── prost v0.14.3 (*)
+│   ├── rand v0.9.4 (*)
+│   ├── sha2 v0.10.8 (https://github.com/betrusted-io/hashes.git?branch=sha2-v0.10.8-xous#161da48e) (*)
+│   ├── signal-crypto v0.1.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45) (*)
+│   ├── subtle v2.6.1
+│   └── thiserror v2.0.18 (*)
+│   [build-dependencies]
+│   └── prost-build v0.14.3 (*)
+├── uuid v1.23.1 (*)
+└── zkgroup v0.9.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45)
+    ├── aes v0.8.4 (*)
+    ├── aes-gcm-siv v0.11.1 (*)
+    ├── bincode v1.3.3 (*)
+    ├── const-str v1.1.0
+    ├── curve25519-dalek v4.1.3 (/home/tunnell/precursor-signal/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek) (*)
+    ├── derive-where v1.6.1 (proc-macro) (*)
+    ├── derive_more v2.1.1 (*)
+    ├── displaydoc v0.2.5 (proc-macro) (*)
+    ├── hex v0.4.3
+    ├── hkdf v0.12.4 (*)
+    ├── libsignal-account-keys v0.1.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45)
+    │   ├── argon2 v0.5.3
+    │   │   ├── base64ct v1.8.3
+    │   │   ├── blake2 v0.10.6
+    │   │   │   └── digest v0.10.7 (*)
+    │   │   ├── password-hash v0.5.0
+    │   │   │   ├── base64ct v1.8.3
+    │   │   │   ├── rand_core v0.6.4 (*)
+    │   │   │   └── subtle v2.6.1
+    │   │   └── zeroize v1.8.2 (*)
+    │   ├── derive_more v2.1.1 (*)
+    │   ├── displaydoc v0.2.5 (proc-macro) (*)
+    │   ├── hkdf v0.12.4 (*)
+    │   ├── libsignal-core v0.1.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45) (*)
+    │   ├── partial-default v0.1.0
+    │   │   └── partial-default-derive v0.1.0 (proc-macro)
+    │   │       ├── proc-macro2 v1.0.106 (*)
+    │   │       ├── quote v1.0.45 (*)
+    │   │       └── syn v2.0.117 (*)
+    │   ├── protobuf v3.7.2
+    │   │   ├── once_cell v1.21.4
+    │   │   ├── protobuf-support v3.7.2
+    │   │   │   └── thiserror v1.0.69
+    │   │   │       └── thiserror-impl v1.0.69 (proc-macro)
+    │   │   │           ├── proc-macro2 v1.0.106 (*)
+    │   │   │           ├── quote v1.0.45 (*)
+    │   │   │           └── syn v2.0.117 (*)
+    │   │   └── thiserror v1.0.69 (*)
+    │   ├── rand v0.9.4 (*)
+    │   ├── rand_core v0.9.5 (*)
+    │   ├── serde v1.0.228 (*)
+    │   ├── sha2 v0.10.8 (https://github.com/betrusted-io/hashes.git?branch=sha2-v0.10.8-xous#161da48e) (*)
+    │   ├── signal-crypto v0.1.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45) (*)
+    │   ├── static_assertions v1.1.0
+    │   ├── thiserror v2.0.18 (*)
+    │   └── zerocopy v0.8.48 (*)
+    │   [build-dependencies]
+    │   └── protobuf-codegen v3.7.2
+    │       ├── anyhow v1.0.102
+    │       ├── once_cell v1.21.4
+    │       ├── protobuf v3.7.2
+    │       │   ├── once_cell v1.21.4
+    │       │   ├── protobuf-support v3.7.2
+    │       │   │   └── thiserror v1.0.69
+    │       │   │       └── thiserror-impl v1.0.69 (proc-macro) (*)
+    │       │   └── thiserror v1.0.69 (*)
+    │       ├── protobuf-parse v3.7.2
+    │       │   ├── anyhow v1.0.102
+    │       │   ├── indexmap v2.14.0 (*)
+    │       │   ├── log v0.4.29
+    │       │   ├── protobuf v3.7.2 (*)
+    │       │   ├── protobuf-support v3.7.2 (*)
+    │       │   ├── tempfile v3.27.0 (*)
+    │       │   ├── thiserror v1.0.69 (*)
+    │       │   └── which v4.4.2
+    │       │       ├── either v1.15.0
+    │       │       ├── home v0.5.12
+    │       │       └── rustix v0.38.44
+    │       │           ├── bitflags v2.11.1
+    │       │           └── linux-raw-sys v0.4.15
+    │       ├── regex v1.12.3 (*)
+    │       ├── tempfile v3.27.0 (*)
+    │       └── thiserror v1.0.69 (*)
+    ├── libsignal-core v0.1.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45) (*)
+    ├── partial-default v0.1.0 (*)
+    ├── poksho v0.7.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45) (*)
+    ├── rand v0.9.4 (*)
+    ├── rayon v1.12.0 (*)
+    ├── serde v1.0.228 (*)
+    ├── sha2 v0.10.8 (https://github.com/betrusted-io/hashes.git?branch=sha2-v0.10.8-xous#161da48e) (*)
+    ├── static_assertions v1.1.0
+    ├── subtle v2.6.1
+    ├── thiserror v2.0.18 (*)
+    ├── uuid v1.23.1 (*)
+    └── zkcredential v0.1.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45)
+        ├── cfg-if v1.0.4
+        ├── curve25519-dalek v4.1.3 (/home/tunnell/precursor-signal/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek) (*)
+        ├── derive-where v1.6.1 (proc-macro) (*)
+        ├── displaydoc v0.2.5 (proc-macro) (*)
+        ├── partial-default v0.1.0 (*)
+        ├── poksho v0.7.0 (https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45) (*)
+        ├── rayon v1.12.0 (*)
+        ├── serde v1.0.228 (*)
+        ├── sha2 v0.10.8 (https://github.com/betrusted-io/hashes.git?branch=sha2-v0.10.8-xous#161da48e) (*)
+        ├── subtle v2.6.1
+        └── thiserror v2.0.18 (*)
+[build-dependencies]
+└── prost-build v0.13.5
+    ├── heck v0.5.0
+    ├── itertools v0.14.0 (*)
+    ├── log v0.4.29
+    ├── multimap v0.10.1
+    ├── once_cell v1.21.4
+    ├── petgraph v0.7.1
+    │   ├── fixedbitset v0.5.7
+    │   └── indexmap v2.14.0 (*)
+    ├── prettyplease v0.2.37 (*)
+    ├── prost v0.13.5
+    │   ├── bytes v1.11.1
+    │   └── prost-derive v0.13.5 (proc-macro) (*)
+    ├── prost-types v0.13.5
+    │   └── prost v0.13.5 (*)
+    ├── regex v1.12.3 (*)
+    ├── syn v2.0.117 (*)
+    └── tempfile v3.27.0 (*)
+[dev-dependencies]
+├── anyhow v1.0.102
+└── tokio v1.52.2
+    ├── pin-project-lite v0.2.17
+    └── tokio-macros v2.7.0 (proc-macro)
+        ├── proc-macro2 v1.0.106 (*)
+        ├── quote v1.0.45 (*)
+        └── syn v2.0.117 (*)

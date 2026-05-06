@@ -52,7 +52,14 @@ http = "1"
 tracing = { version = "0.1", features = ["log"] }
 tracing-futures = "0.2"
 
-tokio = { version = "1.0", features = ["macros"] }
+# Stage 6.5 verification (2026-05-06): tokio was previously declared
+# here as a normal dep — left over from upstream's `#[tokio::test]`
+# annotations on async tests. After the Stage 6 transport replacement
+# every src/ file mentioning `tokio` does so only in comments
+# (transport.rs:326, websocket/mod.rs:233, push_service/mod.rs:141).
+# Dropping the normal dep saves ~300 KB of dep-graph size and removes
+# the only Stage 6.5 cargo-tree match for the C-runtime regex; see
+# stage/REPORT-6.5.md.
 
 # Stage 6.1: replaces tokio::time::interval_at in src/websocket/mod.rs.
 # futures-timer is sync at the leaf (single OS-thread parker) but
