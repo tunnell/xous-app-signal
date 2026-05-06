@@ -81,27 +81,33 @@ futures-timer = { git = "https://github.com/async-rs/futures-timer", rev = "07db
 git = "https://github.com/betrusted-io/ring-xous"
 rev = "5f86cb10bebd521a45fb3abb06995200aeda2948"
 
-# curve25519-dalek: vendored upstream 4.1.3 + lizard module port from
-# signalapp/curve25519-dalek (signal-curve25519-4.1.3 tag). Software-only,
-# no HW accelerator. Per dev/bunnie guidance (2026-05): "design around
-# software-only crypto-libraries for now; profile and figure out what
-# needs acceleration before putting a lot of effort into bringing the
-# hardware accelerators up to date." The Precursor curve25519 IP core
-# is Precursor-only (not on the Bao1x tape-out); a different PKE engine
-# exists on the chip. The HW-accel decision is deferred until profiling
-# tells us where the time is actually spent.
+# curve25519-dalek: vendored `betrusted-io/curve25519-dalek` fork +
+# version bump 4.1.2 → 4.1.3 + lizard module port. Carries the driver
+# for Precursor's curve25519 IP-core HW accelerator at
+# vendor/curve25519-dalek/curve25519-dalek/src/backend/serial/u32e/.
 #
-# Plug-in seam for HW acceleration later: swap this `[patch.crates-io]`
-# entry to point at a HW-accelerated fork (e.g. one carrying a u32e
-# backend for Precursor's IP core, or a fork wrapping the Bao1x PKE
-# engine). The lizard-module port is additive, so any HW-accelerated
-# fork that has it will also work.
+# **Precursor-only.** The IP core is on Precursor only (per bunnie); the
+# Bao1x tape-out has a different PKE engine and would need a separate
+# backend. We're targeting Precursor for now; Bao1x support is a future
+# stage swap.
 #
-# vendor/curve25519-dalek/ contains: upstream curve25519-dalek 4.1.3
-# (verbatim from `curve25519-4.1.3` tag) + curve25519-dalek-derive 0.1.1
-# + the lizard module (~6 files in src/lizard/) + a single-line edit to
-# src/lib.rs to wire `pub mod lizard;`. That's the entire delta — easy
-# to keep current with upstream and easy to audit.
+# The u32e backend is selected at compile time by setting
+# `--cfg curve25519_dalek_backend="u32e_backend"`. We do that
+# automatically for the rv32-xous target via .cargo/config.toml; on
+# hosted Linux the same code falls back to the portable Rust backend, so
+# tests/CI run unaffected.
+#
+# Our delta over the upstream betrusted-io fork:
+#   - bump version 4.1.2 → 4.1.3 in curve25519-dalek/Cargo.toml so the
+#     [patch.crates-io] redirect matches what libsignal's zkgroup
+#     declares (curve25519-dalek = "4.1.3")
+#   - port the src/lizard/ module (~6 files) from
+#     signalapp/curve25519-dalek (signal-curve25519-4.1.3 tag) — adds
+#     4 RistrettoPoint methods used by zkgroup. Additive vs upstream;
+#     no API conflicts.
+#   - one `pub mod lizard;` line in src/lib.rs.
+# That's the entire delta — easy to keep current with the betrusted-io
+# fork and easy to audit.
 [patch.crates-io.curve25519-dalek]
 path = "vendor/curve25519-dalek/curve25519-dalek"
 

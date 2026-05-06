@@ -42,8 +42,8 @@
     unused_lifetimes,
     unused_qualifications
 )]
-// Requires MSRV 1.77 as it does not allow build.rs gating
-#![allow(unexpected_cfgs)]
+// needed for engine25519-as.
+#![recursion_limit = "512"]
 
 //------------------------------------------------------------------------
 // External dependencies:
@@ -65,6 +65,12 @@ pub use digest;
 // Internal macros. Must come first!
 #[macro_use]
 pub(crate) mod macros;
+
+//To consider upstreaming, we likely can't do this. Consider the "panic_on_sw_eval" feature
+#[allow(unused_imports)]
+#[cfg(curve25519_dalek_backend = "u32e_backend")]
+#[macro_use]
+extern crate engine25519_as;
 
 //------------------------------------------------------------------------
 // curve25519-dalek public modules
@@ -105,8 +111,10 @@ pub(crate) mod field;
 // Arithmetic backends (using u32, u64, etc) live here
 #[cfg(docsrs)]
 pub mod backend;
-#[cfg(not(docsrs))]
+#[cfg(all(not(docsrs), not(curve25519_dalek_backend = "u32e_backend")))]
 pub(crate) mod backend;
+#[cfg(curve25519_dalek_backend = "u32e_backend")]
+pub mod backend;
 
 // Generic code for window lookups
 pub(crate) mod window;

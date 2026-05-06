@@ -1,0 +1,18 @@
+# Per-target Cargo flags.
+#
+# `curve25519_dalek_backend = "u32e_backend"` activates the Precursor-only
+# curve25519 IP-core HW accelerator inside the vendored
+# `betrusted-io/curve25519-dalek` fork (driver at
+# vendor/curve25519-dalek/curve25519-dalek/src/backend/serial/u32e/).
+# Set ONLY for rv32-xous builds — on hosted Linux the same code falls back
+# to the portable Rust backend, which is what we want for tests.
+#
+# This is a **Precursor-only** acceleration choice. Bao1x has a different
+# PKE engine and would need a separate backend; the design accommodates a
+# future swap by leaving this cfg target-scoped. Per docs/REPORT.md
+# Decision 6.
+
+[target.riscv32imac-unknown-xous-elf]
+rustflags = [
+    "--cfg", "curve25519_dalek_backend=\"u32e_backend\"",
+]

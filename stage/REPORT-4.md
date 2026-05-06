@@ -10,13 +10,26 @@ This stage was originally going to be a single end-to-end pass: add presage as a
 
 `crates/presage-store-pddb/Cargo.toml` declares `presage = { git = "https://github.com/whisperfish/presage", rev = "600c4ed" }`. The full Whisperfish stack (libsignal v0.91.0 by tag, libsignal-service-rs HEAD by rev, presage HEAD by rev) is now resolvable. Hosted-mode `cargo build -p presage-store-pddb` succeeds.
 
-### 2. curve25519-dalek strategy: vendored upstream 4.1.3 + lizard module port (software-only)
+### 2. curve25519-dalek strategy: vendored `betrusted-io/curve25519-dalek` (Precursor HW-accelerated) + version bump + lizard port
 
-Per bunnie's confirmation (2026-05): the curve25519 IP core is **Precursor-only** — not on the Bao1x tape-out chip (which has a different PKE engine). His recommendation: "use generic software-only cryptography libraries first, and then profile and figure out what needs acceleration before putting a lot of effort in to bring the hardware accelerators up to date. I've been surprised at what takes the most time."
+The Precursor curve25519 IP core is **Precursor-only** (per bunnie, 2026-05) — not on the Bao1x tape-out, which has a different PKE engine. We're targeting **Precursor first**; Bao1x is a future swap (different backend would need to be written).
 
-We follow that. The vendored copy at `vendor/curve25519-dalek/` is **upstream `dalek-cryptography/curve25519-dalek` at tag `curve25519-4.1.3`** (no version bump needed — already 4.1.3) plus the `src/lizard/` module ported verbatim from `signalapp/curve25519-dalek`. The lizard port adds 4 `RistrettoPoint` methods used by zkgroup (`lizard_encode<H>`, `lizard_decode<H>`, `from_uniform_bytes_single_elligator`, `decode_253_bits`). All additive — no API changes to existing types.
+The vendored copy at `vendor/curve25519-dalek/` is `betrusted-io/curve25519-dalek` (carries the u32e IP-core driver at `curve25519-dalek/src/backend/serial/u32e/`), with three small modifications:
 
-Total delta over upstream: 6 files copied (`src/lizard/{mod.rs, lizard_ristretto.rs, lizard_constants.rs, jacobi_quartic.rs, u32_constants.rs, u64_constants.rs}`) plus one `pub mod lizard;` line in `lib.rs`. Easy to keep current with upstream curve25519-dalek security patches; easy to audit.
+1. Manifest version bumped `4.1.2` → `4.1.3` so the `[patch.crates-io]` redirect matches what libsignal's zkgroup declares (`curve25519-dalek = "4.1.3"`).
+2. The `src/lizard/` module ported verbatim from `signalapp/curve25519-dalek` (`signal-curve25519-4.1.3` tag): 4 `RistrettoPoint` methods used by zkgroup (`lizard_encode<H>`, `lizard_decode<H>`, `from_uniform_bytes_single_elligator`, `decode_253_bits`). Additive vs the betrusted-io fork — no API conflicts.
+3. One `pub mod lizard;` line in `src/lib.rs`.
+
+That's the entire delta over upstream betrusted-io.
+
+**HW acceleration activation.** The u32e backend is selected at compile time by `--cfg curve25519_dalek_backend="u32e_backend"`. We auto-set this for rv32-xous via `.cargo/config.toml`:
+
+```toml
+[target.riscv32imac-unknown-xous-elf]
+rustflags = ["--cfg", "curve25519_dalek_backend=\"u32e_backend\""]
+```
+
+On hosted Linux the same code falls back to the portable Rust backend, so tests/CI run unaffected. On Precursor hardware, ECC operations route through the IP core.
 
 Workspace `[patch.crates-io]`:
 
@@ -36,18 +49,19 @@ curve25519-dalek = { path = "vendor/curve25519-dalek/curve25519-dalek" }
 curve25519-dalek-derive = { path = "vendor/curve25519-dalek/curve25519-dalek-derive" }
 ```
 
-**Plug-in seam for HW acceleration later.** When/if profiling on hardware shows ECC is a bottleneck, swap this `[patch.crates-io]` redirect to a HW-accelerated fork:
-
-- For Precursor: a fork that integrates the curve25519 IP core (e.g., resurrect the previously-existing `betrusted-io/curve25519-dalek` u32e backend, with the lizard port added). Activates via `RUSTFLAGS=--cfg curve25519_dalek_backend="u32e_backend"`.
-- For Bao1x: a fork that wraps the on-chip PKE engine (would need to be written).
-
-The lizard-port is additive in both cases.
+**Future-target story.** The choice is target-scoped via `.cargo/config.toml`, not workspace-scoped. Adding Bao1x support later means writing a new backend module (e.g. `src/backend/serial/bao1x_pke/`) and adding another `[target.…]` block to `.cargo/config.toml`. The Precursor decision doesn't lock us out.
 
 `docs/REPORT.md` §Decision 6 and Risk #3 have been rewritten to document this strategy.
 
 ### History note (for the curious)
 
-An earlier attempt vendored `betrusted-io/curve25519-dalek` (which carried the Precursor u32e HW backend). We swapped it for upstream + lizard after bunnie's guidance came in: the u32e code would have been Precursor-only dead bytes for our default builds, and the right place to make the HW-acceleration decision is after profiling. The lizard module port worked equally well on top of either base; the swap was code-trivial.
+The plan went through three iterations during Stage 4 as new information came in:
+
+1. **Original** (pre-input): vendor `betrusted-io/curve25519-dalek` for HW acceleration.
+2. **After bunnie's "profile first" guidance**: swap to upstream `dalek-cryptography/curve25519-dalek` 4.1.3 + lizard port, software-only, with a plug-in seam for HW acceleration later.
+3. **Current** (after user's "Precursor-only, get something going" call): swap back to `betrusted-io/curve25519-dalek` + lizard port + version bump, auto-activated for rv32-xous via `.cargo/config.toml`. Get HW acceleration on the target we care about now; defer Bao1x.
+
+The lizard module port and the `[patch.crates-io]` redirect mechanics are identical across iterations 2 and 3; only the underlying base changed.
 
 ## What did NOT land in this stage (and why)
 

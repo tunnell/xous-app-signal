@@ -24,6 +24,10 @@ where
 }
 
 #[unsafe_target_feature("sse2")]
+#[cfg(feature = "dummy")]
+fn function_with_cfg() {}
+
+#[unsafe_target_feature("sse2")]
 #[rustfmt::skip]
 fn function_with_rustfmt_skip() {}
 
@@ -41,6 +45,9 @@ impl Struct {
     fn member_function_with_const_arg<const N: u32>(self) -> u32 {
         self.a - N
     }
+
+    #[cfg(feature = "dummy")]
+    fn member_function_with_cfg() {}
 }
 
 struct StructWithGenerics<T>
@@ -86,7 +93,7 @@ mod inner {
     }
 }
 
-#[unsafe_target_feature_specialize("sse2", "avx2")]
+#[unsafe_target_feature_specialize("sse2", "avx2", conditional("avx512ifma", disabled))]
 mod inner_spec {
     #[for_target_feature("sse2")]
     const CONST: u32 = 1;

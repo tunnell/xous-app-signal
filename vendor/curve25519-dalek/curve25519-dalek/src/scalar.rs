@@ -150,7 +150,14 @@ use crate::backend;
 use crate::constants;
 
 cfg_if! {
-    if #[cfg(curve25519_dalek_backend = "fiat")] {
+    if #[cfg(curve25519_dalek_backend = "u32e_backend")] {
+        /// An `UnpackedScalar` represents an element of the field GF(l), optimized for speed.
+        ///
+        /// This is a type alias for one of the scalar types in the `backend`
+        /// module.
+        type UnpackedScalar = backend::serial::u32e::scalar::Scalar29;
+    }
+    else if #[cfg(curve25519_dalek_backend = "fiat")] {
         /// An `UnpackedScalar` represents an element of the field GF(l), optimized for speed.
         ///
         /// This is a type alias for one of the scalar types in the `backend`
@@ -1016,23 +1023,23 @@ impl Scalar {
         output
     }
 
-    /// Returns a size hint indicating how many entries of the return
-    /// value of `to_radix_2w` are nonzero.
-    #[cfg(any(feature = "alloc", all(test, feature = "precomputed-tables")))]
-    pub(crate) fn to_radix_2w_size_hint(w: usize) -> usize {
-        debug_assert!(w >= 4);
-        debug_assert!(w <= 8);
+        #[cfg(any(feature = "alloc", all(test, feature = "precomputed-tables")))]
+        /// Returns a size hint indicating how many entries of the return
+        /// value of `to_radix_2w` are nonzero.
+        pub(crate) fn to_radix_2w_size_hint(w: usize) -> usize {
+            debug_assert!(w >= 4);
+            debug_assert!(w <= 8);
 
-        let digits_count = match w {
-            4..=7 => (256 + w - 1) / w,
-            // See comment in to_radix_2w on handling the terminal carry.
-            8 => (256 + w - 1) / w + 1_usize,
-            _ => panic!("invalid radix parameter"),
-        };
+            let digits_count = match w {
+                4..=7 => (256 + w - 1) / w,
+                // See comment in to_radix_2w on handling the terminal carry.
+                8 => (256 + w - 1) / w + 1_usize,
+                _ => panic!("invalid radix parameter"),
+            };
 
-        debug_assert!(digits_count <= 64);
-        digits_count
-    }
+            debug_assert!(digits_count <= 64);
+            digits_count
+        }
 
     /// Creates a representation of a Scalar in radix \\( 2^w \\) with \\(w = 4, 5, 6, 7, 8\\) for
     /// use with the Pippenger algorithm. Higher radixes are not supported to save cache space.
@@ -1233,12 +1240,10 @@ impl Field for Scalar {
     }
 
     fn sqrt_ratio(num: &Self, div: &Self) -> (Choice, Self) {
-        #[allow(unused_qualifications)]
         group::ff::helpers::sqrt_ratio_generic(num, div)
     }
 
     fn sqrt(&self) -> CtOption<Self> {
-        #[allow(unused_qualifications)]
         group::ff::helpers::sqrt_tonelli_shanks(
             self,
             [
