@@ -2,3 +2,11 @@ target/
 Cargo.lock.bak
 *.swp
 .DS_Store
+
+# Stage 9b xtask + Renode test outputs
+dist/
+log.html
+logs/
+report.html
+robot_output.xml
+snapshots/

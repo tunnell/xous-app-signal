@@ -1,46 +1,32 @@
 :name: xas-smoke
 
-# Stage 9b — Renode boot script for the xas Signal client smoke test.
+# Stage 9b-deploy Phase B — Renode boot script for the xas Signal
+# client smoke test.
 #
-# This script DEFERS to xous-core's main `betrusted.resc` for all
-# the SoC peripheral wiring, then loads our `xas` binary as the
-# user-app payload. The plan-A path (preferred): our ELF has been
-# bundled into xous-core's image at xas/bundle time, so we just
-# boot the xous-core image. Plan-B path (fallback): we load our
-# ELF separately via `sysbus.LoadELF` after the kernel is up.
+# This script delegates to xous-core's `betrusted.resc` for all
+# SoC peripheral wiring, kernel + image load, and reset. The image
+# at xous-core/target/.../xous.img has the xas binary bundled (PID
+# 27 per the build output, registered via apps/manifest.json's
+# `"xas"` entry). xas starts at boot like every other PID, so the
+# `log::info!("xas: starting")` line at the top of `main()` appears
+# on the UART without any user interaction — which is what the
+# Robot test asserts on.
 #
-# This file is currently SCAFFOLDING — a working .resc requires:
-#   - $xous_core_root and $xas_image to be wired up to real paths
-#     either via the surrounding `xas-smoke.robot` Robot test
-#     setup or by hand when invoking Renode directly.
-#   - The xous-core repo's `emulation/peripherals/` directory
-#     (compiled C# files for Precursor's SoC peripherals) to be
-#     reachable.
-# Both are user-side hardware-integration concerns.
+# Dependencies (verified at Phase B build time):
+#   - xous-core's xtask has been run with our prebuilt ELF:
+#       cargo xtask app-image xas:$XAS_DIST_DIR/xas --git-describe v0.9.21-0-g0000000
+#   - The resulting `loader.bin` and `xous.img` live in
+#       xous-core/target/riscv32imac-unknown-xous-elf/release/
+#   - The xous-core repo path is at the location the variable below
+#     points to. Override via Robot test's setup or `renode -e $xous_core_root=@/other/path` if needed.
 
 # --- Variables ---
-# Override these from the Robot test or `renode -e` before
-# `include`ing this file.
 $xous_core_root ?= @/home/tunnell/precursor-signal/repos/xous-core
-$xous_image ?= $xous_core_root/target/riscv32imac-unknown-xous-elf/release/xous-presign.img
-$xas_elf ?= @/home/tunnell/precursor-signal/xous-app-signal/dist/xas-rv32/xas
 
 # --- Boot xous-core's standard Precursor image ---
-# This pulls in every peripheral wiring + kernel + base services.
-# The xous-core image already contains `xas` if Plan-A was used
-# (xtask copied the ELF into xous-core/apps/ before image build).
+# This pulls in every peripheral wiring + kernel + base services +
+# all bundled apps, including xas. betrusted.resc internally calls
+# `runMacro $reset` which loads loader.bin + xous.img and sets PC.
 include $xous_core_root/emulation/betrusted.resc
 
-# --- Plan-B: load xas separately ---
-# Uncomment and adapt the following if using Plan-B (xtask did
-# NOT integrate into xous-core's tree). Plan-B is intentionally
-# spelled out here even though Plan-A is preferred — keeps both
-# integration paths visible in one file.
-#
-# sysbus LoadELF $xas_elf
-# cpu PC `sysbus GetSymbolAddress "_start_xas"`
-
-# --- Start emulation ---
-# `start` is invoked from the Robot test, not here. This script
-# only sets up the machine; the test orchestrates start/stop.
-echo "xas-smoke: machine ready"
+echo "xas-smoke: machine ready (xas bundled as PID 27)"
