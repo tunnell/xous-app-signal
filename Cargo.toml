@@ -136,6 +136,11 @@ curve25519-dalek-derive = { path = "vendor/curve25519-dalek/curve25519-dalek-der
 [patch."https://github.com/whisperfish/libsignal-service-rs"]
 libsignal-service = { path = "vendor/libsignal-service-rs" }
 
+# Stage 7: redirect presage to our vendored, forked copy at vendor/presage/.
+# This is where the Decision 2 tokio-removal patches live.
+[patch."https://github.com/whisperfish/presage"]
+presage = { path = "vendor/presage/presage" }
+
 # Stage 2 forced an earlier resolution of one of the path-based patches
 # we deferred at Stage 0: cross-compiling rustls/ring for rv32 pulls in
 # `getrandom`, whose upstream crate doesn't recognize Xous as a target.
