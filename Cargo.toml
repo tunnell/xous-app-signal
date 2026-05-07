@@ -153,7 +153,7 @@ presage = { path = "vendor/presage/presage" }
 # xous-core's tree, or fork the getrandom patch into a separate
 # publishable repo.
 [patch.crates-io.getrandom]
-path = "/home/tunnell/precursor-signal/repos/xous-core/imports/getrandom"
+path = "../repos/xous-core/imports/getrandom"
 
 # TODO: wire up the `aes` patch (also path-based,
 # `xous-core/services/aes`) the same way once `aes` shows up
