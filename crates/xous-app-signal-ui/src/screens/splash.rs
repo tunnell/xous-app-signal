@@ -23,7 +23,7 @@ impl SplashScreen {
     pub fn render(&self) -> Vec<String> {
         const ITEMS: [(&str, bool); 4] = [
             ("Link this device", true),
-            ("Register a phone number", false), // greyed; Stage 13+
+            ("Register a phone number", false), // greyed; not implemented
             ("About", true),
             ("Quit", true),
         ];
@@ -65,9 +65,9 @@ impl SplashScreen {
                 Transition::None
             }
             Key::Home | Key::Right => match self.focus {
-                // Stage 10: Push LinkStarting; the driver issues
-                // `Cmd::LinkDevice` and replaces the screen with
-                // LinkShowUrl when the worker emits `Event::LinkUrl`.
+                // Push LinkStarting; the driver issues `Cmd::LinkDevice`
+                // and replaces the screen with LinkShowUrl when the
+                // worker emits `Event::LinkUrl`.
                 0 => Transition::Push(Screen::LinkStarting(
                     crate::screens::link::LinkStartingScreen::new(),
                 )),

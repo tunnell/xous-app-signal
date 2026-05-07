@@ -1,9 +1,9 @@
 //! libsignal protocol storage traits implemented over `PddbStore`.
 //!
-//! Stage 5a: the six required traits (`IdentityKeyStore`, `PreKeyStore`,
+//! Six required traits (`IdentityKeyStore`, `PreKeyStore`,
 //! `SignedPreKeyStore`, `KyberPreKeyStore`, `SessionStore`,
-//! `SenderKeyStore`) plus their `ProtocolStore` blanket. Stage 5b adds
-//! the libsignal-service-rs extension traits (`PreKeysStore`,
+//! `SenderKeyStore`) plus their `ProtocolStore` blanket, and the three
+//! libsignal-service-rs extension traits (`PreKeysStore`,
 //! `KyberPreKeyStoreExt`, `SessionStoreExt`) on the same struct.
 //!
 //! ACI vs PNI is a runtime split, not a type-level one: a single
@@ -12,11 +12,11 @@
 //! `presage-store-sqlite` uses (vendor/presage/presage-store-sqlite/
 //! src/protocol.rs:30-44).
 //!
-//! Dictionary layout per `docs/REPORT.md` §Decision 1:
+//! Dictionary layout:
 //!
 //! - `signal.protocol.{aci,pni}.session` — per `(uuid, device_id)`,
 //!   key = `"{uuid}.{device_id}"`. **Hot.** Backed by an in-memory
-//!   dirty-set cache (Decision 5); writes hit `session_cache` only,
+//!   dirty-set cache; writes hit `session_cache` only,
 //!   `flush_sessions` persists.
 //! - `signal.protocol.{aci,pni}.identity` — per `ProtocolAddress`,
 //!   key = `"{name}.{device_id}"`.

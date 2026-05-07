@@ -79,7 +79,7 @@ def main():
     kc_down = X11.XKeysymToKeycode(dpy, 0xFF54)
     kc_return = X11.XKeysymToKeycode(dpy, 0xFF0D)
 
-    # Stage 1: launcher main menu → Apps → xas (Signal).
+    # Step 1: launcher main menu → Apps → xas (Signal).
     print("=== launcher → Apps → xas ===")
     press(dpy, win, root, kc_home, 1.5, "Home → main menu")
     press(dpy, win, root, kc_down, 0.3, "Down → Apps")
@@ -87,12 +87,12 @@ def main():
     press(dpy, win, root, kc_down, 0.3, "Down → xas (only app bundled)")
     press(dpy, win, root, kc_home, 2.0, "Home → launch xas")
 
-    # Stage 2: xas Menu → Link selected → Enter to open device-name modal.
+    # Step 2: xas Menu → Link selected → Enter to open device-name modal.
     # Cursor starts on Link in pre-link Menu, so just Enter selects.
     print("=== xas Menu → Link ===")
     press(dpy, win, root, kc_return, 1.0, "Enter → Link selected")
 
-    # Stage 3: device-name modal accepts default ("xas").
+    # Step 3: device-name modal accepts default ("xas").
     # The TextEntry modal has the field pre-filled; Enter alone
     # commits it.
     print("=== accept device name ===")

@@ -51,9 +51,9 @@ impl LinkStartingScreen {
 }
 
 // ---------------------------------------------------------------
-// LinkShowUrl — UI.md §5.2. URL has arrived. We render it as
-// monospaced text (Stage 10 deliberate); QR rendering is a
-// hardware-deploy concern and lands at Stage 9b/c-followup.
+// LinkShowUrl — UI.md §5.2. URL has arrived. Rendered as monospaced
+// text in this stdin-driven UI; QR rendering happens in `gam_app.rs`
+// for the GAM-driven path.
 // ---------------------------------------------------------------
 
 #[derive(Debug, Clone)]
@@ -148,8 +148,7 @@ impl LinkConfirmingScreen {
 
 // ---------------------------------------------------------------
 // LinkDone — UI.md §5.4. Linking complete. Shows registration data
-// for verifiability. Home transitions to the empty-list screen
-// (Stage 11+).
+// for verifiability. Home transitions to the empty-list screen.
 // ---------------------------------------------------------------
 
 #[derive(Debug, Clone)]
@@ -186,7 +185,7 @@ impl LinkDoneScreen {
 
     pub fn handle_key(&mut self, key: Key) -> Transition {
         match key {
-            // Stage 11: from LinkDone, Home transitions into the
+            // From LinkDone, Home transitions into the
             // ConversationList screen which on entry sends
             // `Cmd::StartReceive` and begins streaming messages.
             Key::Home | Key::Right => Transition::Replace(crate::screen::Screen::ConversationList(

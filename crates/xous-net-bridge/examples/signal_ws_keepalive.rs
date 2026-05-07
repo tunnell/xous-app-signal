@@ -1,5 +1,5 @@
-//! Stage 3 smoke test: open a WSS connection to Signal's unauth
-//! provisioning endpoint, prove the handshake succeeds, then close.
+//! Smoke test: open a WSS connection to Signal's unauth provisioning
+//! endpoint, prove the handshake succeeds, then close.
 //!
 //! Endpoint is `/v1/websocket/provisioning/` (the WS upgrade target used
 //! by `libsignal-service-rs/src/provisioning/mod.rs:163-170`'s
@@ -10,8 +10,6 @@
 //! handshake completes (101 Switching Protocols), wait briefly for any
 //! server-pushed frame (or timeout), and close. That's enough to prove
 //! tungstenite + rustls + our `tls_connect` can speak to chat.signal.org.
-//!
-//! Per docs/ROADMAP.md Stage 3.
 
 use std::time::Duration;
 

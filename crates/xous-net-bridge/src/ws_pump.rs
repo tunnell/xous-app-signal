@@ -1,6 +1,6 @@
 //! Sync WebSocket pump worker thread.
 //!
-//! Stage 6.1 phase 3e. The async-side caller (libsignal-service-rs's
+//! The async-side caller (libsignal-service-rs's
 //! `SignalWebSocketProcess::run`) gets a pair of `async-channel`
 //! frame-channels. Internally a worker thread holds the sync
 //! `tungstenite::WebSocket` and bridges frames in both directions.
@@ -137,9 +137,13 @@ fn reader_loop(
     tx: async_channel::Sender<Result<WsFrame, HttpError>>,
 ) {
     loop {
-        // Pull one message from the WS. read() blocks on the socket.
-        // The mutex is briefly held; the writer thread will queue behind
-        // us during an active read, but that's bounded by the WS RTT.
+        // Pull one message from the WS. read() blocks on the underlying
+        // TCP, which has a short SO_RCVTIMEO set in `tls_connect`.
+        // When no inbound frame arrives within the timeout, read()
+        // returns `WouldBlock`/`TimedOut`; we drop the mutex, briefly
+        // letting the writer thread acquire it (so periodic
+        // libsignal-service-rs keepalives can actually go out), then
+        // re-loop.
         let msg = {
             let mut guard = match ws.lock() {
                 Ok(g) => g,
@@ -164,6 +168,20 @@ fn reader_loop(
             Ok(Message::Frame(_)) => continue, // raw control frame; ignore
             Err(tungstenite::Error::ConnectionClosed) => break,
             Err(tungstenite::Error::AlreadyClosed) => break,
+            // Read timed out with nothing to read. Yield and re-loop —
+            // see the keepalive comment above.
+            Err(tungstenite::Error::Io(e))
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                // Brief sleep to avoid pegging the CPU between timeouts;
+                // also gives the writer thread a clear window to acquire
+                // the mutex.
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                continue;
+            }
             Err(e) => Err(HttpError::Network(format!("ws read: {e}"))),
         };
 

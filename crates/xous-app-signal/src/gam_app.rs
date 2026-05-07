@@ -91,7 +91,11 @@ enum MenuItem {
 
 #[derive(Clone, Debug)]
 struct InboxMessage {
+    /// Raw sender ACI/UUID — the unique identifier for thread grouping.
     sender: String,
+    /// Pretty label resolved at receive time (from the contacts store).
+    /// Falls back to the UUID when no contact entry exists.
+    sender_label: String,
     body: String,
     /// Server-side timestamp (millis since epoch). Captured for
     /// future ordering / dedup; not rendered in the MVP inbox
@@ -272,7 +276,7 @@ impl App {
         // Render newest first; truncate sender + body so the screen
         // doesn't overflow.
         for msg in self.messages.iter() {
-            let sender_short = truncate(&msg.sender, 22);
+            let sender_short = truncate(&msg.sender_label, 22);
             let body_short = truncate(&msg.body, 80);
             write!(out, "from: {}\n  {}\n\n", sender_short, body_short)
                 .map_err(|e| format!("inbox msg: {}", e))?;
@@ -497,11 +501,9 @@ fn handle_worker_event(
             if app.linking_in_progress {
                 if let Ok(modals) = modals::Modals::new(modals_xns) {
                     let _ = modals.show_notification(
-                        "Scan with Signal phone, then press any key.\n\n\
-                         Note: existing message history is NOT\n\
-                         transferred — xas starts with an empty\n\
-                         inbox. New messages received after linking\n\
-                         will appear here.",
+                        "Signal on phone.\n\
+                         Scan QR, then press any key.\n\
+                         Don't transfer old messages.",
                         Some(&url),
                     );
                 }
@@ -520,7 +522,11 @@ fn handle_worker_event(
             // Auto-fire StartReceive so the inbox begins
             // accumulating. Bridge dedupes; calling again later is
             // harmless.
-            let _ = cmd_tx.send_blocking(Cmd::StartReceive);
+            log::info!("xas/gam_app: sending Cmd::StartReceive");
+            match cmd_tx.send_blocking(Cmd::StartReceive) {
+                Ok(()) => log::info!("xas/gam_app: Cmd::StartReceive sent ok"),
+                Err(e) => log::warn!("xas/gam_app: Cmd::StartReceive send err: {:?}", e),
+            }
         }
         Event::LinkError(msg) => {
             log::warn!("xas/gam_app: LinkError: {}", msg);
@@ -528,17 +534,25 @@ fn handle_worker_event(
             app.screen = Screen::Linked { kind: LinkedKind::Failure };
             app.last_status = msg;
         }
-        Event::Message { sender, body, timestamp } => {
+        Event::Message { sender, sender_phone, sender_name, body, timestamp } => {
+            // Pretty label preference: name → phone → UUID. The
+            // contacts store typically has both name and phone for
+            // peers who've been synced from the linked phone; only
+            // first-sight peers fall through to UUID.
+            let sender_label = sender_name
+                .clone()
+                .or_else(|| sender_phone.clone())
+                .unwrap_or_else(|| sender.clone());
             log::info!(
                 "xas/gam_app: inbound message from {} ({} bytes)",
-                sender,
+                sender_label,
                 body.len()
             );
             app.last_sender = Some(sender.clone());
             if app.messages.len() >= INBOX_CAPACITY {
                 app.messages.pop_back();
             }
-            app.messages.push_front(InboxMessage { sender, body, timestamp });
+            app.messages.push_front(InboxMessage { sender, sender_label, body, timestamp });
         }
         Event::ReceiveStarted => {
             log::info!("xas/gam_app: receive loop established");
@@ -562,6 +576,33 @@ fn handle_worker_event(
         }
         Event::Pong | Event::Whoami(_) => {}
     }
+}
+
+/// Hosted-mode helper: read `~/precursor-signal/.link_attempts`,
+/// increment it, return the device name to default to. Each link
+/// attempt gets a fresh `xasN` so the user can correlate this run's
+/// QR with the entry that lands in their phone's Linked Devices list.
+///
+/// File semantics: missing → create with `0`, use `0`, write `1`.
+/// Existing → read N, use N, write N+1.
+///
+/// Hosted-only: on rv32 there's no general filesystem, so this
+/// quietly falls back to "xas".
+#[cfg(not(target_os = "xous"))]
+fn next_attempt_device_name() -> String {
+    use std::path::Path;
+    let path = Path::new("/home/tunnell/precursor-signal/.link_attempts");
+    let n: u32 = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
+    let _ = std::fs::write(path, format!("{}", n + 1));
+    format!("xas{}", n)
+}
+
+#[cfg(target_os = "xous")]
+fn next_attempt_device_name() -> String {
+    "xas".to_string()
 }
 
 /// Kick off the link flow. Synchronous part only: prompts for a
@@ -592,14 +633,15 @@ fn drive_link(
         }
     };
 
+    let default_name = next_attempt_device_name();
     let device_name = match modals
         .alert_builder("Device name?")
-        .field(Some("xas".to_string()), None)
+        .field(Some(default_name.clone()), None)
         .build()
     {
         Ok(payloads) => {
             let trimmed = payloads.first().as_str().trim().to_string();
-            if trimmed.is_empty() { "xas".to_string() } else { trimmed }
+            if trimmed.is_empty() { default_name } else { trimmed }
         }
         Err(e) => {
             app.screen = Screen::Linked { kind: LinkedKind::Failure };

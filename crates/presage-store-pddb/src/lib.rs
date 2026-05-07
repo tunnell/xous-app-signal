@@ -1,33 +1,24 @@
 //! PDDB-backed implementation of `presage`'s storage traits.
 //!
-//! Per `docs/REPORT.md` Decision 1 (storage layout), the trait impls
-//! sit on top of an internal `KvBackend` abstraction:
+//! The trait impls sit on top of an internal `KvBackend` abstraction:
 //!
 //! - `KvBackend` exposes `get / put / delete / delete_dict / list_keys`
 //!   keyed on `(dict_name, key_name)` — the same shape PDDB itself
-//!   exposes. The Stage 8 `PddbBackend` implementation forwards these
-//!   into the `pddb::Pddb` API; the Stage 4 `MockBackend` is an
-//!   in-memory `HashMap` for hosted-mode testing.
+//!   exposes. `PddbBackend` forwards these into the `pddb::Pddb` API;
+//!   `MockBackend` is an in-memory `HashMap` for hosted-mode testing.
 //!
 //! - `PddbStore` owns an `Arc<dyn KvBackend>`, an in-memory session
-//!   cache (Decision 5: dirty-set + flush instead of write-through),
-//!   and a `trust_new_identities` policy flag. It implements the
-//!   presage traits over the backend. `Clone + Send + Sync + 'static`,
-//!   the bound demanded by `presage::store::Store`.
+//!   cache (dirty-set + flush instead of write-through), and a
+//!   `trust_new_identities` policy flag. It implements the presage
+//!   traits over the backend. `Clone + Send + Sync + 'static`, the
+//!   bound demanded by `presage::store::Store`.
 //!
-//! Stage 4: `StateStore` (10 methods) + `ContentsStore::profile` /
-//! `save_profile` round-trip.
-//!
-//! Stage 5a: 6 libsignal protocol storage traits + the `ProtocolStore`
-//! blanket. ACI vs PNI is a runtime split via `IdentityType`. Sessions
-//! are buffered in memory and flushed via `flush_sessions`.
-//!
-//! Stage 5b: 3 libsignal-service-rs extension traits (`PreKeysStore`,
-//! `KyberPreKeyStoreExt`, `SessionStoreExt`) on the same protocol
-//! store struct.
-//!
-//! Stage 5c: full `ContentsStore` impl — messages-by-thread, contacts,
-//! groups, profile keys, profile/group avatars, sticker packs.
+//! Trait coverage: `StateStore` (10 methods); the 6 libsignal protocol
+//! storage traits + `ProtocolStore` blanket (ACI/PNI split runtime via
+//! `IdentityType`, sessions buffered + flushed); 3 libsignal-service-rs
+//! extension traits (`PreKeysStore`, `KyberPreKeyStoreExt`,
+//! `SessionStoreExt`); full `ContentsStore` (messages-by-thread,
+//! contacts, groups, profile keys, profile/group avatars, sticker packs).
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -45,7 +36,7 @@ mod state;
 mod store;
 
 pub use backend_mock::MockBackend;
-#[cfg(all(feature = "pddb-backend", target_os = "xous"))]
+#[cfg(feature = "pddb-backend")]
 pub use backend_pddb::PddbBackend;
 pub use error::Error;
 pub use protocol::{IdentityType, PddbProtocolStore};
@@ -84,18 +75,18 @@ pub trait KvBackend: Send + Sync + fmt::Debug {
 pub struct PddbStore {
     pub(crate) backend: Arc<dyn KvBackend>,
 
-    /// In-memory dirty-set cache per Decision 5. `store_session`
-    /// writes here only; `flush_sessions` persists to the backend.
-    /// Wrapped in `Mutex` so it stays `Send + Sync` even though the
-    /// underlying `SessionRecord` is.
+    /// In-memory dirty-set cache. `store_session` writes here only;
+    /// `flush_sessions` persists to the backend. Wrapped in `Mutex` so
+    /// it stays `Send + Sync` even though the underlying `SessionRecord`
+    /// is.
     pub(crate) session_cache:
         Arc<Mutex<HashMap<protocol::session_store::SessionKey, SessionRecord>>>,
 
     /// Companion to `session_cache`: keys present here have unsaved
-    /// changes since the last flush. We split it from the cache itself
-    /// so that flushing only persists genuinely-dirty entries (and so
-    /// that read-through `load_session` can populate the cache without
-    /// marking the entry dirty later — a Stage 11 optimisation).
+    /// changes since the last flush. Split from the cache itself so
+    /// flushing only persists genuinely-dirty entries (and so
+    /// read-through `load_session` can populate the cache without
+    /// marking the entry dirty).
     pub(crate) session_dirty: Arc<Mutex<HashSet<protocol::session_store::SessionKey>>>,
 
     /// What to do when `IdentityKeyStore::is_trusted_identity` finds a
@@ -128,17 +119,17 @@ impl PddbStore {
         Self::new(Arc::new(MockBackend::new()))
     }
 
-    /// Stage 13b-2: connect to xous-core's running PDDB server and
-    /// wrap the resulting `xous_pddb_ipc::PddbClient` as a real
-    /// `KvBackend`. rv32-xous + `pddb-backend` feature only.
+    /// Connect to xous-core's running PDDB server and wrap the
+    /// resulting `xous_pddb_ipc::PddbClient` as a real `KvBackend`.
+    /// `pddb-backend` feature only.
     ///
     /// Returns `Err` if the PDDB server isn't reachable. Does NOT
     /// block on the basis being mounted — the caller (typically the
     /// xas worker thread) is responsible for waiting on
-    /// `is_mounted()` before issuing operations that need the
-    /// store, or for tolerating per-op `NotMounted` errors during
-    /// the boot window.
-    #[cfg(all(feature = "pddb-backend", target_os = "xous"))]
+    /// `is_mounted()` before issuing operations that need the store,
+    /// or for tolerating per-op `NotMounted` errors during the boot
+    /// window.
+    #[cfg(feature = "pddb-backend")]
     pub fn with_pddb_backend() -> Result<Self, Error> {
         let backend = backend_pddb::PddbBackend::connect()?;
         Ok(Self::new(Arc::new(backend)))
@@ -157,14 +148,22 @@ impl PddbStore {
 
     /// Persist every dirty session entry to the backend, then clear
     /// the dirty set. Cache entries themselves stay populated so
-    /// subsequent `load_session` calls hit RAM. Per Decision 5: call
-    /// on `Received::QueueEmpty`, on a debounce timer, or whenever the
+    /// subsequent `load_session` calls hit RAM. Call on
+    /// `Received::QueueEmpty`, on a debounce timer, or whenever the
     /// dirty set crosses a high-water mark.
     ///
-    /// Returns the number of entries written. Idempotent — calling
-    /// twice in a row is cheap (the second call sees an empty dirty
-    /// set).
+    /// Sessions sharing an address are bundled into one PDDB key
+    /// (value: `device_id -> serialized SessionRecord`). One PDDB
+    /// `put` per address per flush, regardless of how many devices
+    /// rotated keys — saves 3 IPCs of fixed `open/flush/drop`
+    /// overhead per device beyond the first.
+    ///
+    /// Returns the number of session records written. Idempotent —
+    /// calling twice in a row is cheap (second call sees an empty
+    /// dirty set).
     pub fn flush_sessions(&self) -> Result<usize, Error> {
+        use protocol::session_store::{SessionBundle, deserialize_bundle, serialize_bundle};
+
         let mut dirty = self
             .session_dirty
             .lock()
@@ -177,17 +176,41 @@ impl PddbStore {
             .lock()
             .map_err(|_| Error::backend("session cache mutex poisoned"))?;
 
-        let mut written = 0_usize;
+        // Group dirty entries by `(identity, address.name())`. The
+        // grouping is the whole point — one PDDB put per group, not
+        // per dirty entry.
+        let mut groups: HashMap<(protocol::IdentityType, String), Vec<(u32, Vec<u8>)>> =
+            HashMap::new();
         for key in dirty.iter() {
             let Some(record) = cache.get(key) else {
                 continue;
             };
-            let dict = protocol::dict_session(key.0);
             let bytes = record
                 .serialize()
                 .map_err(|e| Error::Encode(e.to_string()))?;
-            self.backend.put(&dict, &key.1, &bytes)?;
-            written += 1;
+            groups
+                .entry((key.0, key.1.clone()))
+                .or_default()
+                .push((key.2, bytes));
+        }
+
+        let mut written = 0_usize;
+        for ((identity, name), entries) in groups {
+            let dict = protocol::dict_session(identity);
+
+            // Read-modify-write: existing PDDB bundle (if any) plus
+            // the dirty changes. Devices not touched in this flush
+            // pass their bytes through unchanged.
+            let mut bundle: SessionBundle = match self.backend.get(&dict, &name)? {
+                Some(bytes) => deserialize_bundle(&bytes)?,
+                None => SessionBundle::new(),
+            };
+            for (device_id, ser) in entries {
+                bundle.insert(device_id, ser);
+                written += 1;
+            }
+            let value = serialize_bundle(&bundle)?;
+            self.backend.put(&dict, &name, &value)?;
         }
         dirty.clear();
         Ok(written)
@@ -292,10 +315,10 @@ mod tests {
         let pni_kp = IdentityKeyPair::generate(&mut rng);
 
         block_on(async {
-            // Stage 4 only persists identity key pairs; the matching
-            // load path is in Stage 5a (it lives on the protocol-store
-            // trait, not StateStore). We assert via the raw backend
-            // instead — the bytes round-trip through the dict.
+            // `StateStore` only persists identity key pairs; the load
+            // path lives on the protocol-store trait, not StateStore.
+            // Assert via the raw backend instead — the bytes round-trip
+            // through the dict.
             store.set_aci_identity_key_pair(aci_kp).await.unwrap();
             store.set_pni_identity_key_pair(pni_kp).await.unwrap();
             assert!(
@@ -385,7 +408,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Stage 5a: libsignal protocol storage traits
+    // libsignal protocol storage traits
     // ------------------------------------------------------------------
 
     use presage::libsignal_service::pre_keys::{KyberPreKeyStoreExt, PreKeysStore};
@@ -629,7 +652,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Stage 5b: extension traits
+    // libsignal-service-rs extension traits
     // ------------------------------------------------------------------
 
     #[test]
@@ -695,7 +718,7 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // Stage 5c: ContentsStore (the rest of it)
+    // ContentsStore (the rest of it)
     // ------------------------------------------------------------------
 
     #[test]

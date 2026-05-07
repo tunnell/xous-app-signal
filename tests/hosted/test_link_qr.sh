@@ -76,6 +76,22 @@ pkill -f "xous-kernel" 2>/dev/null || true
 pkill -f "cargo xtask run" 2>/dev/null || true
 sleep 1
 
+# Restore PDDB to a clean unlinked state before each run so the test
+# always exercises the *fresh-link* path. Without this, a successful
+# previous run leaves registration data in PDDB; the next run hits
+# the auto-load branch and no fresh QR is emitted (the test then
+# false-FAILs). A separate `test_reattach.sh` covers the auto-load
+# path.
+#
+# `WIPE_PDDB=0` opts out (e.g. when intentionally testing auto-load
+# from outside this script).
+PDDB_HOSTED_BIN="${PDDB_HOSTED_BIN:-$XOUS_CORE_DIR/tools/pddb-images/hosted.bin}"
+PDDB_BACKUP_BIN="${PDDB_BACKUP_BIN:-$XOUS_CORE_DIR/tools/pddb-images/hosted_backup.bin}"
+if [ "${WIPE_PDDB:-1}" = "1" ] && [ -f "$PDDB_BACKUP_BIN" ]; then
+    echo "==> restoring PDDB from backup ($PDDB_BACKUP_BIN -> $PDDB_HOSTED_BIN)"
+    cp "$PDDB_BACKUP_BIN" "$PDDB_HOSTED_BIN"
+fi
+
 echo "==> launching hosted Xous"
 (
     cd "$XOUS_CORE_DIR"
@@ -156,13 +172,26 @@ echo
 echo "==> link-related lines in kernel log:"
 grep -E "bridge/link|gam_app: link URL|gam_app: starting|generating qrcode|provisioning|LinkUrl|LinkComplete|LinkError|Sink closed" "$KERNEL_LOG" || echo "(no link lines found)"
 
+RESULT_RC=4
 if [ $SAW_BRIDGE -eq 1 ] && [ $SAW_GAMAPP -eq 1 ]; then
     echo
     echo "PASS: link URL reached the UI."
-    exit 0
+    RESULT_RC=0
 else
     echo
     echo "FAIL: link URL did not reach the UI within ${LINK_TIMEOUT}s." >&2
     echo "(set KEEP_LOGS=1 to keep $LOG_DIR for triage)"
-    exit 4
 fi
+
+# `INSPECT_HOLD=NN` (seconds) keeps the kernel alive so the QR
+# modal stays visible for inspection — useful when debugging
+# whether the QR rendered, when scanning from a real phone, or
+# when verifying the persistence loop end-to-end. The cleanup trap
+# fires on exit and reaps the kernel after this sleep.
+if [ -n "${INSPECT_HOLD:-}" ]; then
+    echo
+    echo "==> holding kernel up for ${INSPECT_HOLD}s (INSPECT_HOLD set) — Ctrl-C to exit"
+    sleep "$INSPECT_HOLD"
+fi
+
+exit "$RESULT_RC"

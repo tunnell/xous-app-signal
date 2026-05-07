@@ -3,8 +3,8 @@
 //! Per-id binary records in `signal.protocol.{aci,pni}.kyber_prekey`.
 //! Each record on disk is a JSON envelope `{record: <bytes>,
 //! is_last_resort: bool}` so that `mark_kyber_pre_key_used` and the
-//! `KyberPreKeyStoreExt` trait (Stage 5b) know whether to delete or
-//! retain — same flag the sqlite store carries as a column
+//! `KyberPreKeyStoreExt` trait know whether to delete or retain —
+//! same flag the sqlite store carries as a column
 //! (vendor/presage/presage-store-sqlite/src/protocol.rs:407-470).
 //!
 //! `mark_kyber_pre_key_used` consults a separate `kyber_meta` dict for

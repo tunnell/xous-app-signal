@@ -114,10 +114,31 @@ impl PddbClient {
     }
 
     /// Delete a single key. Wraps `Opcode::DeleteKey`.
+    ///
+    /// Server-side handler reads `PddbKeyRequest` (not `PddbDictRequest`) —
+    /// see `services/pddb/src/main.rs::Opcode::DeleteKey` and the upstream
+    /// client at `services/pddb/src/lib.rs::delete_key`.
     pub fn delete_key(&self, dict: &str, key: &str) -> Result<(), Error> {
-        let request = self.dict_request(dict, key)?;
-        let resp = self.dict_request_send(request, Opcode::DeleteKey)?;
-        match resp.code {
+        let request = PddbKeyRequest {
+            basis_specified: false,
+            basis: String::new(),
+            dict: dict.to_string(),
+            key: key.to_string(),
+            token: None,
+            create_dict: false,
+            create_key: false,
+            alloc_hint: None,
+            cb_sid: None,
+            result: PddbRequestCode::Uninit,
+        };
+        let mut buf = Buffer::into_buf(request)
+            .map_err(|_| Error::new(ErrorKind::Ipc, "Buffer::into_buf"))?;
+        buf.lend_mut(self.main_conn, Opcode::DeleteKey.to_u32().unwrap())
+            .map_err(|_| Error::new(ErrorKind::Ipc, "lend_mut DeleteKey"))?;
+        let response: PddbKeyRequest = buf
+            .to_original::<PddbKeyRequest, _>()
+            .map_err(|_| Error::new(ErrorKind::Ipc, "to_original DeleteKey"))?;
+        match response.result {
             PddbRequestCode::NoErr => Ok(()),
             PddbRequestCode::NotFound => Err(Error::new(ErrorKind::NotFound, "key not found")),
             PddbRequestCode::NotMounted => {
@@ -128,10 +149,33 @@ impl PddbClient {
     }
 
     /// Delete a dictionary and all its keys. Wraps `Opcode::DeleteDict`.
+    ///
+    /// Server-side handler reads `PddbKeyRequest` — same wire format as
+    /// `delete_key`. The original code path here used `PddbDictRequest`
+    /// (a similar but distinct rkyv type), which the server happily
+    /// deserialized with garbage field values, returning nonsensical
+    /// codes like `Create`.
     pub fn delete_dict(&self, dict: &str) -> Result<(), Error> {
-        let request = self.dict_request(dict, "")?;
-        let resp = self.dict_request_send(request, Opcode::DeleteDict)?;
-        match resp.code {
+        let request = PddbKeyRequest {
+            basis_specified: false,
+            basis: String::new(),
+            dict: dict.to_string(),
+            key: String::new(),
+            token: None,
+            create_dict: false,
+            create_key: false,
+            alloc_hint: None,
+            cb_sid: None,
+            result: PddbRequestCode::Uninit,
+        };
+        let mut buf = Buffer::into_buf(request)
+            .map_err(|_| Error::new(ErrorKind::Ipc, "Buffer::into_buf"))?;
+        buf.lend_mut(self.main_conn, Opcode::DeleteDict.to_u32().unwrap())
+            .map_err(|_| Error::new(ErrorKind::Ipc, "lend_mut DeleteDict"))?;
+        let response: PddbKeyRequest = buf
+            .to_original::<PddbKeyRequest, _>()
+            .map_err(|_| Error::new(ErrorKind::Ipc, "to_original DeleteDict"))?;
+        match response.result {
             PddbRequestCode::NoErr => Ok(()),
             PddbRequestCode::NotFound => Ok(()), // delete-non-existent is fine
             PddbRequestCode::NotMounted => {
@@ -315,6 +359,10 @@ impl<'a> KeyHandle<'a> {
     /// Send `Opcode::WriteKeyFlush` to commit pending writes. Must be
     /// called before drop on a write path; otherwise PDDB may not
     /// persist the data.
+    ///
+    /// The server returns a `PddbRetcode` as a scalar — `Ok = 1`
+    /// (the enum starts at `Uninit = 0`). Mirrors
+    /// `services/pddb/src/lib.rs::Pddb::sync` upstream.
     pub fn flush_writes(&mut self) -> Result<(), Error> {
         let token = self.token;
         let resp = send_message(
@@ -328,12 +376,34 @@ impl<'a> KeyHandle<'a> {
             ),
         )
         .map_err(|e| Error::new(ErrorKind::Ipc, format!("WriteKeyFlush: {:?}", e)))?;
-        match resp {
-            xous::Result::Scalar1(0) => Ok(()),
-            xous::Result::Scalar1(other) => {
-                Err(Error::new(ErrorKind::Internal, format!("WriteKeyFlush retcode={}", other)))
-            }
-            other => Err(Error::new(ErrorKind::Ipc, format!("WriteKeyFlush: unexpected {:?}", other))),
+        let xous::Result::Scalar1(rcode) = resp else {
+            return Err(Error::new(
+                ErrorKind::Ipc,
+                format!("WriteKeyFlush: unexpected {:?}", resp),
+            ));
+        };
+        match rcode {
+            r if r == PddbRetcode::Ok as usize => Ok(()),
+            r if r == PddbRetcode::BasisLost as usize => Err(Error::new(
+                ErrorKind::Internal,
+                "WriteKeyFlush: BasisLost",
+            )),
+            r if r == PddbRetcode::DiskFull as usize => Err(Error::new(
+                ErrorKind::NoFreeSpace,
+                "WriteKeyFlush: DiskFull",
+            )),
+            r if r == PddbRetcode::AccessDenied as usize => Err(Error::new(
+                ErrorKind::AccessDenied,
+                "WriteKeyFlush: AccessDenied",
+            )),
+            r if r == PddbRetcode::InternalError as usize => Err(Error::new(
+                ErrorKind::Internal,
+                "WriteKeyFlush: InternalError",
+            )),
+            other => Err(Error::new(
+                ErrorKind::Internal,
+                format!("WriteKeyFlush: unknown retcode={}", other),
+            )),
         }
     }
 }

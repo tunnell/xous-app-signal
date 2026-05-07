@@ -1,13 +1,11 @@
 //! Worker-thread harness for the `presage::Manager` state machine.
 //!
-//! Per `docs/REPORT.md` Decision 2 the manager runs on a dedicated
-//! Xous worker thread driven by a `smol-rs` `LocalExecutor`. Stage 8
-//! stands up the harness without yet wiring real network transport:
-//! the worker takes a `PddbStore` and an async-channel pair, runs the
-//! executor, dispatches `Cmd` values, and emits `Event` replies. The
-//! Stage 6 `HttpClient` thread-locals (set inside the worker thread
-//! at Stage 9+) and the actual `Manager` operations bolt on later
-//! without changing this surface.
+//! The manager runs on a dedicated Xous worker thread driven by a
+//! `smol-rs` `LocalExecutor`. The worker takes a `PddbStore` and an
+//! async-channel pair, runs the executor, dispatches `Cmd` values,
+//! and emits `Event` replies. The `HttpClient` thread-locals are set
+//! inside the worker thread, and the actual `Manager` operations
+//! bolt onto this surface.
 //!
 //! Why a *local* executor rather than a multi-thread one: presage's
 //! traits use `#[async_trait(?Send)]` (per `libsignal/protocol/src/
@@ -35,8 +33,8 @@ use xous_net_bridge::{SyncHttpClient, signal_production_roots};
 
 /// Initial worker-thread stack size. Comfortable headroom for
 /// zkgroup batch ops (the heaviest compute presage triggers) and
-/// the smol-rs executor's recursive task graph. Stage 8 doesn't
-/// exercise zkgroup; bump this if a real-flow stage finds it short.
+/// the smol-rs executor's recursive task graph. Bump this if a
+/// real-flow stage finds it short.
 const WORKER_STACK_BYTES: usize = 4 * 1024 * 1024;
 
 /// Spawn the Manager worker thread.
@@ -69,16 +67,16 @@ pub fn run_signal_worker(
 fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>) {
     // Box::leak the executor so async tasks spawned on it can borrow
     // it for `'static`. `LocalExecutor` itself is `!Send` so it stays
-    // pinned to this thread for life. Same pattern Stage 1's smoke
+    // pinned to this thread for life. Same pattern as the smoke
     // test established.
     let executor: &'static LocalExecutor<'static> = Box::leak(Box::new(LocalExecutor::new()));
 
-    // Stage 10: register two thread-locals that libsignal-service-rs
-    // expects on every thread that touches its API. Both are set
-    // here because the worker is the only thread that ever does.
+    // Register two thread-locals that libsignal-service-rs expects on
+    // every thread that touches its API. Both are set here because
+    // the worker is the only thread that ever does.
     //
     // 1. `HttpClient` — the sync HTTP/1.1 + WebSocket transport we
-    //    forked at Stage 6. Cloning is cheap (Arc-shaped).
+    //    forked. Cloning is cheap (Arc-shaped).
     // 2. `TaskSpawner` — a closure used by libsignal-service-rs's
     //    internals (`provisioning::link_device`, WS handlers) to
     //    fire-and-forget detached tasks onto our local executor.
@@ -92,18 +90,69 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
     transport::set_task_spawner(Box::new(|task| {
         executor.spawn(task).detach();
     }));
+    // presage's `receive_messages` and other long-running Manager
+    // ops spawn their own background tasks via
+    // `presage::runtime::spawn_detached`. That goes through a separate
+    // thread-local from libsignal-service's `task_spawner` and panics
+    // if not configured. Wire to the same LocalExecutor.
+    presage::set_executor(executor);
 
     block_on(executor.run(async move {
         tracing::debug!("signal-worker: ready");
 
-        // Stage 10: when `LinkDevice` succeeds the resulting
+        // When `LinkDevice` succeeds the resulting
         // `Manager<S, Registered>` is retained here so subsequent
-        // Stage 11+ Cmds (StartReceive, SendMessage) reuse the same
+        // Cmds (StartReceive, SendMessage) reuse the same
         // session state instead of re-running `load_registered`.
         // `None` means we haven't linked (or failed to).
         let mut linked: Option<Manager<PddbStore, Registered>> = None;
 
-        // Stage 12: handle to the per-receive "manager task"'s
+        // Auto-load existing registration so the user doesn't re-link
+        // on every boot. PDDB may not be mounted at worker spawn time
+        // (mount fires lazily on first IPC, racing with us); retry on
+        // transient errors until the store either returns a Manager or
+        // a definitive NotYetRegistered.
+        log::info!("bridge: attempting load_registered from PDDB");
+        let mut linked_attempts = 0;
+        loop {
+            match Manager::load_registered(store.clone()).await {
+                Ok(manager) => {
+                    let data = manager.registration_data();
+                    let device_name = data.device_name.clone().unwrap_or_default();
+                    let aci = data.service_ids.aci.to_string();
+                    let phone = data.phone_number.to_string();
+                    log::info!(
+                        "bridge: load_registered OK — device={} aci={} phone={}",
+                        device_name, aci, phone
+                    );
+                    let _ = event_tx
+                        .send(Event::LinkComplete { device_name, aci, phone })
+                        .await;
+                    linked = Some(manager);
+                    break;
+                }
+                Err(e) => {
+                    let msg = format!("{}", e);
+                    if msg.contains("not yet registered") || msg.contains("NotYetRegistered") {
+                        log::info!("bridge: load_registered: not registered yet (first boot)");
+                        break;
+                    }
+                    linked_attempts += 1;
+                    if linked_attempts >= 10 {
+                        log::warn!("bridge: load_registered gave up after 10 retries: {}", e);
+                        break;
+                    }
+                    log::info!(
+                        "bridge: load_registered transient err (attempt {}/10): {}",
+                        linked_attempts, e
+                    );
+                    futures_lite::future::yield_now().await;
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+            }
+        }
+
+        // Handle to the per-receive "manager task"'s
         // internal send channel. `Some(tx)` means the manager task
         // is running and `Cmd::SendMessage` should be forwarded;
         // `None` means receive isn't started yet (or the task died).
@@ -131,7 +180,7 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                         Ok(manager) => {
                             // We already sent Event::LinkComplete from
                             // inside handle_link_device. Retain the
-                            // Manager so Stage 11+ Cmds can use it.
+                            // Manager so subsequent Cmds can use it.
                             linked = Some(manager);
                         }
                         Err(()) => {
@@ -143,7 +192,7 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                     }
                 }
                 Ok(Cmd::LinkCancel) => {
-                    // No-op for Stage 10. presage's link_secondary_device
+                    // No-op. presage's link_secondary_device
                     // doesn't expose a cancel handle; the in-flight task
                     // runs to completion or HTTP timeout. The UI side
                     // already navigates away on Cancel; a stale
@@ -153,11 +202,13 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                     tracing::debug!("LinkCancel received; in-flight link runs to completion");
                 }
                 Ok(Cmd::StartReceive) => {
+                    log::info!("bridge: Cmd::StartReceive received");
                     if send_to_manager.is_some() {
-                        // Already running. Idempotent — drop on the floor.
+                        log::info!("bridge: StartReceive — already running, idempotent drop");
                         continue;
                     }
                     let Some(manager) = linked.take() else {
+                        log::warn!("bridge: StartReceive — not linked");
                         let _ = event_tx
                             .send(Event::ReceiveError(
                                 "not linked yet — send Cmd::LinkDevice first".to_string(),
@@ -165,10 +216,11 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                             .await;
                         continue;
                     };
-                    // Stage 12: spawn a single "manager task" that
-                    // owns the Manager for life and multiplexes
-                    // receive-stream items with inbound send
-                    // requests via an internal channel.
+                    log::info!("bridge: StartReceive — spawning manager_task");
+                    // Spawn a single "manager task" that owns the
+                    // Manager for life and multiplexes receive-stream
+                    // items with inbound send requests via an internal
+                    // channel.
                     let (inner_tx, inner_rx) = async_channel::bounded::<InnerSend>(8);
                     send_to_manager = Some(inner_tx);
                     let store_for_flush = store.clone();
@@ -221,10 +273,10 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
     }));
 }
 
-/// Stage 10: run `Manager::link_secondary_device`. Forwards the
+/// Run `Manager::link_secondary_device`. Forwards the
 /// provisioning URL to the UI as `Event::LinkUrl(...)` as soon as it
 /// arrives, then awaits the user-confirmation step. Returns the linked
-/// `Manager` on success (worker keeps it for Stage 11+ Cmds) or `Err`
+/// `Manager` on success (worker keeps it for subsequent Cmds) or `Err`
 /// after sending `Event::LinkError`.
 ///
 /// We use `futures::channel::oneshot` for the URL handoff (same type
@@ -270,7 +322,7 @@ async fn handle_link_device(
     log::info!("bridge/link: link_secondary_device returned");
 
     match link_result {
-        Ok(manager) => {
+        Ok(mut manager) => {
             let data = manager.registration_data();
             let device_name = data.device_name.clone().unwrap_or_default();
             let aci = data.service_ids.aci.to_string();
@@ -282,6 +334,16 @@ async fn handle_link_device(
                     phone,
                 })
                 .await;
+            // Ask the linked phone to send a contacts sync so the
+            // ContentsStore gets populated with `(uuid, phone_number,
+            // name)` entries. Without this, sending to a phone number
+            // can't be resolved (presage's auto-save-on-receive sets
+            // `phone_number: None`). Best-effort — failure here just
+            // means e164 send-recipient resolution won't work until the
+            // phone manually re-syncs.
+            if let Err(e) = manager.request_contacts().await {
+                log::warn!("bridge/link: request_contacts failed: {}", e);
+            }
             Ok(manager)
         }
         Err(e) => {
@@ -291,7 +353,7 @@ async fn handle_link_device(
     }
 }
 
-/// Stage 12: inner-channel payload from the worker dispatcher to the
+/// Inner-channel payload from the worker dispatcher to the
 /// `manager_task`. `Cmd::SendMessage` decomposes into this struct
 /// before being forwarded.
 struct InnerSend {
@@ -299,7 +361,7 @@ struct InnerSend {
     body: String,
 }
 
-/// Stage 11+12: the long-running task that owns the linked Manager
+/// The long-running task that owns the linked Manager
 /// and multiplexes the receive stream with inbound send requests.
 ///
 /// presage's API forces a difficult shape: both `receive_messages`
@@ -326,11 +388,18 @@ async fn manager_task(
     // Tell the UI we're listening (only on the first stream open).
     let mut announced = false;
 
+    log::info!("bridge: manager_task entered");
+
     'outer: loop {
         // Open the stream for this iteration.
+        log::info!("bridge: manager_task — opening receive_messages stream");
         let mut stream = match manager.receive_messages().await {
-            Ok(s) => Box::pin(s),
+            Ok(s) => {
+                log::info!("bridge: manager_task — receive_messages OK");
+                Box::pin(s)
+            }
             Err(e) => {
+                log::warn!("bridge: manager_task — receive_messages err: {}", e);
                 let _ = event_tx
                     .send(Event::ReceiveError(format!("receive_messages: {e}")))
                     .await;
@@ -339,6 +408,7 @@ async fn manager_task(
         };
 
         if !announced {
+            log::info!("bridge: manager_task — sending ReceiveStarted");
             if event_tx.send(Event::ReceiveStarted).await.is_err() {
                 return;
             }
@@ -352,6 +422,7 @@ async fn manager_task(
                 item = stream.next().fuse() => {
                     match item {
                         Some(item) => {
+                            log::info!("bridge: stream item received");
                             if !process_received(item, &store, &event_tx).await {
                                 // event_tx closed — bail.
                                 return;
@@ -405,8 +476,28 @@ async fn process_received(
     use presage::libsignal_service::content::ContentBody;
     use presage::model::messages::Received;
 
+    log::info!("bridge: process_received variant={}", match &item {
+        Received::Content(_) => "Content",
+        Received::QueueEmpty => "QueueEmpty",
+        Received::Contacts => "Contacts",
+    });
     match item {
         Received::Content(content) => {
+            log::info!(
+                "bridge: process_received Content body_kind={}",
+                match &content.body {
+                    presage::libsignal_service::content::ContentBody::NullMessage(_) => "NullMessage",
+                    presage::libsignal_service::content::ContentBody::DataMessage(_) => "DataMessage",
+                    presage::libsignal_service::content::ContentBody::SynchronizeMessage(_) => "SynchronizeMessage",
+                    presage::libsignal_service::content::ContentBody::CallMessage(_) => "CallMessage",
+                    presage::libsignal_service::content::ContentBody::ReceiptMessage(_) => "ReceiptMessage",
+                    presage::libsignal_service::content::ContentBody::TypingMessage(_) => "TypingMessage",
+                    presage::libsignal_service::content::ContentBody::DecryptionErrorMessage(_) => "DecryptionErrorMessage",
+                    presage::libsignal_service::content::ContentBody::StoryMessage(_) => "StoryMessage",
+                    presage::libsignal_service::content::ContentBody::PniSignatureMessage(_) => "PniSignatureMessage",
+                    presage::libsignal_service::content::ContentBody::EditMessage(_) => "EditMessage",
+                }
+            );
             // Only surface text-bearing DataMessages for MVP.
             // Sync/receipt/typing messages have already been
             // absorbed by the store machinery presage runs
@@ -424,11 +515,32 @@ async fn process_received(
             if body.is_empty() {
                 return true; // attachment- or reaction-only
             }
-            let sender = content.metadata.sender.service_id_string();
+            let sender_sid = content.metadata.sender.clone();
+            let sender = sender_sid.service_id_string();
             let timestamp = content.metadata.timestamp;
+
+            // Resolve display info from the contacts store. Empty if the
+            // sender isn't yet known (peer hasn't been synced from the
+            // linked phone). UI falls back to the UUID.
+            use presage::libsignal_service::prelude::phonenumber::Mode;
+            use presage::store::ContentsStore;
+            let (sender_phone, sender_name) = match store.contact_by_id(&sender_sid).await {
+                Ok(Some(c)) => {
+                    let phone = c
+                        .phone_number
+                        .as_ref()
+                        .map(|pn| pn.format().mode(Mode::E164).to_string());
+                    let name = if c.name.is_empty() { None } else { Some(c.name) };
+                    (phone, name)
+                }
+                _ => (None, None),
+            };
+
             event_tx
                 .send(Event::Message {
                     sender,
+                    sender_phone,
+                    sender_name,
                     body,
                     timestamp,
                 })
@@ -436,7 +548,7 @@ async fn process_received(
                 .is_ok()
         }
         Received::QueueEmpty => {
-            // Decision 5: flush dirty sessions in batched chunks at
+            // Flush dirty sessions in batched chunks at
             // quiescence. Errors are non-fatal — next QueueEmpty
             // retries.
             if let Err(e) = store.flush_sessions() {
@@ -451,7 +563,7 @@ async fn process_received(
     }
 }
 
-/// Stage 12: parse the recipient UUID, build a text-only DataMessage
+/// Parse the recipient UUID, build a text-only DataMessage
 /// at the current wall-clock timestamp, and call
 /// `Manager::send_message`. Always emits exactly one event:
 /// `SendComplete{timestamp}` on success, `SendError(reason)` on
@@ -467,17 +579,59 @@ async fn handle_send(
     use presage::libsignal_service::prelude::Uuid;
     use presage::libsignal_service::proto::DataMessage;
     use presage::libsignal_service::protocol::{Aci, ServiceId};
+    use presage::store::ContentsStore;
 
-    let Ok(uuid) = Uuid::parse_str(&send.recipient) else {
+    // Recipient may be either a UUID/ACI (36 chars, dashed) or a
+    // phone number in e164 form (`+<digits>`). UUIDs go straight through;
+    // phone numbers are looked up against the contacts store, which is
+    // populated by phone-sourced sync messages (and `presage` auto-
+    // saves contacts on first received message).
+    let recipient = if let Ok(uuid) = Uuid::parse_str(send.recipient.trim()) {
+        ServiceId::Aci(Aci::from_uuid_bytes(uuid.into_bytes()))
+    } else if send.recipient.trim().starts_with('+') {
+        let target = send.recipient.trim();
+        let Ok(contacts_iter) = manager.store().contacts().await else {
+            let _ = event_tx
+                .send(Event::SendError(
+                    "couldn't read contacts store".to_string(),
+                ))
+                .await;
+            return;
+        };
+        // Find a contact whose phone_number matches the typed e164.
+        // `phonenumber::PhoneNumber` formats as e164 via the `Display`
+        // impl with `Mode::E164`, but its default Display is national —
+        // use `format()` with the explicit mode for a clean compare.
+        use presage::libsignal_service::prelude::phonenumber::Mode;
+        let mut matched: Option<Uuid> = None;
+        for contact_res in contacts_iter {
+            let Ok(contact) = contact_res else { continue };
+            let Some(pn) = contact.phone_number.as_ref() else { continue };
+            let pn_str = pn.format().mode(Mode::E164).to_string();
+            if pn_str == target {
+                matched = Some(contact.uuid);
+                break;
+            }
+        }
+        let Some(uuid) = matched else {
+            let _ = event_tx
+                .send(Event::SendError(format!(
+                    "phone {} not in contacts (receive a message from them first, or use their ACI UUID)",
+                    target
+                )))
+                .await;
+            return;
+        };
+        ServiceId::Aci(Aci::from_uuid_bytes(uuid.into_bytes()))
+    } else {
         let _ = event_tx
             .send(Event::SendError(format!(
-                "invalid recipient uuid: {}",
+                "recipient must be ACI UUID or +e164 phone number; got {:?}",
                 send.recipient
             )))
             .await;
         return;
     };
-    let recipient = ServiceId::Aci(Aci::from_uuid_bytes(uuid.into_bytes()));
 
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -503,11 +657,12 @@ async fn handle_send(
     }
 }
 
-/// Run `Manager::load_registered` and stringify the result. Stage 8
-/// always sees `Err(Error::NotYetRegisteredError)` here because the
-/// store starts empty — that's the path we want to exercise (the
-/// channel round-trip; that the error type round-trips cleanly; that
-/// the executor doesn't deadlock when a future returns an error).
+/// Run `Manager::load_registered` and stringify the result. On a
+/// fresh install this always sees `Err(Error::NotYetRegisteredError)`
+/// here because the store starts empty — that's the path we want to
+/// exercise (the channel round-trip; that the error type round-trips
+/// cleanly; that the executor doesn't deadlock when a future returns
+/// an error).
 ///
 /// `Manager::load_registered` takes `S: Store` by value and returns a
 /// `Manager<S, Registered>` if registration data exists. We only need

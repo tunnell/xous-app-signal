@@ -11,46 +11,40 @@ publish.workspace = true
 # The Manager state machine + storage trait.
 presage = { git = "https://github.com/whisperfish/presage", rev = "600c4ed" }
 
-# Our PDDB-backed storage impl. Used by `run_signal_worker` to type the
-# `S: Store` parameter, even though Stage 8 only exercises the
-# `with_mock_backend` constructor.
+# PDDB-backed storage impl.
 presage-store-pddb = { path = "../presage-store-pddb" }
 
 # Local-executor + sync→async channels. Worker thread parks on
 # `executor.run(...)`; cmd/event channels are async-channel for the
-# sync `try_send`/`send_blocking` <-> async `send`/`recv` duality
-# documented in the Stage 1 / 6.1 reports.
+# sync `try_send`/`send_blocking` ↔ async `send`/`recv` duality.
 async-executor = { workspace = true }
 async-channel = { workspace = true }
 futures-lite = { workspace = true }
 
-# Stage 10: presage's `Manager::link_secondary_device` takes a
-# `futures::channel::oneshot::Sender<Url>` for the provisioning-URL
-# handoff and runs two sub-futures concurrently. We use the same
-# `futures` 0.3 primitives the upstream API expects rather than
-# reinventing oneshot via async-channel; the dep is already
-# transitive through presage so it's free in dep-graph terms.
+# `Manager::link_secondary_device` takes
+# `futures::channel::oneshot::Sender<Url>` and runs two sub-futures
+# concurrently. We use the same `futures` 0.3 primitives the upstream
+# API expects rather than reinventing oneshot via async-channel; the
+# dep is already transitive through presage so it's free in dep-graph
+# terms.
 futures = { version = "0.3", default-features = false, features = ["std"] }
 
-# Stage 10: the provisioning URL is a `url::Url` (presage's API
-# uses it directly via the `url` 2.x crate). We hold the import
-# explicitly so the worker doesn't depend on transitive resolution.
+# The provisioning URL is a `url::Url` (presage's API uses it
+# directly). Held explicitly so the worker doesn't depend on
+# transitive resolution.
 url = "2.5"
 
-# Stage 10: register a real `HttpClient` with libsignal-service's
-# thread-local so `Manager::link_secondary_device` can reach
-# chat.signal.org. SyncHttpClient + signal_production_roots come
-# from our Stage 6 sync transport. Without this dep the Manager
-# panics with "set_http_client must be called on this thread
-# first" the moment it tries to issue the registration HTTP.
+# Real `HttpClient` registered with libsignal-service's thread-local
+# so `Manager::link_secondary_device` can reach chat.signal.org. Without
+# it the Manager panics with "set_http_client must be called on this
+# thread first" the moment it tries to issue the registration HTTP.
 xous-net-bridge = { path = "../xous-net-bridge" }
 
 # Logging — the worker runs entirely off the main thread, so the only
 # way to debug it is through `tracing`. Production binaries route this
 # to xous logger; hosted-mode tests just need the messages to surface.
 tracing = "0.1"
-# Stage 14b-fix: also use the `log` facade for the few diagnostic
-# lines we want surfaced through xas's env_logger / xous-api-log
-# pipeline (tracing has no subscriber configured in our binary, so
-# pure tracing events go nowhere).
+# `log` for diagnostic lines that need to surface through xas's
+# env_logger / xous-api-log pipeline. `tracing` has no subscriber
+# configured in our binary, so pure tracing events go nowhere.
 log = "0.4"

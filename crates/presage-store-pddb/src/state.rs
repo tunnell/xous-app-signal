@@ -1,10 +1,9 @@
 //! `presage::store::StateStore` implementation for `PddbStore`.
 //!
-//! All state lives in a single PDDB dictionary, `signal.state`, with one
-//! key per field — per `docs/REPORT.md` Decision 1 (storage layout). This
-//! matches presage-store-sqlite's `kv` table layout. Per-field keys keep
-//! reads cheap and let `clear_registration` walk the dict instead of
-//! editing a giant blob.
+//! All state lives in a single PDDB dictionary, `signal.state`, with
+//! one key per field. This matches presage-store-sqlite's `kv` table
+//! layout. Per-field keys keep reads cheap and let `clear_registration`
+//! walk the dict instead of editing a giant blob.
 //!
 //! Serialization choices:
 //!
@@ -92,8 +91,8 @@ impl StateStore for PddbStore {
     async fn clear_registration(&mut self) -> Result<(), Error> {
         // Drops every key in the state dict — registration, both
         // identity key pairs, sender certificate, master key. The
-        // protocol stores live in their own dicts (Stage 5a) and aren't
-        // touched here; presage's `Store::clear` chains both.
+        // protocol stores live in their own dicts and aren't touched
+        // here; presage's `Store::clear` chains both.
         self.backend.delete_dict(DICT)?;
         Ok(())
     }

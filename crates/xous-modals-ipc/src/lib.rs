@@ -1,6 +1,6 @@
 //! Hand-rolled Modals IPC client for the xas Signal app.
 //!
-//! Stage 14a — replicates just `show_notification` from xous-core's
+//! Replicates just `show_notification` from xous-core's
 //! `services/modals` so we can put a QR code on the LCD without
 //! pulling in the full `gam`/`blitstr2`/`ux-api` dep cascade. Same
 //! pattern as `xous-pddb-ipc`.
@@ -8,8 +8,7 @@
 //! The wire structs (`ManagedNotification`, `Opcode::GetMutex`,
 //! `Opcode::Notification`) are byte-compatible verbatim copies from
 //! `~/precursor-signal/repos/xous-core/services/modals/src/api.rs`.
-//! rkyv 0.8 ↔ 0.8 wire compatibility (same as the PDDB IPC client
-//! validated in Stage 13b-2).
+//! rkyv 0.8 ↔ 0.8 wire compatibility (same as the PDDB IPC client).
 //!
 //! Server-side: when `qrtext: Some(s)` is set, `services/modals/src/
 //! main.rs` calls `notification.set_qrcode(qrtext)`, which renders a

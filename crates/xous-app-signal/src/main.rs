@@ -1,18 +1,18 @@
 //! Xous Signal app entry point.
 //!
-//! Stage 9c: replaces the Stage 8 sequential Hello/Whoami probe with
+//! The earlier sequential Hello/Whoami probe is replaced with
 //! a real UI loop. The probe lives on as the menu's "Test worker"
 //! item — useful for verifying the worker thread + IPC channels are
 //! still alive after a code change. The shape of the binary is now:
 //!
 //! 1. Construct a `PddbStore` (mock backend in hosted; real PDDB
-//!    behind a `pddb-backend` feature flag at Stage 9b).
+//!    behind a `pddb-backend` feature flag).
 //! 2. Spawn the manager worker thread (`xous-signal-bridge`).
 //! 3. Hand the cmd/event channels to `Ui::new` and call `Ui::run`.
 //! 4. Worker shutdown is the responsibility of the UI driver — it
 //!    sends `Cmd::Shutdown` on Quit.
 //!
-//! See docs/ROADMAP.md Stage 9c and docs/UI.md for the design.
+//! See docs/ROADMAP.md and docs/UI.md for the design.
 
 mod gam_app;
 
@@ -22,8 +22,8 @@ use presage_store_pddb::PddbStore;
 use xous_app_signal_ui::Ui;
 use xous_signal_bridge::{Cmd, Event, run_signal_worker};
 
-/// Stage 9b-deploy Phase C-1: real `__getrandom_v03_custom` body
-/// backed by xous-core's TRNG service.
+/// Real `__getrandom_v03_custom` body backed by xous-core's TRNG
+/// service.
 ///
 /// Looks up the trng SID via `xous-api-names`, then calls
 /// `Trng::fill_buf` (per `xous-core/services/trng/src/lib.rs:63`).
@@ -98,8 +98,8 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
     })
 }
 
-/// Channel capacity. 16 is plenty for the Stage 8 single-prompt
-/// round-trip; production sizing (Stage 12+) will revisit.
+/// Channel capacity. 16 is plenty for the single-prompt
+/// round-trip; production sizing will revisit.
 const CHAN_CAP: usize = 16;
 
 /// Choose the store backend based on feature flags.
@@ -109,10 +109,10 @@ const CHAN_CAP: usize = 16;
 /// - `pddb-real` on rv32-xous: real `PddbStore::with_pddb_backend`.
 ///   If the connect fails (e.g. PDDB isn't running), we log and
 ///   fall back to mock so the binary still boots — the smoke test
-///   shouldn't fail just because PDDB's not up. Stage 13b-2 design:
-///   surface real failures via xas's UI eventually, not by
-///   hard-aborting boot.
-#[cfg(all(feature = "pddb-real", target_os = "xous"))]
+///   shouldn't fail just because PDDB's not up. Design: surface
+///   real failures via xas's UI eventually, not by hard-aborting
+///   boot.
+#[cfg(feature = "pddb-real")]
 fn build_store() -> PddbStore {
     match PddbStore::with_pddb_backend() {
         Ok(s) => {
@@ -126,7 +126,7 @@ fn build_store() -> PddbStore {
     }
 }
 
-#[cfg(not(all(feature = "pddb-real", target_os = "xous")))]
+#[cfg(not(feature = "pddb-real"))]
 fn build_store() -> PddbStore {
     log::info!("xas: store=mock");
     PddbStore::with_mock_backend()
@@ -153,7 +153,7 @@ fn main() -> std::io::Result<()> {
     #[cfg(all(feature = "probe-pddb-real", target_os = "xous"))]
     probe_pddb_real();
 
-    // Stage 14a: auto-link feature drives the link flow + QR modal
+    // The auto-link feature drives the link flow + QR modal
     // on real hardware. When enabled, we *replace* the regular UI
     // loop — the auto-link probe is the UI for this build mode. On
     // success, it logs LinkComplete details to UART and lets main()
@@ -188,17 +188,17 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-/// Stage 9b: install a `log` implementation. Hosted picks
+/// Install a `log` implementation. Hosted picks
 /// `env_logger`; rv32-xous binds `xous-api-log` via the integration
-/// step (Stage 9b follow-up at hardware-deploy time — needs a
-/// path-dep that resolves only inside xous-core's tree).
+/// step (needs a path-dep that resolves only inside xous-core's
+/// tree).
 #[cfg(not(target_os = "xous"))]
 fn init_logger() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .try_init();
 }
 
-/// Stage 13a probe: TCP-connect probe used to figure out whether
+/// TCP-connect probe used to figure out whether
 /// Renode's WF200 wifi emulation actually carries outbound traffic.
 /// Three connect targets, each logged with elapsed time and result:
 ///
@@ -274,12 +274,12 @@ fn probe_network() {
     log::info!("probe: network probe done");
 }
 
-/// Stage 13b probe: poll xous-core's PDDB Mount Poller via raw
-/// `xous` IPC and log the result. This verifies the
-/// "hand-rolled PDDB client" path before we commit to writing
-/// it for real — the Mount Poller's `Poll` opcode (0) is the
-/// simplest IPC roundtrip we can do against PDDB, taking no
-/// payload and returning a `Scalar1(0|1)` mount state.
+/// Poll xous-core's PDDB Mount Poller via raw `xous` IPC and log
+/// the result. This verifies the "hand-rolled PDDB client" path
+/// before we commit to writing it for real — the Mount Poller's
+/// `Poll` opcode (0) is the simplest IPC roundtrip we can do
+/// against PDDB, taking no payload and returning a `Scalar1(0|1)`
+/// mount state.
 ///
 /// Implementation mirrors `services/pddb/src/lib.rs:30–60`
 /// (`PddbMountPoller::new` + `is_mounted_nonblocking`) but does
@@ -354,10 +354,10 @@ fn probe_pddb() {
     log::info!("probe-pddb: probe done in {:?}", start.elapsed());
 }
 
-/// Stage 13b-2 probe: put/get/list/delete/list cycle against the
-/// real PDDB-backed `KvBackend`. Verifies the buffered IPC path
-/// (the `lend_mut` calls that the scalar-only `probe-pddb` couldn't
-/// exercise) actually works on the wire.
+/// Put/get/list/delete/list cycle against the real PDDB-backed
+/// `KvBackend`. Verifies the buffered IPC path (the `lend_mut`
+/// calls that the scalar-only `probe-pddb` couldn't exercise)
+/// actually works on the wire.
 ///
 /// Requires the image to be built with `pddb/autobasis` so PDDB is
 /// pre-mounted on boot — otherwise every op returns `NotMounted`
@@ -386,10 +386,9 @@ fn probe_pddb_real() {
     let key = "hello";
     let value: &[u8] = b"world";
 
-    // Stage 13b-2: keep going even if individual ops fail. The
-    // failure mode itself is informative (which is what the probe
-    // is for); aborting early masks downstream IPC behavior we
-    // want to see.
+    // Keep going even if individual ops fail. The failure mode
+    // itself is informative (which is what the probe is for);
+    // aborting early masks downstream IPC behavior we want to see.
     let phase = Instant::now();
     match backend.put(dict, key, value) {
         Ok(()) => log::info!("probe-pddb-real: put OK in {:?}", phase.elapsed()),
@@ -432,7 +431,7 @@ fn probe_pddb_real() {
     log::info!("probe-pddb-real: probe done in {:?}", start.elapsed());
 }
 
-/// Stage 14a hardware auto-link probe.
+/// Hardware auto-link probe.
 ///
 /// Fires `Cmd::LinkDevice` and drives the resulting event stream
 /// to either `Event::LinkComplete` or `Event::LinkError`. On
@@ -445,7 +444,7 @@ fn probe_pddb_real() {
 ///
 /// Failure modes worth distinguishing in the UART log:
 /// - **No modals response**: server isn't running or our wire
-///   protocol drifted. Stage 14a precedent (`xous-pddb-ipc`)
+///   protocol drifted. Existing precedent (`xous-pddb-ipc`)
 ///   makes wire drift unlikely; missing server means the image
 ///   wasn't built with `services/modals` (always present in our
 ///   `cargo xtask app-image` flow).

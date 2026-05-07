@@ -1,7 +1,7 @@
 //! Sync HTTP/1.1 client implementing `libsignal_service::transport::HttpClient`.
 //!
-//! Stage 6.1 phase 3d. Uses our existing `tls_connect` for TLS, hand-rolled
-//! HTTP/1.1 request/response framing for the body. Avoids pulling `ureq`
+//! Uses our existing `tls_connect` for TLS, hand-rolled HTTP/1.1
+//! request/response framing for the body. Avoids pulling `ureq`
 //! (which bundles its own rustls and would conflict with our `=0.22.2`
 //! pin) and `reqwest` (tokio-coupled).
 //!

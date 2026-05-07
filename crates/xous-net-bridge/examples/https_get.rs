@@ -1,7 +1,5 @@
-//! Stage 2 smoke test: open a sync TLS connection to example.com,
-//! send a minimal HTTP/1.1 GET, print the status line.
-//!
-//! Per docs/ROADMAP.md Stage 2.
+//! Smoke test: open a sync TLS connection to example.com, send a
+//! minimal HTTP/1.1 GET, print the status line.
 
 use std::io::{Read, Write};
 

@@ -13,21 +13,21 @@ name = "xas"
 path = "src/main.rs"
 
 [features]
-# Stage 13a probe: when enabled, after the worker spawns, main()
-# fires a TCP connect against a known endpoint and logs the result.
-# Used to figure out which of {Renode network emulation, the Xous
-# net service, our bridge} actually carries traffic. Default off
-# so prod / smoke builds aren't affected.
+# When enabled, after the worker spawns, main() fires a TCP connect
+# against a known endpoint and logs the result. Used to figure out
+# which of {Renode network emulation, the Xous net service, our
+# bridge} actually carries traffic. Default off so prod / smoke
+# builds aren't affected.
 probe-flow = []
 
-# Stage 13b probe: when enabled, after the worker spawns, main()
-# pings xous-core's PDDB Mount Poller via raw `xous` IPC and logs
-# the mount state (`true` / `false`). Verifies the IPC protocol
-# replication path (which is what a hand-rolled PDDB client would
-# use) before committing to the full KvBackend implementation.
+# When enabled, after the worker spawns, main() pings xous-core's
+# PDDB Mount Poller via raw `xous` IPC and logs the mount state
+# (`true` / `false`). Verifies the IPC protocol replication path
+# (which is what a hand-rolled PDDB client would use) before
+# committing to the full KvBackend implementation.
 probe-pddb = []
 
-# Stage 13b-2: full PDDB-backed KvBackend.
+# Full PDDB-backed KvBackend.
 # - `pddb-real` swaps `PddbStore::with_mock_backend()` for
 #   `PddbStore::with_pddb_backend()` in main.rs (the construction
 #   point is feature-gated). Activating this on hosted is a no-op;
@@ -35,11 +35,11 @@ probe-pddb = []
 #   `target_os = "xous"`.
 # - `probe-pddb-real` is a downstream "smoke the backend" mode that,
 #   on top of `pddb-real`, drives a single put/get/delete cycle in
-#   main() and logs the result. Stage 13b-2 follow-up.
+#   main() and logs the result.
 pddb-real = ["presage-store-pddb/pddb-backend"]
 probe-pddb-real = ["pddb-real"]
 
-# Stage 14a: hardware auto-link probe.
+# Hardware auto-link probe.
 # When enabled (rv32-xous only), main() fires Cmd::LinkDevice after
 # worker spawn and renders a QR code on the LCD via xous-modals-ipc
 # (hand-rolled client over `services/modals`). User scans with the
@@ -51,7 +51,7 @@ probe-pddb-real = ["pddb-real"]
 #               -p xous-app-signal --features pddb-real,auto-link
 auto-link = []
 
-# Stage 14b: build profiles for the two Xous environments.
+# Build profiles for the two Xous environments.
 # Mirror the older xous-signal-client's pattern (Cargo.toml had its
 # own precursor/hosted features cascading to each Xous service).
 # On a Xous-emulation hosted build we activate `hosted`; for real
@@ -80,7 +80,7 @@ precursor = [
 ]
 
 [dependencies]
-# Stage 8: spawn the manager worker thread + drive Hello/GetWhoami
+# Spawn the manager worker thread + drive Hello/GetWhoami
 # round-trips. The presage-store-pddb dep is direct (not just
 # transitive through the bridge) because the binary owns the store
 # and hands a clone to the worker.
@@ -88,21 +88,20 @@ xous-signal-bridge = { path = "../xous-signal-bridge" }
 presage-store-pddb = { path = "../presage-store-pddb" }
 async-channel = { workspace = true }
 
-# Stage 9c: the UI layer. main.rs constructs the worker, then hands
+# The UI layer. main.rs constructs the worker, then hands
 # the cmd/event channels to Ui::new and calls Ui::run.
 xous-app-signal-ui = { path = "../xous-app-signal-ui" }
 
-# Stage 9b: log facade. Boot events log::info! through here so the
+# log facade. Boot events log::info! through here so the
 # Renode UART tester can assert on them. Hosted binds env_logger
-# below; rv32-xous binds xous-api-log via the integration step
-# (Stage 9b follow-up at hardware-deploy time).
+# below; rv32-xous binds xous-api-log via the integration step.
 log = "0.4"
 
-# Stage 14b: GAM client for proper LCD rendering inside the Xous
-# environment (hosted emulation OR rv32 hardware). Modeled on
+# GAM client for proper LCD rendering inside the Xous environment
+# (hosted emulation OR rv32 hardware). Modeled on
 # apps/hello/Cargo.toml. Verified via `cargo tree -p gam` that
 # gam does NOT depend on services/aes, root-keys, or pddb — the
-# Stage 9b workspace-merge blocker doesn't apply here. The cascade
+# workspace-merge blocker doesn't apply here. The cascade
 # is graphics-server + blitstr2 + ux-api + com + ime-plugin-* +
 # locales + tts-frontend + spinor — all path-deps inside xous-core,
 # bounded surface.
@@ -137,7 +136,7 @@ num-traits = { version = "0.2.14", default-features = false }
 # moved to unconditional for the hosted-Xous emulation path.
 xous = "0.9.70"
 xous-names = { package = "xous-api-names", version = "0.9.71" }
-# Stage 14b menu actions: modals client for the device-name TextEntry
+# Menu actions: modals client for the device-name TextEntry
 # prompt + QR-code Notification on link. Same API as
 # `xous-modals-ipc` (which we keep for the rv32 auto-link path)
 # but uses the upstream gam-aware client directly.
@@ -145,27 +144,20 @@ modals = { path = "../../../repos/xous-core/services/modals" }
 locales = { path = "../../../repos/xous-core/locales" }
 
 [target.'cfg(not(target_os = "xous"))'.dependencies]
-# Stage 9b: env_logger initializes from RUST_LOG; defaults to
-# info-level. Pulled only for hosted builds to keep the rv32 dep
-# graph clean. Stage 9b follow-up swaps in xous-api-log.
+# env_logger initializes from RUST_LOG; defaults to info-level.
+# Pulled only for hosted builds to keep the rv32 dep graph clean.
 env_logger = { version = "0.11", default-features = false }
 
-# Stage 1 carry-over (the smol primitives are used by the bridge
-# transitively, but the binary references nothing from them
-# directly any more — Stage 1's smoke test moved into the bridge's
-# `tests` module).
-
-# Stage 9a follow-up to Stage 6.1 phase 3f: getrandom 0.3 custom
-# backend. The cfg `getrandom_backend="custom"` set in
-# `.cargo/config.toml` for rv32-xous makes getrandom expect an
-# extern `__getrandom_v03_custom` function provided by the user
+# getrandom 0.3 custom backend. The cfg `getrandom_backend="custom"`
+# set in `.cargo/config.toml` for rv32-xous makes getrandom expect
+# an extern `__getrandom_v03_custom` function provided by the user
 # binary; without it the rv32 release build won't link. We import
 # the crate here just for `getrandom::Error` (the extern's return
 # type), gated to the rv32-xous target.
 [target.'cfg(target_os = "xous")'.dependencies]
 getrandom = { version = "0.3", default-features = false }
 
-# Stage 9b-deploy: route `log::info!` through `xous-api-log`. The
+# Route `log::info!` through `xous-api-log`. The
 # `xous-log` server (in the baseline Xous image at boot) forwards
 # log records to the hardware UART, which is what the Renode Robot
 # test asserts on. Pinned to the version other apps in xous-core
@@ -173,7 +165,7 @@ getrandom = { version = "0.3", default-features = false }
 # image links against.
 xous-api-log = "0.1.69"
 
-# Stage 9b-deploy Phase C-1: Trng client lives in `services/trng`
+# Trng client lives in `services/trng`
 # (path-dep'd; the crate exposes `Trng::new(&XousNames)` and
 # `Trng::fill_buf(&mut [u32])` which we call from
 # `__getrandom_v03_custom`). xous-api-names provides the
@@ -188,12 +180,11 @@ xous-api-susres = { path = "../../../repos/xous-core/api/xous-api-susres" }
 flatipc = { path = "../../../repos/xous-core/libs/flatipc" }
 flatipc-derive = { path = "../../../repos/xous-core/libs/flatipc-derive" }
 
-# Stage 14a: hand-rolled modals IPC for the QR-code provisioning
+# Hand-rolled modals IPC for the QR-code provisioning
 # screen. Used only when `auto-link` is enabled, but listed
 # unconditionally because Cargo features can't add target-cfg-gated
 # deps from a non-target-cfg-gated feature flag.
 xous-modals-ipc = { path = "../xous-modals-ipc" }
 # (utralib was added in a Phase C-3 first-attempt and removed when
 # u32e_backend turned out to be incompatible with the vendored
-# libsignal lizard port. Re-add when u32e is unblocked — see
-# stage/REPORT-9b-deploy-C.md §3.)
+# libsignal lizard port. Re-add when u32e is unblocked.)

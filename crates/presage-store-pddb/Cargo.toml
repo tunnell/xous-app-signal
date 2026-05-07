@@ -8,16 +8,16 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-# presage pinned to HEAD as of Stage 4 (commit 600c4ed). The workspace
+# presage pinned to commit 600c4ed. The workspace
 # [patch."https://github.com/whisperfish/presage"] in xous-app-signal's
-# top-level Cargo.toml redirects this to vendor/presage/presage where the
-# Stage 7 (Decision 2) tokio-removal patches live.
+# top-level Cargo.toml redirects this to vendor/presage/presage, which
+# carries the local tokio-removal patches.
 presage = { git = "https://github.com/whisperfish/presage", rev = "600c4ed" }
 
-# Serde + JSON for state serialization. We use JSON (not bincode) so the
+# Serde + JSON for state serialization. JSON (not bincode) so the
 # on-disk format is debuggable from `pddbcli` dumps. Same choice
 # presage-store-sqlite makes; cost is small for the < 1 KiB state blobs
-# we serialize. Per `docs/REPORT.md` Decision 1.
+# we serialize.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
@@ -29,65 +29,56 @@ sha2 = "0.10"
 # Error type derives.
 thiserror = "1"
 
-# `futures-lite::future::block_on` is used in unit tests to drive the
-# async store API without pulling tokio into the production dep tree.
+# `futures-lite::future::block_on` drives the async store API in unit
+# tests without pulling tokio into the production dep tree.
 futures-lite = { workspace = true }
 
-# Stage 5a/b uses async-trait for IdentityKeyStore / SessionStore /
-# PreKeyStore / KyberPreKeyStoreExt etc. — the libsignal protocol
-# storage traits all use #[async_trait(?Send)] in their definitions,
-# and our impls have to match.
+# `IdentityKeyStore` / `SessionStore` / `PreKeyStore` /
+# `KyberPreKeyStoreExt` etc. all use `#[async_trait(?Send)]` in
+# their trait definitions; our impls have to match.
 async-trait = "0.1"
 
-# Stage 5b: KyberPreKeyStoreExt's stale-marking methods take
+# `KyberPreKeyStoreExt`'s stale-marking methods take
 # `chrono::DateTime<Utc>` per the trait signature. We don't act on the
 # timestamps for now (matches presage-store-sqlite), but the type has
 # to be in scope for the impl to compile.
 chrono = { version = "0.4", default-features = false, features = ["serde"] }
 
-# Stage 5c: ContentBody serialization for messages — protobuf round-trip
-# via prost, matching presage-store-sled's ContentProto pattern.
-# Pinned to 0.13 to match libsignal-service-rs's `prost = "0.13"`; using
-# 0.14 here would compile but `presage::proto::Content` would only impl
-# `prost_0_13::Message`, so `encode_to_vec`/`decode` wouldn't resolve.
+# `ContentBody` serialization — protobuf round-trip via prost, matching
+# presage-store-sled's ContentProto pattern. Pinned to 0.13 to match
+# libsignal-service-rs's `prost = "0.13"`; 0.14 would compile but
+# `presage::proto::Content` would only impl `prost_0_13::Message`, so
+# `encode_to_vec`/`decode` wouldn't resolve.
 prost = "0.13"
 
-# Used by IdentityKeyStore to log unrecognized-identity TOFU events.
-# Already a transitive dep through presage / libsignal-service-rs;
-# declaring it here directly so the import doesn't depend on a
-# transitive resolution that could change.
+# `IdentityKeyStore` logs unrecognized-identity TOFU events through
+# `tracing`. Already a transitive dep through presage /
+# libsignal-service-rs; declaring it directly so the import doesn't
+# depend on transitive resolution that could change.
 tracing = "0.1"
 
-# Stage 5c: base64-encode the group master_key inside the per-thread
+# Hand-rolled PDDB IPC client — the real `KvBackend` impl in
+# backend_pddb.rs wraps it. Cross-target: xous-rs's hosted-mode
+# emulation carries the wire format over Unix-domain sockets to
+# services/pddb, so the same client works on hosted-linux and
+# rv32-xous.
+xous-pddb-ipc = { path = "../xous-pddb-ipc" }
+
+# base64-encodes the group master_key inside the per-thread
 # dictionary-name hash. Same hashing scheme presage-store-sled uses
 # (vendor/presage/presage-store-sled/src/content.rs:471-485).
 base64 = "0.22"
 
 [features]
-# Stage 9a scaffolding: feature-flagged real PDDB backend.
-#
-# - `mock-backend` (default for hosted/test builds) selects the
+# `mock-backend` (default for hosted/test builds) selects the
 #   in-memory `MockBackend` from `backend_mock.rs`. Always available;
 #   tests rely on it.
-# - `pddb-backend` selects the real `PddbBackend` from
-#   `backend_pddb.rs`, which lives behind `cfg(target_os = "xous")`.
-#   Enabling on a non-xous target is harmless — the impl module just
-#   doesn't include itself, so the constructor is unavailable.
-#
-# The feature is non-default: hosted-mode `cargo build` keeps using
-# the mock. Stage 9b inside the xous-core fork will set
-# `--features=pddb-backend` for the rv32 image build.
+# `pddb-backend` selects the real `PddbBackend` from `backend_pddb.rs`,
+#   which wraps `xous_pddb_ipc::PddbClient` for both hosted and rv32
+#   targets.
 default = []
 mock-backend = []
 pddb-backend = []
-
-# Stage 13b-2: when `pddb-backend` is enabled on rv32-xous,
-# `backend_pddb` becomes a real `KvBackend` wrapping
-# `xous_pddb_ipc::PddbClient`. Hosted builds with the same feature
-# flag continue using the mock under-the-hood (the cfg in
-# backend_pddb.rs gates the impl module).
-[target.'cfg(target_os = "xous")'.dependencies]
-xous-pddb-ipc = { path = "../xous-pddb-ipc" }
 
 [dev-dependencies]
 # `RegistrationData` construction in tests needs a few presage / libsignal

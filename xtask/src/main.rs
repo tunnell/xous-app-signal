@@ -20,7 +20,7 @@
 //! - **`renode-test`** — invokes `renode-test` against
 //!   `tests/renode/xas-smoke.robot`. Requires Renode 1.16+ on
 //!   PATH and a built Xous image at the location the `.resc`
-//!   script expects. End-to-end this is what the Stage 9b ROADMAP
+//!   script expects. End-to-end this is what the ROADMAP
 //!   verification step runs.
 //! - **`help`** (default) — prints this list.
 //!
@@ -76,7 +76,17 @@ fn print_help() {
     println!("  RENODE        — renode-test binary. Default: renode-test");
 }
 
-/// `cargo build --target=riscv32imac-unknown-xous-elf --release -p xous-app-signal`.
+/// `cargo build --target=riscv32imac-unknown-xous-elf --release -p xous-app-signal`
+/// `--features pddb-real,precursor`.
+///
+/// The features are non-negotiable for hardware deploy:
+/// - `pddb-real`: real PDDB-backed store (link state survives across
+///   power cycles). Without it the rv32 binary uses the in-memory mock
+///   and forgets every link the moment the device sleeps.
+/// - `precursor`: per-service feature cascade (blitstr2/precursor,
+///   ux-api/precursor, gam/precursor, modals/precursor, graphics-
+///   server/precursor, utralib/precursor*). Without it the UI crates
+///   build for the wrong target ABI.
 fn build_rv32() -> Result<(), String> {
     eprintln!("xtask: cross-compile xas for {TARGET_TRIPLE} (release)");
     let status = Command::new(cargo_bin())
@@ -87,6 +97,8 @@ fn build_rv32() -> Result<(), String> {
             "--release",
             "-p",
             PACKAGE_NAME,
+            "--features",
+            "pddb-real,precursor",
         ])
         .status()
         .map_err(|e| format!("spawn cargo: {e}"))?;

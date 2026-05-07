@@ -1,55 +1,163 @@
 # xous-app-signal (`xas`)
 
-A Signal client for Xous (Precursor) built on the Whisperfish Rust stack —
-[`whisperfish/presage`](https://github.com/whisperfish/presage),
-[`whisperfish/libsignal-service-rs`](https://github.com/whisperfish/libsignal-service-rs),
-and [`signalapp/libsignal`](https://github.com/signalapp/libsignal) — rather
-than reimplementing the Signal protocol from primitives.
+Unofficial Signal client for [Xous](https://github.com/betrusted-io/xous-core)
+on [Precursor](https://www.crowdsupply.com/sutajio-kosagi/precursor).
 
-The on-device binary is named `xas` (pronounceable abbreviation of
-**X**ous **a**pp **s**ignal).
+**Prototype. Not for production use.**
+
+Built on the Whisperfish Rust stack —
+[`presage`](https://github.com/whisperfish/presage),
+[`libsignal-service-rs`](https://github.com/whisperfish/libsignal-service-rs),
+and [`signalapp/libsignal`](https://github.com/signalapp/libsignal) — rather
+than reimplementing the Signal protocol from primitives. The on-device binary
+is named **`xas`** ("**X**ous **a**pp **s**ignal").
 
 The driving project value is end-user verifiability: a user who buys a
 Precursor should be able to read every line of Rust that ends up on their
 device. The design therefore leans on upstream community-maintained code
-(reused as-is or with small, reviewable patches) and minimizes bespoke
+(reused as-is or with small reviewable patches) and minimizes bespoke
 Xous-specific glue.
 
-## Documents
+---
 
-- [docs/REPORT.md](./docs/REPORT.md) — design rationale and the six load-bearing decisions.
-- [docs/CALL_GRAPH.md](./docs/CALL_GRAPH.md) — call graph from each `presage-cli` subcommand through the stack, with Mermaid diagrams.
-- [docs/ROADMAP.md](./docs/ROADMAP.md) — staged plan from empty workspace to MVP.
+## Status
+
+| Capability                                | State                  |
+|-------------------------------------------|------------------------|
+| Link as secondary device (QR scan)        | working in hosted      |
+| Persistence across kernel restarts (PDDB) | working in hosted      |
+| Auto-reload registration on boot          | working in hosted      |
+| Receive 1:1 text messages                 | working in hosted      |
+| Send 1:1 text messages (UUID or e164)     | working in hosted      |
+| Contact name / phone display              | wired, lightly tested  |
+| Hardware deploy on real Precursor         | **untested**           |
+| Group messaging / attachments / calls     | out of scope (for now) |
+
+This is a hosted-mode demo today. The same code path is intended to run on
+real Precursor hardware with no source-level changes — every UI primitive
+talks to the GAM service via Xous IPC, which is target-agnostic — but the
+first hardware flash hasn't happened yet.
+
+---
+
+## Quickstart (hosted)
+
+These instructions exercise the link → receive → send loop on a Linux dev
+machine using xous-core's hosted-mode emulator, without flashing real
+hardware. Two real Signal accounts are required.
+
+### Prerequisites
+
+- Linux x86_64, an SSH session with X11 forwarding (or a local desktop).
+- Rust 1.95+ via rustup.
+- A working X11 display (`xset q` returns instantly).
+- Two Signal accounts: one with the
+  [Signal Android/iOS app](https://signal.org/), one with
+  [signal-cli](https://github.com/AsamK/signal-cli) installed and linked
+  as a secondary on the second account. signal-cli is your test peer.
+- A clone of `betrusted-io/xous-core` (or a compatible fork) at
+  `../repos/xous-core` relative to this checkout.
+
+### Build and run
+
+```sh
+# 1. Clone next to a xous-core checkout:
+mkdir signal && cd signal
+git clone https://github.com/betrusted-io/xous-core repos/xous-core
+git clone <this repo> xous-app-signal
+
+# 2. Build the hosted xas binary:
+cd xous-app-signal
+cargo build --release -p xous-app-signal --features pddb-real,hosted
+
+# 3. Boot xous-core hosted with xas bundled. Run from xous-core's root:
+cd ../repos/xous-core
+cargo xtask run xas:../../xous-app-signal/target/release/xas
+```
+
+Once an X11 window labelled "Precursor" appears, navigate launcher → Apps
+→ xas, pick "Link device", and accept the default device-name. A QR code
+will appear; scan it from the Signal app on your phone.
+
+### Headless link verification
+
+`tests/hosted/test_link_qr.sh` drives the boot → launcher → xas → Link
+sequence headlessly and gates on the provisioning URL appearing in the
+kernel log. Use it as a smoke test:
+
+```sh
+INSPECT_HOLD=900 bash tests/hosted/test_link_qr.sh
+```
+
+The `INSPECT_HOLD` env var keeps the kernel alive for the given seconds
+after the QR appears so you can scan from your phone.
+
+### End-to-end receive + send
+
+After linking, your other Signal account can send messages to xas. The
+kernel log will show:
+
+```
+xas/gam_app: inbound message from <name-or-phone-or-uuid> (N bytes)
+```
+
+To send back, navigate to xas Menu → Send. Recipient accepts either a UUID
+(ACI) or an e164 phone number (`+15551234567`); the latter is resolved
+against the contact list synced from the linked phone.
+
+---
 
 ## Layout
 
 ```
 xous-app-signal/
-├── Cargo.toml                  # workspace root with [profile.release], [patch.crates-io]
-├── rust-toolchain.toml         # 1.95.0 stable
 ├── crates/
-│   ├── presage-store-pddb/     # 9 storage trait impls over PDDB (Decision 1)
-│   ├── xous-net-bridge/        # sync TLS + WS pump + channel bridge (Decision 3)
-│   ├── xous-signal-bridge/     # Manager-on-worker + IPC forwarder (Decision 4)
-│   └── xous-app-signal/        # binary entry point (binary name: `xas`)
-└── stage/                      # per-stage execution reports
+│   ├── presage-store-pddb/     storage trait impls over PDDB
+│   ├── xous-net-bridge/        sync TLS + WS pump + channel bridge
+│   ├── xous-pddb-ipc/          hand-rolled PDDB IPC client
+│   ├── xous-modals-ipc/        hand-rolled modals IPC client
+│   ├── xous-signal-bridge/     Manager-on-worker + IPC forwarder
+│   ├── xous-app-signal/        binary entry point (binary name: `xas`)
+│   └── xous-app-signal-ui/     stdin-driven UI (legacy; gam_app.rs is current)
+├── docs/                       design docs (REPORT, CALL_GRAPH, ROADMAP)
+├── stage/                      per-stage execution reports
+├── tests/hosted/               headless link/receive harness
+└── vendor/                     vendored forks of presage / libsignal-service-rs / curve25519-dalek
 ```
 
-## Build
+---
+
+## Tests
 
 ```sh
-cargo build --workspace
-cargo build --workspace --release
-cargo build --workspace --profile=release-small   # for binary-size measurement
+cargo test --workspace --features pddb-real
 ```
 
-## Test
+22+ unit tests covering the PDDB store traits, plus the headless link test.
 
-```sh
-cargo test --workspace
-```
+---
 
-## Status
+## Acknowledgement
 
-Stage 0 (workspace scaffolding) complete — see `stage/REPORT-0.md`. Subsequent
-stages tracked in [docs/ROADMAP.md](./docs/ROADMAP.md).
+This project was developed with help from AI coding assistants.
+
+---
+
+## License
+
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+This project is dual-licensed under the terms of the AGPL 3.0 license, as
+a derivative work; and under the terms of the Apache 2.0 license.
+`SPDX-License-Identifier: AGPL-3.0 OR Apache-2.0`
+
+You can choose between one of them if you use this work.
+* [AGPLv3.0](https://www.gnu.org/licenses/license-list.html#AGPLv3.0)
+* [Apachev2.0](https://www.apache.org/licenses/GPL-compatibility.html)
+
+We have a **desire** to license xas under Apache-2.0 so that elements may
+be readily incorporated into other future
+[Xous](https://github.com/betrusted-io/xous-core) related projects.
+We are **required** to license any derivative works of
+[libsignal](https://github.com/signalapp/libsignal) under the AGPL-3.0 license.

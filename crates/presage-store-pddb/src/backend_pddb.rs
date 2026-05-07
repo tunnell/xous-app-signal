@@ -1,9 +1,8 @@
-//! Real PDDB-backed `KvBackend` for rv32-xous targets.
+//! Real PDDB-backed `KvBackend`.
 //!
-//! Stage 13b-2 lands the actual implementation. Wraps
-//! `xous_pddb_ipc::PddbClient` (the hand-rolled IPC client; bypasses
-//! `services/pddb`'s gen1 dep cascade) and forwards `KvBackend`
-//! operations to PDDB's wire protocol.
+//! Wraps `xous_pddb_ipc::PddbClient` (the hand-rolled IPC client;
+//! bypasses `services/pddb`'s gen1 dep cascade) and forwards
+//! `KvBackend` operations to PDDB's wire protocol.
 //!
 //! Behavior:
 //!
@@ -31,7 +30,7 @@
 //!   expected to surface this as a presage `StoreError` and the
 //!   caller (worker thread) decides whether to retry / wait.
 
-#![cfg(all(feature = "pddb-backend", target_os = "xous"))]
+#![cfg(feature = "pddb-backend")]
 
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
@@ -65,9 +64,9 @@ impl PddbBackend {
 
     /// Forward to `PddbClient::is_mounted` so callers can pre-check.
     /// Currently unused inside this crate; `xous-app-signal`'s
-    /// `probe-pddb-real` feature (Stage 13b-2 follow-up) is the
-    /// expected consumer. `dead_code` allowed because the method is
-    /// part of the public surface, not a private helper.
+    /// `probe-pddb-real` feature is the expected consumer.
+    /// `dead_code` allowed because the method is part of the public
+    /// surface, not a private helper.
     #[allow(dead_code)]
     pub fn is_mounted(&self) -> bool {
         match self.client.lock() {

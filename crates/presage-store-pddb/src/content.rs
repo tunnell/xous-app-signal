@@ -1,6 +1,6 @@
 //! `presage::store::ContentsStore` implementation for `PddbStore`.
 //!
-//! Per `docs/REPORT.md` Decision 1 (storage layout):
+//! Storage layout:
 //!
 //! - `signal.contacts` — per `ServiceId`, JSON `Contact`.
 //! - `signal.groups` — per master_key (hex), JSON `Group`.
@@ -452,10 +452,9 @@ impl ContentsStore for PddbStore {
         let keys = self.backend.list_keys(&dict)?;
         let backend = self.backend.clone();
 
-        // Filter by range, then preload — list_keys is non-streaming
-        // anyway (Decision 1 docs the cost), so the eager Vec is what
-        // the underlying capability gives us. Stage 11 cache layer can
-        // optimize if profiling demands it.
+        // Filter by range, then preload — list_keys is non-streaming,
+        // so the eager Vec is what the underlying capability gives us.
+        // A cache layer can optimize if profiling demands it.
         let mut filtered: Vec<u64> = keys
             .into_iter()
             .filter_map(|k| u64::from_str_radix(&k, 16).ok())
@@ -486,17 +485,17 @@ impl ContentsStore for PddbStore {
 
     async fn clear_messages(&mut self) -> Result<(), Error> {
         // PDDB doesn't expose a "drop all dicts matching a prefix" so
-        // we walk the known thread-dict names. For Stage 5 we don't
-        // keep an index of all thread descriptors anywhere; threads
-        // appear as soon as `save_message` is called and disappear on
-        // `clear_thread`. If a future caller creates threads we lose
-        // track of, this method becomes a no-op for those — match
-        // sled's behaviour, which similarly relies on knowing the
-        // full set of dict names. Stage 11 may add an index dict if
-        // `clear_messages` becomes a hot path; not now.
+        // we walk the known thread-dict names. We don't keep an index
+        // of all thread descriptors anywhere; threads appear as soon
+        // as `save_message` is called and disappear on `clear_thread`.
+        // If a future caller creates threads we lose track of, this
+        // method becomes a no-op for those — matches sled's behaviour,
+        // which similarly relies on knowing the full set of dict
+        // names. An index dict could be added later if
+        // `clear_messages` becomes a hot path.
         //
         // For tests, callers should `clear_thread` per known thread
-        // explicitly. Stage 5 acceptance only needs `clear_thread`.
+        // explicitly.
         Ok(())
     }
 
@@ -504,7 +503,7 @@ impl ContentsStore for PddbStore {
         // Matches sled's `clear_contents`: drops contacts + groups +
         // group avatars + every per-thread dict the caller has
         // visibility of (we delegate to `clear_messages`'s no-op for
-        // the threads side; Stage 11 may revisit).
+        // the threads side).
         self.backend.delete_dict(DICT_CONTACTS)?;
         self.backend.delete_dict(DICT_GROUPS)?;
         self.backend.delete_dict(DICT_GROUP_AVATARS)?;

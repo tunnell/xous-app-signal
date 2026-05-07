@@ -155,11 +155,17 @@ impl PddbBuf {
     /// PddbBuf`. The lifetime of the returned reference is bounded
     /// by the slice; PDDB's server will mutate it in-place during
     /// `lend_mut`.
+    ///
+    /// Only the slice's *pointer* is used — its length is
+    /// deliberately ignored. `Buffer::as_mut` returns `[..self.used]`
+    /// which is 0 on a fresh `Buffer::new(4096)`, but the underlying
+    /// allocation is always page-rounded (≥ 4096 bytes). Upstream
+    /// `services/pddb/src/api.rs::PddbBuf::from_slice_mut` does the
+    /// same pointer-only cast.
     pub fn from_slice_mut(s: &mut [u8]) -> &mut Self {
-        assert!(s.len() >= core::mem::size_of::<Self>());
-        // Safety: the caller has handed us a page-sized buffer
-        // (PddbBuf is exactly 4096 bytes via repr(C, align(4096))),
-        // and the layout matches what xous_ipc::Buffer::new gives us.
+        // Safety: caller passes a buffer backed by a page-aligned
+        // 4096-byte allocation; the slice may report a shorter
+        // length but the underlying memory is the full page.
         unsafe { &mut *(s.as_mut_ptr() as *mut Self) }
     }
 }

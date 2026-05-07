@@ -3,6 +3,10 @@ Cargo.lock.bak
 *.swp
 .DS_Store
 
+# Test harness env file holds real Signal account numbers; sample
+# is checked in as `tests/hosted/test_env.example`.
+tests/hosted/test_env
+
 # Stage 9b xtask + Renode test outputs
 dist/
 log.html

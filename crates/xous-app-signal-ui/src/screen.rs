@@ -1,9 +1,9 @@
 //! `Screen` and `Transition` enums.
 //!
-//! Every screen state is one variant of `Screen`. Stage 9c implements
-//! the four MVP variants (`Splash`, `Menu`, `About`, `EmptyList`); the
-//! Stage 10/11/12 variants are placeholders that compile but render a
-//! "not implemented" notice — we keep them in the enum so the state
+//! Every screen state is one variant of `Screen`. Some MVP variants
+//! (`Splash`, `Menu`, `About`, `EmptyList`) are populated; later
+//! variants are placeholders that compile but render a "not
+//! implemented" notice — we keep them in the enum so the state
 //! graph is visible at one glance.
 //!
 //! `Transition` is what `Screen::handle_key` returns. It's the only
@@ -31,29 +31,28 @@ pub enum Screen {
     Menu(MenuScreen),
     About(AboutScreen),
 
-    /// Stage 9c stub kept around for tests and as the bottom of the
-    /// post-link stack before any messages arrive. Stage 11's
+    /// Stub kept around for tests and as the bottom of the
+    /// post-link stack before any messages arrive. The
     /// `LinkDone -> Home` transition replaces this with
     /// `ConversationList` so the receive loop can populate it.
     EmptyList(EmptyListScreen),
 
-    // Stage 10 — populated.
     LinkStarting(LinkStartingScreen),
     LinkShowUrl(LinkShowUrlScreen),
     LinkConfirming(LinkConfirmingScreen),
     LinkDone(LinkDoneScreen),
     LinkError(LinkErrorScreen),
 
-    /// Stage 11 — populated. Renders the receive-status indicator
+    /// Renders the receive-status indicator
     /// and a flat list of received messages, latest-first.
     ConversationList(ConversationListScreen),
 
-    /// Stage 12 — populated. The compose-and-send screen.
+    /// The compose-and-send screen.
     Compose(ComposeScreen),
 
-    /// Future single-thread conversation view (Stage 12+1). Stage
-    /// 12 MVP doesn't render this yet; the Compose flow is reachable
-    /// directly from ConversationList via `'c'`.
+    /// Future single-thread conversation view. The MVP doesn't
+    /// render this yet; the Compose flow is reachable directly
+    /// from ConversationList via `'c'`.
     Conversation,
 }
 
@@ -91,8 +90,8 @@ impl Screen {
             Screen::ConversationList(s) => s.render(),
             Screen::Compose(s) => s.render(),
 
-            // Per-thread conversation view — Stage 12+1.
-            Screen::Conversation => placeholder("Conversation", "Stage 12+1"),
+            // Per-thread conversation view — future work.
+            Screen::Conversation => placeholder("Conversation", "TBD"),
         }
     }
 
@@ -135,8 +134,7 @@ impl Screen {
             Screen::ConversationList(s) => s.handle_key(key),
             Screen::Compose(s) => s.handle_key(key),
 
-            // Stage 12+1 placeholder: any key returns to the
-            // previous screen.
+            // Placeholder: any key returns to the previous screen.
             _ => Transition::Pop,
         }
     }

@@ -4,6 +4,10 @@
 //! 4 user-facing methods (the 5th, `compute_safety_number`, has a
 //! default impl in the trait). `delete_service_addr_device_session`
 //! also has a default impl that we let through.
+//!
+//! On-disk schema: one PDDB key per address; value is a
+//! `SessionBundle` (`device_id -> serialized SessionRecord`). See
+//! `session_store.rs` for the read/write helpers.
 
 use async_trait::async_trait;
 use presage::libsignal_service::prelude::SessionStoreExt;
@@ -12,7 +16,8 @@ use presage::libsignal_service::protocol::{
 };
 use presage::libsignal_service::push_service::DEFAULT_DEVICE_ID;
 
-use super::{PddbProtocolStore, dict_session, session_store::session_key};
+use super::session_store::{deserialize_bundle, serialize_bundle, session_key};
+use super::{PddbProtocolStore, dict_session};
 
 #[async_trait(?Send)]
 impl SessionStoreExt for PddbProtocolStore {
@@ -24,38 +29,27 @@ impl SessionStoreExt for PddbProtocolStore {
         let main: u32 = u32::from(*DEFAULT_DEVICE_ID);
 
         // Combine cache (entries not yet flushed) with PDDB
-        // (already-persisted entries). Same `(addr, device_id)` may
-        // appear in both — we dedup the device-id vec at the end.
+        // (already-persisted bundle). The same `(addr, device_id)`
+        // can appear in both; dedup at the end.
         let mut device_ids: Vec<u32> = Vec::new();
 
         {
             let cache = self.store.session_cache.lock().map_err(|_| {
                 SignalProtocolError::InvalidState("session cache", "poisoned".into())
             })?;
-            for ((id_kind, k), _) in cache.iter() {
-                if *id_kind != self.identity {
-                    continue;
-                }
-                if let Some((addr, dev_str)) = k.rsplit_once('.') {
-                    if addr == uuid
-                        && let Ok(dev) = dev_str.parse::<u32>()
-                        && dev != main
-                    {
-                        device_ids.push(dev);
-                    }
+            for ((id_kind, addr, dev), _) in cache.iter() {
+                if *id_kind == self.identity && addr == &uuid && *dev != main {
+                    device_ids.push(*dev);
                 }
             }
         }
 
         let dict = dict_session(self.identity);
-        let keys = self.store.backend.list_keys(&dict).map_err(backend_err)?;
-        for k in keys {
-            if let Some((addr, dev_str)) = k.rsplit_once('.') {
-                if addr == uuid
-                    && let Ok(dev) = dev_str.parse::<u32>()
-                    && dev != main
-                {
-                    device_ids.push(dev);
+        if let Some(bytes) = self.store.backend.get(&dict, &uuid).map_err(backend_err)? {
+            let bundle = deserialize_bundle(&bytes).map_err(backend_err)?;
+            for dev in bundle.keys() {
+                if *dev != main {
+                    device_ids.push(*dev);
                 }
             }
         }
@@ -82,25 +76,43 @@ impl SessionStoreExt for PddbProtocolStore {
             })?;
             dirty.remove(&key);
         }
+
+        // Drop just this device_id from the PDDB bundle. If the
+        // bundle becomes empty, delete the whole key so a future
+        // `list_keys` doesn't return a stale empty entry.
         let dict = dict_session(self.identity);
-        self.store
-            .backend
-            .delete(&dict, &key.1)
-            .map_err(backend_err)
+        let Some(bytes) = self.store.backend.get(&dict, &key.1).map_err(backend_err)? else {
+            return Ok(());
+        };
+        let mut bundle = deserialize_bundle(&bytes).map_err(backend_err)?;
+        if bundle.remove(&key.2).is_none() {
+            return Ok(());
+        }
+        if bundle.is_empty() {
+            self.store
+                .backend
+                .delete(&dict, &key.1)
+                .map_err(backend_err)?;
+        } else {
+            let value = serialize_bundle(&bundle).map_err(backend_err)?;
+            self.store
+                .backend
+                .put(&dict, &key.1, &value)
+                .map_err(backend_err)?;
+        }
+        Ok(())
     }
 
     async fn delete_all_sessions(&self, address: &ServiceId) -> Result<usize, SignalProtocolError> {
-        // Count UNIQUE `(uuid, device_id)` entries removed across both
-        // cache and PDDB. An entry that lives in both places is one
-        // session, not two — without dedup, sessions present in both
-        // double-count.
+        // Count UNIQUE (uuid, device_id) entries removed across cache
+        // + PDDB. Cache and bundle can overlap on a not-yet-flushed
+        // session; counting both would double-count.
         use std::collections::HashSet;
 
         let uuid = address.raw_uuid().to_string();
         let dict = dict_session(self.identity);
-        let mut affected: HashSet<String> = HashSet::new();
+        let mut affected: HashSet<u32> = HashSet::new();
 
-        // Drop any cache entries for this address.
         {
             let mut cache = self.store.session_cache.lock().map_err(|_| {
                 SignalProtocolError::InvalidState("session cache", "poisoned".into())
@@ -108,28 +120,22 @@ impl SessionStoreExt for PddbProtocolStore {
             let mut dirty = self.store.session_dirty.lock().map_err(|_| {
                 SignalProtocolError::InvalidState("session dirty", "poisoned".into())
             })?;
-            cache.retain(|(id_kind, k), _| {
-                if *id_kind != self.identity {
-                    return true;
+            cache.retain(|(id_kind, addr, dev), _| {
+                let drop = *id_kind == self.identity && addr == &uuid;
+                if drop {
+                    affected.insert(*dev);
+                    dirty.remove(&(*id_kind, addr.clone(), *dev));
                 }
-                let matches_addr = k.rsplit_once('.').is_some_and(|(addr, _)| addr == uuid);
-                if matches_addr {
-                    affected.insert(k.clone());
-                    dirty.remove(&(*id_kind, k.clone()));
-                }
-                !matches_addr
+                !drop
             });
         }
 
-        // Drop any persisted entries.
-        let keys = self.store.backend.list_keys(&dict).map_err(backend_err)?;
-        for k in keys {
-            if let Some((addr, _)) = k.rsplit_once('.') {
-                if addr == uuid {
-                    self.store.backend.delete(&dict, &k).map_err(backend_err)?;
-                    affected.insert(k);
-                }
+        if let Some(bytes) = self.store.backend.get(&dict, &uuid).map_err(backend_err)? {
+            let bundle = deserialize_bundle(&bytes).map_err(backend_err)?;
+            for dev in bundle.keys() {
+                affected.insert(*dev);
             }
+            self.store.backend.delete(&dict, &uuid).map_err(backend_err)?;
         }
 
         Ok(affected.len())

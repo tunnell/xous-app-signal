@@ -72,5 +72,15 @@ pub fn tls_connect(
     let conn = ClientConnection::new(config, server_name).map_err(io::Error::other)?;
 
     let sock = TcpStream::connect((host, port))?;
+    // Short TCP read timeout. WebSocket users (`ws_pump.rs::reader_loop`)
+    // hold a mutex across the blocking `WebSocket::read()`; without a
+    // timeout, the reader would block forever waiting for an inbound
+    // frame and the writer thread could never acquire the mutex to
+    // send keepalives. Signal's provisioning WS times out clients at
+    // ~60s of idle, so missing keepalives means the link drops before
+    // the user finishes scanning. The timeout makes `read()` return
+    // `Err(WouldBlock|TimedOut)` periodically; the reader catches that
+    // and re-loops, briefly releasing the mutex.
+    sock.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
     Ok(StreamOwned::new(conn, sock))
 }

@@ -1,9 +1,9 @@
 //! Sync WebSocket establishment over our `tls_connect`.
 //!
 //! Uses `tungstenite` (upstream snapview/tungstenite-rs, sync) only for
-//! the handshake — TLS comes from our own `tls_connect` (Stage 2) so we
-//! can pin our rustls version independently of tungstenite's transitive
-//! TLS choices. See docs/REPORT.md Decision 3.
+//! the handshake — TLS comes from our own `tls_connect` so we can pin
+//! our rustls version independently of tungstenite's transitive TLS
+//! choices.
 
 use std::io;
 

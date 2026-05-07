@@ -11,8 +11,8 @@ impl Store for PddbStore {
     type PniStore = PddbProtocolStore;
 
     /// Clear *everything* — state, profiles, every protocol-store dict
-    /// (both ACI and PNI), and the in-memory session cache. Stage 5
-    /// per-impl `clear_*` methods are wired up here.
+    /// (both ACI and PNI), and the in-memory session cache. Per-impl
+    /// `clear_*` methods are wired up here.
     async fn clear(&mut self) -> Result<(), <Self as StateStore>::StateStoreError> {
         // Wipe registration data + identity keypairs + sender cert +
         // master key.

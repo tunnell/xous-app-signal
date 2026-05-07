@@ -1,8 +1,8 @@
 //! In-memory `KvBackend` for hosted-mode unit tests.
 //!
-//! Mirrors the `(dict, key) -> value` shape of PDDB. The real backend at
-//! Stage 8 will replace this with calls into `pddb::Pddb`; the mock stays
-//! around as the test harness for every storage trait we add at Stage 5.
+//! Mirrors the `(dict, key) -> value` shape of PDDB. The real backend
+//! lives in `backend_pddb.rs`; the mock stays around as the test
+//! harness for every storage trait.
 //!
 //! Implementation note: PDDB's per-page AES-256-GCM-SIV encryption is not
 //! modeled here. The mock is plaintext. That's the correct boundary —

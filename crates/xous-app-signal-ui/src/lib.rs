@@ -18,8 +18,8 @@
 //!   a box; a future GAM renderer wraps it in `TextView`s. No screen
 //!   knows which.
 //!
-//! Stage 9c implements the four MVP screens (Splash, Menu, About,
-//! EmptyList). Stages 10-12 fill in `Screen::Link*` / `Conversation` /
+//! Implements the four MVP screens (Splash, Menu, About, EmptyList).
+//! Subsequent work fills in `Screen::Link*` / `Conversation` /
 //! `Compose` placeholders.
 
 pub mod key;
@@ -63,13 +63,13 @@ impl Ui {
     /// the linking flow's state changes are visible without forcing
     /// the user to press a key.
     ///
-    /// Stage 10 is the first stage where this matters — earlier
-    /// screens were synchronous on stdin alone. The two-channel poll
-    /// is intentionally minimal: no termios, no escape-code parsing,
-    /// no select primitive. A full keyboard binding (arrow-key escape
-    /// sequences, printable chars in real-time) lives in the GAM
-    /// renderer the on-device build uses; the hosted-mode loop just
-    /// needs enough to drive integration tests.
+    /// Earlier screens were synchronous on stdin alone; the
+    /// two-channel poll matters once the linking flow lands.
+    /// It is intentionally minimal: no termios, no escape-code
+    /// parsing, no select primitive. A full keyboard binding
+    /// (arrow-key escape sequences, printable chars in real-time)
+    /// lives in the GAM renderer the on-device build uses; the
+    /// hosted-mode loop just needs enough to drive integration tests.
     pub fn run(mut self) -> io::Result<()> {
         let mut stdout = io::stdout().lock();
         let (line_tx, line_rx) = std_mpsc::channel::<String>();
@@ -101,7 +101,7 @@ impl Ui {
 
             if needs_render {
                 let top = self.stack.last().expect("non-empty");
-                let chips = "[OFF]"; // Stage 11+ wires real conn-state.
+                let chips = "[OFF]"; // real conn-state will replace this.
                 let body = top.render();
                 let hint = top.hint();
                 render::render_frame(&mut stdout, chips, &body, hint)?;
@@ -127,10 +127,10 @@ impl Ui {
             // jitter, slow enough that we don't busy-spin.
             match line_rx.recv_timeout(Duration::from_millis(50)) {
                 Ok(line) => {
-                    // Stage 12: when the Compose screen is on top,
-                    // the entire line of input is the message body
-                    // (handed off via `dispatch_line`). Otherwise
-                    // we treat the first char as a Key.
+                    // When the Compose screen is on top, the entire
+                    // line of input is the message body (handed off
+                    // via `dispatch_line`). Otherwise we treat the
+                    // first char as a Key.
                     if matches!(self.stack.last(), Some(Screen::Compose(_))) {
                         // Strip CR/LF and dispatch as a body.
                         let body = line.trim_end_matches(['\r', '\n']).to_string();
@@ -162,10 +162,10 @@ impl Ui {
         Ok(())
     }
 
-    /// Apply a worker `Event` to the screen stack. Stage 10 acts on
-    /// the link-flow events; other events are logged but ignored
-    /// (they were emitted by side channels — `Event::Pong` etc. —
-    /// and don't affect the user-visible screen).
+    /// Apply a worker `Event` to the screen stack. Acts on the
+    /// link-flow events; other events are logged but ignored (they
+    /// were emitted by side channels — `Event::Pong` etc. — and
+    /// don't affect the user-visible screen).
     fn handle_event(&mut self, evt: Event) {
         use crate::screens::conversation_list::{MessageSummary, ReceiveStatus};
         use crate::screens::link::{LinkDoneScreen, LinkErrorScreen, LinkShowUrlScreen};
@@ -217,6 +217,8 @@ impl Ui {
             }
             Event::Message {
                 sender,
+                sender_phone: _,
+                sender_name: _,
                 body,
                 timestamp,
             } => {
@@ -274,7 +276,7 @@ impl Ui {
         self.stack.len()
     }
 
-    /// Stage 12 entry point for whole-line input. Currently used by
+    /// Entry point for whole-line input. Currently used by
     /// the Compose screen — typing a message and pressing Enter
     /// sends the line as the message body. If the top screen isn't
     /// Compose, the line is silently dropped.
@@ -298,16 +300,16 @@ impl Ui {
         match self.stack.last() {
             Some(Screen::LinkStarting(_)) => {
                 let _ = self.cmd_tx.send_blocking(Cmd::LinkDevice {
-                    // Stage 10 hosted-mode hardcodes the device name.
-                    // A future stage (or a direct UI flow) lets the
-                    // user customise it via a text-input screen.
+                    // Hosted mode hardcodes the device name.
+                    // A future flow lets the user customise it
+                    // via a text-input screen.
                     device_name: "Precursor".to_string(),
                 });
             }
             Some(Screen::ConversationList(_)) => {
-                // Stage 11: starting receive is a side-effect of
-                // landing on the conversation list. The worker moves
-                // the linked Manager into a long-running task.
+                // Starting receive is a side-effect of landing on
+                // the conversation list. The worker moves the
+                // linked Manager into a long-running task.
                 let _ = self.cmd_tx.send_blocking(Cmd::StartReceive);
             }
             _ => {}
@@ -477,7 +479,7 @@ mod tests {
         assert_eq!(parse_key("q\n"), Key::Char('q'));
     }
 
-    // ----- Stage 10 -----
+    // ----- link flow -----
 
     #[test]
     fn splash_link_pushes_link_starting_and_emits_cmd() {
@@ -597,7 +599,7 @@ mod tests {
         assert!(matches!(ui.top(), Some(Screen::Splash(_))));
     }
 
-    // ----- Stage 11 -----
+    // ----- ConversationList -----
 
     use crate::screens::conversation_list::{
         ConversationListScreen, MessageSummary, ReceiveStatus,
@@ -649,11 +651,15 @@ mod tests {
     fn message_event_appends_to_list() {
         let (mut ui, _cmd_rx) = ui_on_conversation_list();
         ui.handle_event(Event::Message {
+            sender_phone: None,
+            sender_name: None,
             sender: "alice".into(),
             body: "hi from alice".into(),
             timestamp: 1000,
         });
         ui.handle_event(Event::Message {
+            sender_phone: None,
+            sender_name: None,
             sender: "bob".into(),
             body: "hi from bob".into(),
             timestamp: 1100,
@@ -689,6 +695,8 @@ mod tests {
 
         // Still on Splash. Message arrives — should be dropped.
         ui.handle_event(Event::Message {
+            sender_phone: None,
+            sender_name: None,
             sender: "carol".into(),
             body: "noise".into(),
             timestamp: 0,
@@ -713,7 +721,7 @@ mod tests {
         assert_eq!(s.messages.last().unwrap().sender, "u49");
     }
 
-    // ----- Stage 12 -----
+    // ----- Compose -----
 
     use crate::screens::compose::SendState;
 
@@ -724,6 +732,8 @@ mod tests {
         let (mut ui, cmd_rx) = ui_on_conversation_list();
         // Inject one received message so 'c' has a recipient.
         ui.handle_event(Event::Message {
+            sender_phone: None,
+            sender_name: None,
             sender: "00000000-0000-4000-8000-000000000abc".into(),
             body: "hi".into(),
             timestamp: 1000,

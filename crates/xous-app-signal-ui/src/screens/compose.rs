@@ -11,9 +11,9 @@
 //! see `docs/UI.md` §9), the driver hands the screen the WHOLE
 //! input line as `handle_line`. Type the message + Enter, the
 //! line becomes the body and a `Cmd::SendMessage` fires. On-device
-//! GAM mode (Stage 9c follow-up) will switch to the per-char
-//! `handle_key` path with backspace/cursor; the `SendState` and
-//! event handling stay the same.
+//! On-device GAM mode will switch to the per-char `handle_key` path
+//! with backspace/cursor; the `SendState` and event handling stay
+//! the same.
 
 use crate::key::Key;
 use crate::screen::Transition;

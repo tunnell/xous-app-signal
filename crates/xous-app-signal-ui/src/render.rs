@@ -1,6 +1,6 @@
 //! Render surfaces.
 //!
-//! Stage 9c only ships `TextSurface` — a stdout flush of the screen
+//! Currently only `TextSurface` — a stdout flush of the screen
 //! lines plus a status bar and hint footer. A future
 //! `cfg(target_os = "xous")` `GamSurface` will translate the same
 //! `Vec<String>`-shaped screen output into Xous GAM `TextView`
@@ -37,7 +37,7 @@ pub fn render_frame(
 
     // Body — pad / truncate each line to fit. Cap at 18 lines so the
     // total frame fits in HEIGHT; longer body output is silently
-    // truncated rather than scrolled (Stage 9c screens are all short).
+    // truncated rather than scrolled.
     let body_max = 18;
     for line in body_lines.iter().take(body_max) {
         writeln!(out, "│{}│", pad(line, WIDTH))?;
@@ -56,7 +56,7 @@ pub fn render_frame(
 /// Truncate or right-pad `line` to exactly `width` chars. Counts
 /// chars (not bytes) so multi-byte UTF-8 like `█`/`✓` still aligns —
 /// at the cost of mixed-width glyphs (full-width CJK) being
-/// mis-counted, which we don't render in Stage 9c.
+/// mis-counted, which we don't render.
 fn pad(line: &str, width: usize) -> String {
     let count = line.chars().count();
     if count >= width {

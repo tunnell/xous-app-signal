@@ -8,7 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-# Stage 9b: deliberately *no* dependencies. xtask drives `cargo`,
+# Deliberately *no* dependencies. xtask drives `cargo`,
 # `cp`, and `renode-test` via std::process::Command + std::fs +
 # std::env::args. Audit story: every external invocation is one
 # `Command::new("...")` that the reader can inspect at the call

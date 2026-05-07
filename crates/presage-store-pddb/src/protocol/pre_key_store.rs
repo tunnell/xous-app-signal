@@ -1,8 +1,7 @@
 //! `PreKeyStore` impl, packed-key strategy.
 //!
-//! Per `docs/REPORT.md` Decision 1: a single PDDB key
-//! (`signal.protocol.{aci,pni}.prekey_bundle["all"]`) holds
-//! `Vec<(u32, Vec<u8>)>` — `(prekey_id, serialized_record)` pairs
+//! A single PDDB key (`signal.protocol.{aci,pni}.prekey_bundle["all"]`)
+//! holds `Vec<(u32, Vec<u8>)>` — `(prekey_id, serialized_record)` pairs
 //! covering every current one-time EC pre-key. Per-key storage would
 //! burn one PDDB page per record (per-page AEAD); ~100 pre-keys × ~70
 //! bytes packed easily fit in one page.

@@ -25,10 +25,9 @@ license = "AGPL-3.0-only"
 authors = []
 publish = false
 
-# Smol-rs async primitives, pinned to the HEAD revs as of Stage 1
-# (verified at ~/precursor-signal/repos/<crate>/git log --oneline -1).
-# Replaces Tokio per docs/REPORT.md Decision 2. ~21 kLoC vendored audit
-# surface vs. Tokio's >100 kLoC.
+# Smol-rs async primitives, pinned to the HEAD revs verified at
+# ~/precursor-signal/repos/<crate>/git log --oneline -1.
+# Replaces Tokio. ~21 kLoC vendored audit surface vs. Tokio's >100 kLoC.
 [workspace.dependencies]
 async-task = { git = "https://github.com/smol-rs/async-task", rev = "f98b30b" }
 async-executor = { git = "https://github.com/smol-rs/async-executor", rev = "543403e" }
@@ -52,7 +51,7 @@ incremental = true
 opt-level = "s"
 # panic = "abort"  # uncomment to reduce file size further at the cost of panic output
 
-# Size-measurement profile per docs/REPORT.md "Binary size strategy".
+# Size-measurement profile for binary size measurements.
 # Use this when running `cargo bloat --crates -p xous-signal-app --profile=release-small`
 # to get an accurate picture of on-disk size without DWARF debug info.
 [profile.release-small]
@@ -65,12 +64,11 @@ strip = "symbols"
 #
 # Only the git-based patches are mirrored here. xous-core's path-based patches
 # (`aes` -> services/aes, `getrandom` -> imports/getrandom) reference paths
-# that only exist inside the xous-core tree; they're TODO for a later stage
-# (likely the rv32 hardware integration in ROADMAP Stage 9) when we either
+# that only exist inside the xous-core tree; they're TODO when we either
 # (a) merge this workspace into xous-core, or (b) vendor those forks here.
 #
 # We do NOT mirror xous-core's curve25519-dalek patch. It conflicts with
-# libsignal's `signalapp/curve25519-dalek` pin (see docs/REPORT.md Risk #3).
+# libsignal's `signalapp/curve25519-dalek` pin.
 # Resolution is being investigated separately.
 [patch.crates-io]
 sha2 = { git = "https://github.com/betrusted-io/hashes.git", branch = "sha2-v0.10.8-xous" }
@@ -134,31 +132,29 @@ path = "vendor/curve25519-dalek/curve25519-dalek-derive"
 curve25519-dalek = { path = "vendor/curve25519-dalek/curve25519-dalek" }
 curve25519-dalek-derive = { path = "vendor/curve25519-dalek/curve25519-dalek-derive" }
 
-# Stage 6: redirect presage's git dep on libsignal-service-rs to our
+# Redirect presage's git dep on libsignal-service-rs to our
 # vendored, forked copy at vendor/libsignal-service-rs/. This is where the
-# Decision 3 transport patches live (in progress this stage).
+# transport patches live.
 [patch."https://github.com/whisperfish/libsignal-service-rs"]
 libsignal-service = { path = "vendor/libsignal-service-rs" }
 
-# Stage 7: redirect presage to our vendored, forked copy at vendor/presage/.
-# This is where the Decision 2 tokio-removal patches live.
+# Redirect presage to our vendored, forked copy at vendor/presage/.
+# This is where the tokio-removal patches live.
 [patch."https://github.com/whisperfish/presage"]
 presage = { path = "vendor/presage/presage" }
 
-# Stage 2 forced an earlier resolution of one of the path-based patches
-# we deferred at Stage 0: cross-compiling rustls/ring for rv32 pulls in
-# `getrandom`, whose upstream crate doesn't recognize Xous as a target.
-# xous-core has a forked `getrandom` at `imports/getrandom` that calls
-# Xous's TRNG. We point at it via an absolute path on this dev box; this
-# is brittle (only works on machines where xous-core is at this path),
-# and is one of the open questions for Stage 9 — see docs/ROADMAP.md
-# "Open questions / things to revisit". Long-term resolution: either
-# merge our workspace into xous-core's tree, or fork the getrandom
-# patch into a separate publishable repo.
+# Cross-compiling rustls/ring for rv32 pulls in `getrandom`, whose
+# upstream crate doesn't recognize Xous as a target. xous-core has a
+# forked `getrandom` at `imports/getrandom` that calls Xous's TRNG. We
+# point at it via an absolute path on this dev box; this is brittle
+# (only works on machines where xous-core is at this path), and is one
+# of the open questions — see docs/ROADMAP.md "Open questions / things
+# to revisit". Long-term resolution: either merge our workspace into
+# xous-core's tree, or fork the getrandom patch into a separate
+# publishable repo.
 [patch.crates-io.getrandom]
 path = "/home/tunnell/precursor-signal/repos/xous-core/imports/getrandom"
 
-# TODO (ROADMAP Stage 9): wire up the `aes` patch (also path-based,
+# TODO: wire up the `aes` patch (also path-based,
 # `xous-core/services/aes`) the same way once `aes` shows up
 # transitively. Not blocking yet because no current dep pulls `aes`.
-# See docs/REPORT.md "Decision 6" for context.

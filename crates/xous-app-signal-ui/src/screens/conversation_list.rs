@@ -1,9 +1,8 @@
 //! Conversation list — UI.md §5.6 (empty) and §5.7 (populated).
 //!
-//! Stage 11 minimum: replaces the Stage 9c `EmptyListScreen`. On
-//! entry the driver sends `Cmd::StartReceive`. The screen's status
+//! On entry the driver sends `Cmd::StartReceive`. The screen's status
 //! tracks whether the receive loop is active; received messages are
-//! appended to a flat `Vec<MessageSummary>` (Stage 11+ may group by
+//! appended to a flat `Vec<MessageSummary>` (could later group by
 //! thread per UI.md §5.7's pinned/unpinned layout, but for MVP a
 //! single chronological list is enough).
 
@@ -33,7 +32,7 @@ pub enum ReceiveStatus {
 }
 
 /// Maximum number of messages to render. Older entries scroll off
-/// the visible area; for Stage 11 MVP we don't need pagination.
+/// the visible area; pagination not needed for MVP.
 const MAX_VISIBLE: usize = 8;
 
 #[derive(Debug, Clone)]
@@ -58,8 +57,8 @@ impl ConversationListScreen {
 
     /// Append a received message. Keeps the most recent
     /// `MAX_VISIBLE * 2` messages — enough to scroll a little bit
-    /// past the visible area without unbounded growth. Stage 11+
-    /// will move this to PDDB-backed persistence and drop the
+    /// past the visible area without unbounded growth. A future
+    /// pass can move this to PDDB-backed persistence and drop the
     /// in-memory cap.
     pub fn push_message(&mut self, msg: MessageSummary) {
         self.messages.push(msg);
@@ -109,11 +108,11 @@ impl ConversationListScreen {
 
     pub fn handle_key(&mut self, key: Key) -> Transition {
         match key {
-            // Stage 12: 'c' opens the Compose screen, prefilled with
+            // 'c' opens the Compose screen, prefilled with
             // the most-recent sender as recipient. If there are no
             // messages yet (`messages.is_empty()`), Compose can't
             // resolve a recipient — drop the keypress on the floor.
-            // Future stage may surface a contact-picker instead.
+            // Could later surface a contact-picker instead.
             Key::Char('c') => {
                 if let Some(latest) = self.messages.last() {
                     Transition::Push(Screen::Compose(
@@ -126,7 +125,7 @@ impl ConversationListScreen {
             // Press M (or Home with no message focus) to open the
             // app menu — gives access to "Test worker", quit, etc.
             Key::Char('m') | Key::Home => Transition::Push(Screen::Menu(MenuScreen::new())),
-            // Esc / q quits — same shape as the Stage 9c empty list.
+            // Esc / q quits.
             Key::Esc | Key::Char('q') => Transition::Quit,
             _ => Transition::None,
         }

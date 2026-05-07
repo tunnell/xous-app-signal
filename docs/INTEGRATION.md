@@ -1,10 +1,22 @@
 # INTEGRATION.md — Merging `xous-app-signal` into `tunnell/xous-core-for-xas`
 
-Stage 9b's mechanical recipe. This document is what Stage 9a's `do
-the next stage but first audit emails` request locked in: rather than
-deciding "merge vs. bundle" inside Stage 9, the user has chosen to
-**fork xous-core** as `tunnell/xous-core-for-xas` and drop our four
-crates into the fork as `apps/xas/`. This file is the recipe.
+> **SUPERSEDED — historical artifact.** This document describes the
+> "fork xous-core, embed xas as `apps/xas/`" approach that was
+> attempted and abandoned. The first attempt hit a
+> `[patch.crates-io].aes` blocker (xous-core's `services/aes` IPC
+> shim doesn't expose `Aes256Enc` that zkgroup needs). The current
+> approach keeps `xous-app-signal` as a separate workspace and uses
+> hand-rolled IPC clients (`xous-pddb-ipc`, `xous-modals-ipc`) to
+> communicate with running xous-core services without pulling in
+> the `gen1` dep cascade. See `~/precursor-signal/HOSTED.md` and
+> `agent_notes/AGENT_NOTES.md` for the current architecture.
+>
+> Kept here for historical reference only. Do not follow these
+> instructions for new work.
+
+This document is the original mechanical recipe. The user chose to
+**fork xous-core** as `tunnell/xous-core-for-xas` and drop the
+four crates into the fork as `apps/xas/`. This file was the recipe.
 
 ## One-time prerequisites
 

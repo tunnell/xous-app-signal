@@ -1,11 +1,11 @@
 //! App menu — UI.md §5.10.
 //!
 //! Modal: New chat / Mark all read / (sep) / Link another device /
-//! Settings / About / (sep) / Test worker (Stage 8 echo) / Quit.
+//! Settings / About / (sep) / Test worker (echo) / Quit.
 //!
-//! Stage 9c only the navigable shell + About + Quit + the worker
-//! probe land. The other items are flagged unimplemented and Pop
-//! immediately when chosen.
+//! Only the navigable shell + About + Quit + the worker probe land.
+//! The other items are flagged unimplemented and Pop immediately
+//! when chosen.
 
 use crate::key::Key;
 use crate::screen::{Screen, Transition};
@@ -96,7 +96,7 @@ impl MenuScreen {
                 Some(Item::About) => Transition::Replace(Screen::About(AboutScreen::new())),
                 Some(Item::Quit) => Transition::Quit,
                 Some(Item::TestWorker) => {
-                    // Stage 9c: hands a `Cmd::Hello` to the worker. The
+                    // Hands a `Cmd::Hello` to the worker. The
                     // driver intercepts this transition, sends, awaits
                     // pong, and pops back. See Ui::run.
                     Transition::Push(Screen::Splash(crate::screens::splash::SplashScreen::new()))

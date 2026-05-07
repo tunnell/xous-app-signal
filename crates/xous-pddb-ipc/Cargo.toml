@@ -7,7 +7,7 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# Stage 13b probe (commit f7a9e7b) verified that scalar-shaped
+# An earlier probe (commit f7a9e7b) verified that scalar-shaped
 # `xous::send_message` calls against the PDDB Mount Poller work.
 # This crate generalizes that to the buffered (rkyv-serialized
 # Buffer::lend / Buffer::lend_mut) calls needed by KeyRequest,
