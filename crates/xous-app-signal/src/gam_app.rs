@@ -118,6 +118,11 @@ struct App {
     /// SendResult). Cleared on transition to Menu.
     last_status: String,
     quit_requested: bool,
+    /// True between Cmd::LinkDevice send and Event::Link{Complete,Error}.
+    /// While set, handle_worker_event opens the QR modal on LinkUrl
+    /// and transitions on LinkComplete/LinkError. Cleared on
+    /// terminal events.
+    linking_in_progress: bool,
 }
 
 impl App {
@@ -365,6 +370,7 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
         last_sender: None,
         last_status: String::new(),
         quit_requested: false,
+        linking_in_progress: false,
     };
     app.render().ok();
 
@@ -411,7 +417,7 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
                     q.drain(..).collect()
                 };
                 for ev in drained {
-                    handle_worker_event(&mut app, ev, &cmd_tx);
+                    handle_worker_event(&mut app, ev, &cmd_tx, &modals_xns);
                 }
                 if let Err(e) = app.render() {
                     log::warn!("xas/gam_app: render after WorkerEvent: {}", e);
@@ -471,9 +477,57 @@ fn handle_keys(
 /// Process a worker event delivered via the forwarder thread.
 /// Mutates `app` state; the WorkerEvent handler in `run()` does
 /// the render after we return so multiple events batch into one
-/// redraw.
-fn handle_worker_event(app: &mut App, event: Event, cmd_tx: &Sender<Cmd>) {
+/// redraw. **The forwarder is the only consumer of `event_rx`.**
+/// All Event variants — including Link{Url, Complete, Error} —
+/// land here.
+fn handle_worker_event(
+    app: &mut App,
+    event: Event,
+    cmd_tx: &Sender<Cmd>,
+    modals_xns: &xous_names::XousNames,
+) {
     match event {
+        Event::LinkUrl(url) => {
+            log::info!("xas/gam_app: link URL = {}", url);
+            // Open the QR modal. show_notification blocks until the
+            // user dismisses it — meanwhile the worker keeps the
+            // provisioning WS alive waiting for the encrypted
+            // envelope. After the user scans + dismisses, we keep
+            // looping; LinkComplete or LinkError will arrive next.
+            if app.linking_in_progress {
+                if let Ok(modals) = modals::Modals::new(modals_xns) {
+                    let _ = modals.show_notification(
+                        "Scan with Signal phone, then press any key.\n\n\
+                         Note: existing message history is NOT\n\
+                         transferred — xas starts with an empty\n\
+                         inbox. New messages received after linking\n\
+                         will appear here.",
+                        Some(&url),
+                    );
+                }
+            }
+        }
+        Event::LinkComplete { device_name, aci, phone } => {
+            log::info!(
+                "xas/gam_app: LinkComplete device={} aci={} phone={}",
+                device_name, aci, phone
+            );
+            app.linked = true;
+            app.linking_in_progress = false;
+            app.screen = Screen::Linked { kind: LinkedKind::Success };
+            app.last_status =
+                format!("device: {}\naci:    {}\nphone:  {}", device_name, aci, phone);
+            // Auto-fire StartReceive so the inbox begins
+            // accumulating. Bridge dedupes; calling again later is
+            // harmless.
+            let _ = cmd_tx.send_blocking(Cmd::StartReceive);
+        }
+        Event::LinkError(msg) => {
+            log::warn!("xas/gam_app: LinkError: {}", msg);
+            app.linking_in_progress = false;
+            app.screen = Screen::Linked { kind: LinkedKind::Failure };
+            app.last_status = msg;
+        }
         Event::Message { sender, body, timestamp } => {
             log::info!(
                 "xas/gam_app: inbound message from {} ({} bytes)",
@@ -492,9 +546,6 @@ fn handle_worker_event(app: &mut App, event: Event, cmd_tx: &Sender<Cmd>) {
         Event::ReceiveError(msg) => {
             log::warn!("xas/gam_app: receive error: {}", msg);
             app.last_status = format!("Receive: {}", msg);
-            // No screen transition — we stay where we are. The
-            // status message lands in the next render of any
-            // status-bearing screen (Linked, SendResult).
         }
         Event::SendComplete { timestamp } => {
             app.screen = Screen::SendResult {
@@ -507,33 +558,29 @@ fn handle_worker_event(app: &mut App, event: Event, cmd_tx: &Sender<Cmd>) {
         }
         Event::ShuttingDown => {
             log::info!("xas/gam_app: worker is shutting down");
-            // We don't auto-quit; the user is expected to hit
-            // Quit themselves. Just record status.
             app.last_status = "worker shutdown".to_string();
-        }
-        // The Link* events are handled in drive_link's own
-        // loop (which blocks on event_rx directly during the
-        // link sequence). We shouldn't see them here unless
-        // forwarder timing got them first; just drop quietly.
-        Event::LinkUrl(_) | Event::LinkComplete { .. } | Event::LinkError(_) => {
-            log::debug!("xas/gam_app: stray link event after drive_link returned; ignoring");
         }
         Event::Pong | Event::Whoami(_) => {}
     }
-
-    // If we just transitioned to "Linked Success", auto-fire
-    // Cmd::StartReceive and slide the user into the Inbox.
-    if matches!(app.screen, Screen::Linked { kind: LinkedKind::Success }) {
-        // Note: StartReceive is idempotent; bridge layer drops
-        // duplicates.
-        let _ = cmd_tx.send_blocking(Cmd::StartReceive);
-    }
 }
 
+/// Kick off the link flow. Synchronous part only: prompts for a
+/// device name, sends `Cmd::LinkDevice`, sets the Linking screen,
+/// and returns. All async results (`LinkUrl`, `LinkComplete`,
+/// `LinkError`) flow through the forwarder thread and land in
+/// `handle_worker_event`.
+///
+/// The forwarder is the *only* consumer of `event_rx` — drive_link
+/// no longer races for events directly. (Earlier bug: both
+/// drive_link and the forwarder called `event_rx.recv_blocking`,
+/// so individual events were delivered to one or the other
+/// non-deterministically. The QR modal sometimes never opened
+/// because Event::LinkUrl was grabbed by the forwarder before
+/// drive_link saw it.)
 fn drive_link(
     app: &mut App,
     cmd_tx: &Sender<Cmd>,
-    event_rx: &Receiver<Event>,
+    _event_rx: &Receiver<Event>,
     modals_xns: &xous_names::XousNames,
 ) {
     let modals = match modals::Modals::new(modals_xns) {
@@ -562,63 +609,16 @@ fn drive_link(
     };
 
     app.screen = Screen::Linking;
+    app.linking_in_progress = true;
     app.render().ok();
 
     if let Err(e) = cmd_tx.send_blocking(Cmd::LinkDevice { device_name }) {
         app.screen = Screen::Linked { kind: LinkedKind::Failure };
         app.last_status = format!("Cmd::LinkDevice send:\n{:?}", e);
+        app.linking_in_progress = false;
         return;
     }
-
-    let mut url_shown = false;
-    loop {
-        let event = match event_rx.recv_blocking() {
-            Ok(ev) => ev,
-            Err(e) => {
-                app.screen = Screen::Linked { kind: LinkedKind::Failure };
-                app.last_status = format!("event_rx closed:\n{:?}", e);
-                return;
-            }
-        };
-        match event {
-            Event::LinkUrl(url) => {
-                log::info!("xas/gam_app: link URL = {}", url);
-                if !url_shown {
-                    url_shown = true;
-                    let _ = modals.show_notification(
-                        "Scan with the Signal phone app, then press any key.",
-                        Some(&url),
-                    );
-                }
-            }
-            Event::LinkComplete { device_name, aci, phone } => {
-                log::info!(
-                    "xas/gam_app: LinkComplete device={} aci={} phone={}",
-                    device_name, aci, phone
-                );
-                app.linked = true;
-                app.screen = Screen::Linked { kind: LinkedKind::Success };
-                app.last_status =
-                    format!("device:{}\naci:{}\nphone:{}", device_name, aci, phone);
-                // Auto-fire StartReceive so post-link the inbox
-                // begins accumulating.
-                let _ = cmd_tx.send_blocking(Cmd::StartReceive);
-                return;
-            }
-            Event::LinkError(msg) => {
-                log::warn!("xas/gam_app: LinkError: {}", msg);
-                app.screen = Screen::Linked { kind: LinkedKind::Failure };
-                app.last_status = msg;
-                return;
-            }
-            other => {
-                // The forwarder is also running and will queue
-                // these events for later. We don't process them
-                // here; just let the link loop continue.
-                log::debug!("xas/gam_app: drive_link saw non-link event {:?}; not forwarding", other);
-            }
-        }
-    }
+    // Return now; events arrive via the forwarder.
 }
 
 /// Drive the send flow. Two TextEntry modals (recipient + body)

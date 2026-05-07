@@ -49,3 +49,8 @@ xous-net-bridge = { path = "../xous-net-bridge" }
 # way to debug it is through `tracing`. Production binaries route this
 # to xous logger; hosted-mode tests just need the messages to surface.
 tracing = "0.1"
+# Stage 14b-fix: also use the `log` facade for the few diagnostic
+# lines we want surfaced through xas's env_logger / xous-api-log
+# pipeline (tracing has no subscriber configured in our binary, so
+# pure tracing events go nowhere).
+log = "0.4"

@@ -112,7 +112,21 @@ impl ProvisioningPipe {
                         &BASE64_RELAXED.encode(
                             self.provisioning_cipher.public_key().serialize(),
                         ),
-                    );
+                    )
+                    // Signal-Android / Signal-iOS reject device-link
+                    // QRs from clients that don't advertise the
+                    // `backup5` capability — the phone parses the
+                    // URL, doesn't recognize the linker as a
+                    // backup-aware peer, and silently drops the
+                    // ProvisionEnvelope step. Result on our side is
+                    // a "no provisioning message received" timeout.
+                    // The older tunnell/xous-signal-client added
+                    // this param explicitly in manager.rs after
+                    // calling presage; we patch the upstream URL
+                    // builder so all callers get it. Reference:
+                    // tunnell/xous-signal-client manager.rs link()
+                    // and Signal-Android ProvisioningV2.kt.
+                    .append_pair("capabilities", "backup5");
 
                 // acknowledge
                 responder

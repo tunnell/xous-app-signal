@@ -242,34 +242,32 @@ async fn handle_link_device(
     use futures::channel::oneshot;
     use futures::future;
 
+    log::info!("bridge/link: begin (device_name={:?})", device_name);
+
     let (url_tx, url_rx) = oneshot::channel::<url::Url>();
     let event_tx_for_url = event_tx.clone();
 
-    // Two concurrent futures:
-    //  - `link_secondary_device` runs the linking flow, writes its
-    //    URL to `url_tx`, and resolves with `Manager<S, Registered>`.
-    //  - The forwarder awaits `url_rx`, sends `Event::LinkUrl`. Stays
-    //    alive after sending; that's intentional — `future::join`
-    //    requires both futures to resolve before returning.
     let forwarder = async move {
         match url_rx.await {
             Ok(url) => {
-                let _ = event_tx_for_url.send(Event::LinkUrl(url.to_string())).await;
+                log::info!("bridge/link: URL received from libsignal: {}", url);
+                if let Err(e) = event_tx_for_url.send(Event::LinkUrl(url.to_string())).await {
+                    log::warn!("bridge/link: event_tx send LinkUrl failed: {:?}", e);
+                }
             }
-            Err(_) => {
-                // Sender dropped (the link future completed without
-                // emitting a URL — usually an early HTTP error).
-                // No URL to forward; the link future's own error will
-                // come back via the outer match.
+            Err(e) => {
+                log::warn!("bridge/link: url_rx closed before URL: {:?}", e);
             }
         }
     };
 
+    log::info!("bridge/link: calling Manager::link_secondary_device");
     let (link_result, _) = future::join(
         Manager::link_secondary_device(store, SignalServers::Production, device_name, url_tx),
         forwarder,
     )
     .await;
+    log::info!("bridge/link: link_secondary_device returned");
 
     match link_result {
         Ok(manager) => {

@@ -5282,6 +5282,7 @@ dependencies = [
  "async-executor",
  "futures",
  "futures-lite",
+ "log",
  "presage",
  "presage-store-pddb",
  "tracing",
