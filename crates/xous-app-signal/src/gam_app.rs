@@ -77,6 +77,10 @@ enum Screen {
     /// here only via `MenuItem::Home`; later phases replace the menu
     /// landing with this screen.
     Home,
+    /// Per-conversation history view, read-only in Phase A. Shows
+    /// the messages from `App.messages` filtered by `uuid`, oldest
+    /// at top. A later step adds a compose input at the bottom.
+    Thread { uuid: Uuid },
     SendResult { ok: bool, status: String },
 }
 
@@ -241,6 +245,7 @@ impl App {
             }
             Screen::Inbox => self.write_inbox(&mut tv.text)?,
             Screen::Home => self.write_home(&mut tv.text)?,
+            Screen::Thread { uuid } => self.write_thread(&mut tv.text, uuid)?,
             Screen::SendResult { ok, status } => {
                 let title = if *ok { "Sent" } else { "Send failed" };
                 write!(
@@ -360,7 +365,70 @@ impl App {
                 .map_err(|e| format!("home sep: {}", e))?;
         }
         writeln!(out).map_err(|e| format!("home foot: {}", e))?;
-        write!(out, "  ↑↓ select   Enter return").map_err(|e| format!("home hint: {}", e))
+        write!(out, "  ↑↓ select   Enter open").map_err(|e| format!("home hint: {}", e))
+    }
+
+    /// Render the per-conversation history view (read-only in Phase A).
+    ///
+    /// Layout:
+    /// ```
+    /// Bob Kowalski
+    /// -------------------------------------
+    /// Bob 12m
+    ///   did you get the file?
+    ///
+    /// You 11m  vv
+    ///   yes, on my way
+    ///
+    /// Bob 5m
+    ///   thanks!
+    /// -------------------------------------
+    ///   Enter: back to Home
+    /// ```
+    /// Messages oldest at top, newest just above the footer (mirrors
+    /// every chat UI). Outgoing messages prefixed with their send-
+    /// status glyph; incoming messages have no prefix.
+    fn write_thread(&self, out: &mut String, uuid: &Uuid) -> Result<(), String> {
+        let header = self
+            .dialogues
+            .iter()
+            .find(|d| d.uuid == *uuid)
+            .map(|d| d.display_name.clone())
+            .unwrap_or_else(|| format!("uuid:{:.8}", uuid.simple().to_string()));
+        writeln!(out, "{}", header).map_err(|e| format!("thread hdr: {}", e))?;
+        writeln!(out, "{}", "-".repeat(37)).map_err(|e| format!("thread rule: {}", e))?;
+
+        let now_ms = unix_now_ms();
+        let thread_msgs: Vec<&ThreadMessage> =
+            self.messages.iter().filter(|m| m.uuid == *uuid).collect();
+
+        if thread_msgs.is_empty() {
+            writeln!(out).map_err(|e| format!("thread empty: {}", e))?;
+            writeln!(out, "  (no messages in this thread)")
+                .map_err(|e| format!("thread empty: {}", e))?;
+        } else {
+            for m in &thread_msgs {
+                let ts = crate::dialogue::brief_relative(m.timestamp, now_ms);
+                let header_line = if m.outgoing {
+                    let glyph = match m.status {
+                        SendStatus::Pending => "..",
+                        SendStatus::Sent => "v ",
+                        SendStatus::Delivered => "vv",
+                        SendStatus::Failed => "! ",
+                    };
+                    format!("You {}  {}", ts, glyph)
+                } else {
+                    format!("{} {}", crate::dialogue::ellipsize(&m.author_label, 22), ts)
+                };
+                writeln!(out, "{}", header_line)
+                    .map_err(|e| format!("thread row hdr: {}", e))?;
+                writeln!(out, "  {}", crate::dialogue::ellipsize(&m.body, 70))
+                    .map_err(|e| format!("thread row body: {}", e))?;
+                writeln!(out).map_err(|e| format!("thread row sep: {}", e))?;
+            }
+        }
+        writeln!(out, "{}", "-".repeat(37)).map_err(|e| format!("thread foot rule: {}", e))?;
+        write!(out, "  Enter: back to Home").map_err(|e| format!("thread foot: {}", e))
     }
 
     fn write_inbox(&self, out: &mut String) -> Result<(), String> {
@@ -590,9 +658,19 @@ fn handle_keys(
                 }
             }
             (Screen::Home, '∴') | (Screen::Home, '\u{d}') => {
-                // Phase A: Enter on Home returns to the menu (Thread
-                // view comes in a later step).
-                app.screen = Screen::Menu;
+                // Open the focused thread. If the list is empty,
+                // fall back to the menu.
+                if let Some(d) = app.dialogues.get(app.home_focus) {
+                    app.screen = Screen::Thread { uuid: d.uuid };
+                } else {
+                    app.screen = Screen::Menu;
+                }
+            }
+            (Screen::Thread { .. }, '∴') | (Screen::Thread { .. }, '\u{d}') => {
+                // Phase A: Enter on Thread returns to Home.
+                // (Compose input + Send-on-Enter come in a later step;
+                // until then Enter is the back-button proxy.)
+                app.screen = Screen::Home;
             }
             (Screen::SendResult { .. }, '∴') | (Screen::SendResult { .. }, '\u{d}') => {
                 app.screen = Screen::Menu;
