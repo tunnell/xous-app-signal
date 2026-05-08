@@ -245,7 +245,7 @@ impl Ui {
                     c.on_send_complete(timestamp);
                 }
             }
-            Event::SendError(reason) => {
+            Event::SendError { reason, timestamp: _ } => {
                 if let Some(Screen::Compose(c)) = self.stack.last_mut() {
                     c.on_send_error(reason);
                 }
@@ -283,9 +283,13 @@ impl Ui {
     pub fn dispatch_line(&mut self, line: String) -> usize {
         if let Some(Screen::Compose(c)) = self.stack.last_mut() {
             if let Some((recipient, body)) = c.submit(line) {
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64)
+                    .unwrap_or(0);
                 let _ = self
                     .cmd_tx
-                    .send_blocking(Cmd::SendMessage { recipient, body });
+                    .send_blocking(Cmd::SendMessage { recipient, body, timestamp });
             }
         }
         self.stack.len()
@@ -769,7 +773,7 @@ mod tests {
         let (mut ui, cmd_rx) = ui_on_compose();
         ui.dispatch_line("hello world".to_string());
         match cmd_rx.try_recv() {
-            Ok(Cmd::SendMessage { recipient, body }) => {
+            Ok(Cmd::SendMessage { recipient, body, timestamp: _ }) => {
                 assert_eq!(recipient, "00000000-0000-4000-8000-000000000abc");
                 assert_eq!(body, "hello world");
             }
@@ -813,7 +817,10 @@ mod tests {
     fn send_error_event_advances_compose_to_error() {
         let (mut ui, _cmd_rx) = ui_on_compose();
         ui.dispatch_line("hi".to_string());
-        ui.handle_event(Event::SendError("recipient unknown".to_string()));
+        ui.handle_event(Event::SendError {
+            reason: "recipient unknown".to_string(),
+            timestamp: None,
+        });
         match ui.top() {
             Some(Screen::Compose(c)) => match &c.state {
                 SendState::Error(reason) => assert_eq!(reason, "recipient unknown"),

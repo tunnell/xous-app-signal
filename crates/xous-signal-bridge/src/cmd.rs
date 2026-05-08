@@ -57,14 +57,20 @@ pub enum Cmd {
     /// `"00000000-0000-4000-8000-000000000001"` for an Aci); the
     /// worker parses it back into `ServiceId` before calling
     /// `Manager::send_message`. `body` is the plaintext UTF-8
-    /// message body. Worker emits `Event::SendComplete` on success
-    /// or `Event::SendError(reason)` on failure.
+    /// message body. `timestamp` is the client-generated unix-ms
+    /// timestamp the UI used when it optimistically appended the
+    /// outgoing message to its in-RAM history; the worker echoes
+    /// this same value back in `Event::SendComplete { timestamp }`
+    /// and `Event::SendError { timestamp: Some(_) }` so the UI
+    /// can correlate event-to-pending-message in its optimistic-
+    /// render path. Worker also uses this as the Signal-protocol
+    /// timestamp on the wire.
     ///
     /// Requires `Cmd::StartReceive` to have run first — the manager
     /// task is the only place the Manager is reachable. Sending
-    /// before receive starts gets a `SendError("not receiving;
-    /// send Cmd::StartReceive first")`.
-    SendMessage { recipient: String, body: String },
+    /// before receive starts gets a `SendError { reason: "not
+    /// receiving; ...", timestamp: None }`.
+    SendMessage { recipient: String, body: String, timestamp: u64 },
 
     /// Tell the worker to drain its event channel and exit. The main
     /// thread sends this before joining the worker handle so we don't
@@ -156,8 +162,13 @@ pub enum Event {
     /// A `Cmd::SendMessage` failed. Common reasons:
     /// invalid recipient UUID, network error, recipient session
     /// expired (in which case Signal expects a re-key on next
-    /// attempt). String-typed for IPC-boundary cleanliness.
-    SendError(String),
+    /// attempt). `timestamp` is the same client-generated timestamp
+    /// the UI used when it optimistically appended the outgoing
+    /// message; it lets the UI find the right pending row to mark
+    /// failed. `None` means the failure happened before a timestamp
+    /// was assigned (e.g. recipient parse failed, manager task died
+    /// before the call).
+    SendError { reason: String, timestamp: Option<u64> },
 
     /// Confirms the worker is winding down. The main thread joins
     /// after receiving this — same way Manager state machines on

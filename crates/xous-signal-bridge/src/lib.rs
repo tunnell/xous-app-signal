@@ -244,22 +244,27 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                         ))
                         .detach();
                 }
-                Ok(Cmd::SendMessage { recipient, body }) => {
+                Ok(Cmd::SendMessage { recipient, body, timestamp }) => {
                     let Some(send_tx) = send_to_manager.as_ref() else {
                         let _ = event_tx
-                            .send(Event::SendError(
-                                "not receiving; send Cmd::StartReceive first".to_string(),
-                            ))
+                            .send(Event::SendError {
+                                reason: "not receiving; send Cmd::StartReceive first"
+                                    .to_string(),
+                                timestamp: Some(timestamp),
+                            })
                             .await;
                         continue;
                     };
                     // Forward to the manager task. If the channel is
                     // closed (manager task exited) we drop the
                     // send_to_manager handle and surface the error.
-                    if send_tx.send(InnerSend { recipient, body }).await.is_err() {
+                    if send_tx.send(InnerSend { recipient, body, timestamp }).await.is_err() {
                         send_to_manager = None;
                         let _ = event_tx
-                            .send(Event::SendError("manager task died".to_string()))
+                            .send(Event::SendError {
+                                reason: "manager task died".to_string(),
+                                timestamp: Some(timestamp),
+                            })
                             .await;
                     }
                 }
@@ -369,6 +374,11 @@ async fn handle_link_device(
 struct InnerSend {
     recipient: String,
     body: String,
+    /// Client-generated unix-ms timestamp; carried through to
+    /// `manager.send_message` and echoed back in `Event::Send*`
+    /// so the UI can correlate the optimistic-render row with
+    /// the eventual outcome event.
+    timestamp: u64,
 }
 
 /// The long-running task that owns the linked Manager
@@ -587,8 +597,6 @@ async fn handle_send(
     send: InnerSend,
     event_tx: &Sender<Event>,
 ) {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     use futures::FutureExt;
     use presage::libsignal_service::content::ContentBody;
     use presage::libsignal_service::prelude::Uuid;
@@ -596,10 +604,12 @@ async fn handle_send(
     use presage::libsignal_service::protocol::{Aci, ServiceId};
     use presage::store::ContentsStore;
 
+    let timestamp = send.timestamp;
     log::info!(
-        "bridge/send: handle_send entered; recipient_raw={:?} body_len={}",
+        "bridge/send: handle_send entered; recipient_raw={:?} body_len={} ts={}",
         send.recipient,
-        send.body.len()
+        send.body.len(),
+        timestamp,
     );
 
     // Recipient may be either a UUID/ACI (36 chars, dashed) or a
@@ -616,9 +626,10 @@ async fn handle_send(
         let Ok(contacts_iter) = manager.store().contacts().await else {
             log::warn!("bridge/send: contacts() returned Err");
             let _ = event_tx
-                .send(Event::SendError(
-                    "couldn't read contacts store".to_string(),
-                ))
+                .send(Event::SendError {
+                    reason: "couldn't read contacts store".to_string(),
+                    timestamp: Some(timestamp),
+                })
                 .await;
             return;
         };
@@ -636,10 +647,13 @@ async fn handle_send(
         let Some(uuid) = matched else {
             log::warn!("bridge/send: no contact matched e164={}", target);
             let _ = event_tx
-                .send(Event::SendError(format!(
-                    "phone {} not in contacts (receive a message from them first, or use their ACI UUID)",
-                    target
-                )))
+                .send(Event::SendError {
+                    reason: format!(
+                        "phone {} not in contacts (receive a message from them first, or use their ACI UUID)",
+                        target
+                    ),
+                    timestamp: Some(timestamp),
+                })
                 .await;
             return;
         };
@@ -648,18 +662,16 @@ async fn handle_send(
     } else {
         log::warn!("bridge/send: recipient parse failed: {:?}", send.recipient);
         let _ = event_tx
-            .send(Event::SendError(format!(
-                "recipient must be ACI UUID or +e164 phone number; got {:?}",
-                send.recipient
-            )))
+            .send(Event::SendError {
+                reason: format!(
+                    "recipient must be ACI UUID or +e164 phone number; got {:?}",
+                    send.recipient
+                ),
+                timestamp: Some(timestamp),
+            })
             .await;
         return;
     };
-
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
 
     let content_body = ContentBody::DataMessage(DataMessage {
         body: Some(send.body),
@@ -692,7 +704,12 @@ async fn handle_send(
         }
         Ok(Err(e)) => {
             log::warn!("bridge/send: send_message Err: {}", e);
-            let _ = event_tx.send(Event::SendError(format!("{e}"))).await;
+            let _ = event_tx
+                .send(Event::SendError {
+                    reason: format!("{e}"),
+                    timestamp: Some(timestamp),
+                })
+                .await;
         }
         Err(panic_payload) => {
             let msg = if let Some(s) = panic_payload.downcast_ref::<&'static str>() {
@@ -704,7 +721,10 @@ async fn handle_send(
             };
             log::error!("bridge/send: PANIC inside manager.send_message: {}", msg);
             let _ = event_tx
-                .send(Event::SendError(format!("panic in send: {msg}")))
+                .send(Event::SendError {
+                    reason: format!("panic in send: {msg}"),
+                    timestamp: Some(timestamp),
+                })
                 .await;
         }
     }

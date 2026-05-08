@@ -125,6 +125,12 @@ struct App {
     dialogues: Vec<DialogueSummary>,
     /// Index of the focused row when Screen::Home is active.
     home_focus: usize,
+    /// Active compose buffer when Screen::Thread is on top. Cleared
+    /// when the user sends or backs out. Phase A allows alphanumeric
+    /// + space + ASCII punctuation; non-ASCII (emoji, accented chars)
+    /// is silently dropped — Phase B widens this to anything the
+    /// GAM font can render.
+    compose_buffer: String,
     /// Most-recent inbound sender (used as default recipient when
     /// the user picks Send before any contact is known).
     last_sender: Option<String>,
@@ -428,7 +434,12 @@ impl App {
             }
         }
         writeln!(out, "{}", "-".repeat(37)).map_err(|e| format!("thread foot rule: {}", e))?;
-        write!(out, "  Enter: back to Home").map_err(|e| format!("thread foot: {}", e))
+        // Compose input. Cursor is `_` at the end of the buffer for
+        // Phase A — no horizontal scroll if the buffer is wider than
+        // the visible width, just shows the trailing chars.
+        write!(out, "> {}_", crate::dialogue::ellipsize(&self.compose_buffer, 30))
+            .map_err(|e| format!("thread compose: {}", e))?;
+        Ok(())
     }
 
     fn write_inbox(&self, out: &mut String) -> Result<(), String> {
@@ -450,6 +461,14 @@ impl App {
         }
         write!(out, "\nEnter: return").map_err(|e| format!("inbox foot: {}", e))
     }
+}
+
+/// Whether a character is acceptable in the Thread compose buffer.
+/// Phase A: alphanumeric + space + ASCII punctuation. Non-ASCII
+/// (emoji, accented chars, CJK) is silently dropped; Phase B
+/// widens to anything the GAM font can render.
+fn is_compose_char(c: char) -> bool {
+    c.is_alphanumeric() || c == ' ' || c.is_ascii_punctuation()
 }
 
 /// Unix milliseconds, or 0 if the system clock is somehow before
@@ -551,6 +570,7 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
         messages: Vec::with_capacity(INBOX_CAPACITY),
         dialogues: Vec::new(),
         home_focus: 0,
+        compose_buffer: String::new(),
         last_sender: None,
         last_status: String::new(),
         quit_requested: false,
@@ -666,11 +686,63 @@ fn handle_keys(
                     app.screen = Screen::Menu;
                 }
             }
-            (Screen::Thread { .. }, '∴') | (Screen::Thread { .. }, '\u{d}') => {
-                // Phase A: Enter on Thread returns to Home.
-                // (Compose input + Send-on-Enter come in a later step;
-                // until then Enter is the back-button proxy.)
-                app.screen = Screen::Home;
+            (Screen::Thread { uuid }, '∴') | (Screen::Thread { uuid }, '\u{d}') => {
+                // Enter behavior depends on compose buffer state:
+                // - empty → back to Home (BlackBerry/Nokia convention)
+                // - non-empty → send the message
+                if app.compose_buffer.is_empty() {
+                    app.screen = Screen::Home;
+                } else {
+                    let body = std::mem::take(&mut app.compose_buffer);
+                    let recipient_uuid = *uuid;
+                    let send_ts = unix_now_ms();
+                    let recipient_str = recipient_uuid.to_string();
+                    log::info!(
+                        "xas/gam_app: send to={} ({} body bytes) ts={}",
+                        recipient_str,
+                        body.len(),
+                        send_ts,
+                    );
+                    // Optimistic-append the outgoing message so it
+                    // shows up in the Thread render immediately;
+                    // status updates from the worker arrive later.
+                    if app.messages.len() >= INBOX_CAPACITY {
+                        app.messages.remove(0);
+                    }
+                    app.messages.push(ThreadMessage {
+                        uuid: recipient_uuid,
+                        author_label: "You".to_string(),
+                        body: body.clone(),
+                        timestamp: send_ts,
+                        outgoing: true,
+                        status: SendStatus::Pending,
+                    });
+                    app.dialogues = rebuild_summaries(&app.messages);
+                    if let Err(e) = cmd_tx.send_blocking(Cmd::SendMessage {
+                        recipient: recipient_str,
+                        body,
+                        timestamp: send_ts,
+                    }) {
+                        log::warn!("xas/gam_app: Cmd::SendMessage send err: {:?}", e);
+                        // Mark the optimistic row Failed in place.
+                        if let Some(m) = app
+                            .messages
+                            .iter_mut()
+                            .rev()
+                            .find(|m| m.outgoing && m.timestamp == send_ts)
+                        {
+                            m.status = SendStatus::Failed;
+                        }
+                        app.dialogues = rebuild_summaries(&app.messages);
+                    }
+                }
+            }
+            (Screen::Thread { .. }, '\u{8}') => {
+                // Backspace: pop a char from the compose buffer.
+                app.compose_buffer.pop();
+            }
+            (Screen::Thread { .. }, c) if is_compose_char(c) => {
+                app.compose_buffer.push(c);
             }
             (Screen::SendResult { .. }, '∴') | (Screen::SendResult { .. }, '\u{d}') => {
                 app.screen = Screen::Menu;
@@ -787,13 +859,48 @@ fn handle_worker_event(
             app.last_status = format!("Receive: {}", msg);
         }
         Event::SendComplete { timestamp } => {
-            app.screen = Screen::SendResult {
-                ok: true,
-                status: format!("server timestamp = {}", timestamp),
-            };
+            // If the send originated from a Thread compose, there's a
+            // pending optimistic-rendered message in `messages` with
+            // this timestamp. Update its status in place; rebuild
+            // dialogues so any cached snippet/status reflects the new
+            // state. No screen change — the Thread is already showing
+            // the message.
+            //
+            // Otherwise (no match), the send was menu-initiated via
+            // `drive_send`; show the legacy SendResult screen.
+            let matched = app
+                .messages
+                .iter_mut()
+                .rev()
+                .find(|m| m.outgoing && m.timestamp == timestamp);
+            if let Some(m) = matched {
+                m.status = SendStatus::Delivered;
+                app.dialogues = rebuild_summaries(&app.messages);
+            } else {
+                app.screen = Screen::SendResult {
+                    ok: true,
+                    status: format!("server timestamp = {}", timestamp),
+                };
+            }
         }
-        Event::SendError(msg) => {
-            app.screen = Screen::SendResult { ok: false, status: msg };
+        Event::SendError { reason, timestamp } => {
+            // Same pattern as SendComplete: if a matching pending
+            // Thread message exists, mark it Failed in place;
+            // otherwise treat as a menu-Send result and pop the
+            // SendResult screen.
+            let matched = timestamp.and_then(|ts| {
+                app.messages
+                    .iter_mut()
+                    .rev()
+                    .find(|m| m.outgoing && m.timestamp == ts)
+            });
+            if let Some(m) = matched {
+                m.status = SendStatus::Failed;
+                app.dialogues = rebuild_summaries(&app.messages);
+                app.last_status = format!("Send: {}", reason);
+            } else {
+                app.screen = Screen::SendResult { ok: false, status: reason };
+            }
         }
         Event::ShuttingDown => {
             log::info!("xas/gam_app: worker is shutting down");
@@ -956,7 +1063,10 @@ fn drive_send(app: &mut App, cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::Xous
         recipient,
         body.len()
     );
-    if let Err(e) = cmd_tx.send_blocking(Cmd::SendMessage { recipient, body }) {
+    let send_ts = unix_now_ms();
+    if let Err(e) =
+        cmd_tx.send_blocking(Cmd::SendMessage { recipient, body, timestamp: send_ts })
+    {
         app.screen = Screen::SendResult {
             ok: false,
             status: format!("Cmd::SendMessage send: {:?}", e),
