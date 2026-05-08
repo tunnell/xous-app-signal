@@ -149,8 +149,23 @@ cap from 512 KiB to 12 MiB; xas's libsignal+presage+rustls+smol working set
 exceeds the default cap during link. App-image-XIP keeps app and large
 service code in flash rather than RAM, freeing ~5 MiB on the 16 MiB SoC.
 
-Wi-Fi must be configured via shellchat (`wlan on; wlan join`) before
-launching xas; in-app onboarding is deferred (see `../CHORES.md`).
+Wi-Fi must be configured via shellchat before launching xas; in-app
+onboarding is deferred (see `../CHORES.md`). The sequence that has
+worked reliably in practice:
+
+```
+wlan off
+wlan on
+ssid scan
+wlan status     # repeat until it shows "connected"
+```
+
+`wlan off` first resets any half-associated state from a previous boot;
+`wlan on` powers the radio; `ssid scan` triggers association against
+the SSID/PSK already saved on the EC; `wlan status` is the readiness
+gate. If `wlan status` never reports connected, the SSID/PSK may need
+to be (re)set via `wlan setssid <name>` + `wlan setpass <pw>` (one-time;
+the EC remembers them across reboots).
 
 ---
 
