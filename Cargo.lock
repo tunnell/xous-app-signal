@@ -5181,6 +5181,7 @@ dependencies = [
  "presage-store-pddb",
  "trng",
  "utralib",
+ "uuid",
  "ux-api",
  "xous",
  "xous-api-log",

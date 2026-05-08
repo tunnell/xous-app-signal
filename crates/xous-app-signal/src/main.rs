@@ -14,6 +14,7 @@
 //!
 //! See docs/ROADMAP.md and docs/UI.md for the design.
 
+mod dialogue;
 mod gam_app;
 
 use async_channel::bounded;

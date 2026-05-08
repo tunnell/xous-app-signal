@@ -143,6 +143,11 @@ xous-names = { package = "xous-api-names", version = "0.9.71" }
 modals = { path = "../../../repos/xous-core/services/modals" }
 locales = { path = "../../../repos/xous-core/locales" }
 
+# uuid is already in the dep graph transitively (via libsignal); add it
+# as a direct dep so the dialogue.rs data model can use the same Uuid
+# type as xous-signal-bridge without going through a re-export.
+uuid = { version = "1", default-features = false, features = ["std"] }
+
 [target.'cfg(not(target_os = "xous"))'.dependencies]
 # env_logger initializes from RUST_LOG; defaults to info-level.
 # Pulled only for hosted builds to keep the rv32 dep graph clean.
