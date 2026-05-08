@@ -22,21 +22,34 @@ Xous-specific glue.
 
 ## Status
 
-| Capability                                | State                  |
-|-------------------------------------------|------------------------|
-| Link as secondary device (QR scan)        | working in hosted      |
-| Persistence across kernel restarts (PDDB) | working in hosted      |
-| Auto-reload registration on boot          | working in hosted      |
-| Receive 1:1 text messages                 | working in hosted      |
-| Send 1:1 text messages (UUID or e164)     | working in hosted      |
-| Contact name / phone display              | wired, lightly tested  |
-| Hardware deploy on real Precursor         | **untested**           |
-| Group messaging / attachments / calls     | out of scope (for now) |
+| Capability                                | Hosted (Linux X11)     | Precursor hardware                       |
+|-------------------------------------------|------------------------|------------------------------------------|
+| Link as secondary device (QR scan)        | working                | **working**                              |
+| Persistence across kernel restarts (PDDB) | working                | working                                  |
+| Auto-reload registration on boot          | working                | working                                  |
+| Receive 1:1 text messages                 | working                | **working**                              |
+| Send 1:1 text messages (UUID or e164)     | working                | broken — first-send panics, under investigation |
+| Contact name / phone display              | wired, lightly tested  | wired, lightly tested                    |
+| Wi-Fi onboarding from inside xas          | n/a (host stack)       | not yet — use `wlan join` from shellchat |
+| Group messaging / attachments / calls     | out of scope (for now) | out of scope (for now)                   |
 
-This is a hosted-mode demo today. The same code path is intended to run on
-real Precursor hardware with no source-level changes — every UI primitive
-talks to the GAM service via Xous IPC, which is target-agnostic — but the
-first hardware flash hasn't happened yet.
+Hardware bring-up is in progress. Boot, link, and receive end-to-end against
+real Signal servers from a Precursor; send fails on the first message after
+link with a panic somewhere inside `manager.send_message`'s session-bootstrap
+path. The current build (image-10) wraps that call in `catch_unwind` so the
+panic message renders directly in the UI on the next failed send — root-cause
+fix is the next concrete step.
+
+The same code path runs in hosted-mode emulation on Linux for fast UI
+iteration; every UI primitive talks to the GAM service via Xous IPC and is
+target-agnostic.
+
+For full state, in-flight builds, and how to continue, see the docs in this
+repo's parent directory:
+- `OVERVIEW.md` — landing page with current state at a glance.
+- `STATE.md` — what's working / broken / in-flight, plus build + flash commands.
+- `UI-DESIGN.md` — comprehensive plan for the next UI redesign (conversation-list home).
+- `CHORES.md` — deferred follow-ups (Wi-Fi onboarding rework, dep audits, send fix).
 
 ---
 
@@ -104,6 +117,40 @@ xas/gam_app: inbound message from <name-or-phone-or-uuid> (N bytes)
 To send back, navigate to xas Menu → Send. Recipient accepts either a UUID
 (ACI) or an e164 phone number (`+15551234567`); the latter is resolved
 against the contact list synced from the linked phone.
+
+---
+
+## Hardware deploy
+
+Hardware build, flash, and test commands are documented in
+[`../STATE.md`](../STATE.md). Summary:
+
+```sh
+# Build the rv32 xas binary:
+cd xous-app-signal && cargo xtask dist
+
+# Bundle into a signed kernel image (apps + a few services XIP'd
+# from flash to free RAM; kernel needs big-heap for libsignal):
+cd ../xous-core && cargo xtask app-image-xip \
+    xas:../xous-app-signal/dist/xas-rv32/xas vault \
+    --kernel-feature big-heap \
+    --git-describe v0.9.8-791-gc707f9d8 --git-rev c707f9d8
+
+# Flash kernel-only (recoverable, ~25 min):
+python3 tools/usb_update.py \
+    -k target/riscv32imac-unknown-xous-elf/release/xous.img --bounce
+```
+
+Pre-flash, confirm the Precursor is in the loader window
+(`lsusb | grep 1209` should show `1209:5bf0`, not `1209:3613`).
+
+`big-heap` is a xous-core kernel feature that raises the per-process heap
+cap from 512 KiB to 12 MiB; xas's libsignal+presage+rustls+smol working set
+exceeds the default cap during link. App-image-XIP keeps app and large
+service code in flash rather than RAM, freeing ~5 MiB on the 16 MiB SoC.
+
+Wi-Fi must be configured via shellchat (`wlan on; wlan join`) before
+launching xas; in-app onboarding is deferred (see `../CHORES.md`).
 
 ---
 
