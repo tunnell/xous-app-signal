@@ -28,17 +28,27 @@ Xous-specific glue.
 | Persistence across kernel restarts (PDDB) | working                | working                                  |
 | Auto-reload registration on boot          | working                | working                                  |
 | Receive 1:1 text messages                 | working                | **working**                              |
-| Send 1:1 text messages (UUID or e164)     | working                | broken — first-send panics, under investigation |
+| Send 1:1 text messages (UUID or e164)     | working                | broken — `"WebSocket closing while waiting for a response"` (likely WS keepalive not firing on rv32) |
 | Contact name / phone display              | wired, lightly tested  | wired, lightly tested                    |
 | Wi-Fi onboarding from inside xas          | n/a (host stack)       | not yet — use `wlan join` from shellchat |
 | Group messaging / attachments / calls     | out of scope (for now) | out of scope (for now)                   |
 
-Hardware bring-up is in progress. Boot, link, and receive end-to-end against
-real Signal servers from a Precursor; send fails on the first message after
-link with a panic somewhere inside `manager.send_message`'s session-bootstrap
-path. The current build (image-10) wraps that call in `catch_unwind` so the
-panic message renders directly in the UI on the next failed send — root-cause
-fix is the next concrete step.
+Hardware bring-up is in progress. **Milestones reached on real
+Precursor:** boot to PDDB unlock; DNS resolution including CNAME chains;
+TLS to chat.signal.org against the pinned CA; WebSocket upgrade;
+provisioning-UUID receive + QR render on the physical LCD; phone-side
+QR scan; ProvisionEnvelope decrypt on rv32 (Curve25519 + AES-CBC + HMAC);
+prekey generation (signed Curve25519 + Kyber-1024 last-resort);
+`POST /v1/devices/link`; `LinkComplete` + persistence to PDDB; inbound
+Signal-protocol message decrypt + display on xas's inbox screen.
+
+**The remaining gap is send.** First send fails with a libsignal-service
+error: `"WebSocket closing while waiting for a response"`. The most likely
+cause (per the project's `linking.md` field guide) is that the WebSocket
+keepalive isn't firing on rv32, so Signal's server idle-closes the auth
+WS while xas is still waiting to use it. The current build catches that
+error cleanly and surfaces it in the UI; root-cause fix is parked in
+`../CHORES.md`.
 
 The same code path runs in hosted-mode emulation on Linux for fast UI
 iteration; every UI primitive talks to the GAM service via Xous IPC and is
