@@ -33,19 +33,25 @@ use xous_net_bridge::{SyncHttpClient, signal_production_roots};
 
 /// Initial worker-thread stack size.
 ///
-/// Sized down from 4 MiB to 1 MiB on 2026-05-08 because the original
-/// 4 MiB caused process-level OOM during link on Precursor (16 MiB
-/// SRAM total, with kernel + 26 services + xas's own state already
-/// resident). On Xous a thread's stack is committed at spawn time
-/// (`map_memory` allocates physical pages eagerly), so a 4 MiB
-/// reservation eats 4 MiB of RAM whether or not it's used.
+/// Sized at 2 MiB. History:
 ///
-/// 1 MiB is the safe minimum for the link path: zkgroup batch ops,
-/// curve25519-dalek scalar mul, Kyber-1024 keygen, and the smol
-/// executor's recursive task graph all comfortably fit. If a real
-/// flow stage stack-overflows, that surfaces as a clear panic at a
-/// known location and we bump this back up.
-const WORKER_STACK_BYTES: usize = 1 * 1024 * 1024;
+/// - Original value: 4 MiB. Set by the xas authors as "comfortable
+///   headroom for zkgroup batch ops + smol's recursive task graph."
+/// - Dropped to 1 MiB in 2026-05-08 because the 4 MiB reservation
+///   was eating 4 MiB of RAM (Xous commits stack pages eagerly via
+///   `map_memory`), which combined with large per-process state to
+///   push xas over the kernel's then-default 512 KiB heap cap.
+/// - Restored to 2 MiB shortly after when hosted-mode emulation
+///   showed `thread 'signal-worker' has overflowed its stack`
+///   during `PUT /v1/accounts/attributes` on post-link auto-reload.
+///   That path runs zkgroup credential batch + serde JSON build +
+///   rustls TLS write + tungstenite WS framing, deep enough to
+///   blow 1 MiB. The kernel-level `big-heap` feature now in use
+///   makes the heap-pressure rationale for the 1 MiB cut obsolete.
+///
+/// 2 MiB is the empirical floor for the link path; if a future
+/// flow stage stack-overflows again, bump to 4 MiB.
+const WORKER_STACK_BYTES: usize = 2 * 1024 * 1024;
 
 /// Spawn the Manager worker thread.
 ///
