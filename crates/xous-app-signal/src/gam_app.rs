@@ -71,6 +71,12 @@ enum Screen {
     Linking,
     Linked { kind: LinkedKind },
     Inbox,
+    /// Conversation list — Phase A scaffolding. Renders one row per
+    /// UUID from `App.dialogues`, with `App.home_focus` driving the
+    /// `>` cursor. Phase A keeps the existing menu intact and routes
+    /// here only via `MenuItem::Home`; later phases replace the menu
+    /// landing with this screen.
+    Home,
     SendResult { ok: bool, status: String },
 }
 
@@ -87,6 +93,10 @@ enum MenuItem {
     // Post-link items
     Inbox,
     Send,
+    /// Conversation-list view (Phase A scaffolding). Sits alongside
+    /// Inbox/Send for now; later phases promote it to the default
+    /// post-link landing screen and drop Inbox/Send.
+    Home,
     // Always
     About,
     Quit,
@@ -107,13 +117,9 @@ struct App {
     /// passes filter / sort / aggregate as needed.
     messages: Vec<ThreadMessage>,
     /// Aggregated per-conversation view derived from `messages`.
-    /// Re-built on every message arrival. Phase-A scaffolding for
-    /// the upcoming Screen::Home renderer.
-    #[allow(dead_code)]
+    /// Re-built on every message arrival; rendered by `write_home`.
     dialogues: Vec<DialogueSummary>,
     /// Index of the focused row when Screen::Home is active.
-    /// Phase-A scaffolding; not yet read by any renderer.
-    #[allow(dead_code)]
     home_focus: usize,
     /// Most-recent inbound sender (used as default recipient when
     /// the user picks Send before any contact is known).
@@ -130,16 +136,23 @@ struct App {
 }
 
 impl App {
-    fn menu_items(&self) -> [Option<MenuItem>; 4] {
+    fn menu_items(&self) -> [Option<MenuItem>; 5] {
         if self.linked {
             [
+                Some(MenuItem::Home),
                 Some(MenuItem::Inbox),
                 Some(MenuItem::Send),
                 Some(MenuItem::About),
                 Some(MenuItem::Quit),
             ]
         } else {
-            [Some(MenuItem::Link), Some(MenuItem::About), Some(MenuItem::Quit), None]
+            [
+                Some(MenuItem::Link),
+                Some(MenuItem::About),
+                Some(MenuItem::Quit),
+                None,
+                None,
+            ]
         }
     }
 
@@ -227,6 +240,7 @@ impl App {
                 .map_err(|e| format!("write Linked: {}", e))?
             }
             Screen::Inbox => self.write_inbox(&mut tv.text)?,
+            Screen::Home => self.write_home(&mut tv.text)?,
             Screen::SendResult { ok, status } => {
                 let title = if *ok { "Sent" } else { "Send failed" };
                 write!(
@@ -253,6 +267,7 @@ impl App {
                 let mark = if item == self.selected { ">" } else { " " };
                 let label = match item {
                     MenuItem::Link => "Link device",
+                    MenuItem::Home => "Home",
                     MenuItem::Inbox => "Inbox",
                     MenuItem::Send => "Send message",
                     MenuItem::About => "About",
@@ -263,6 +278,89 @@ impl App {
         }
         write!(out, "\nUp/Down: navigate\nEnter: select")
             .map_err(|e| format!("foot: {}", e))
+    }
+
+    /// Render the conversation-list screen.
+    ///
+    /// Layout per row (single-TextView text mode for Phase A):
+    /// ```
+    ///   Bob Kowalski                    12m
+    /// * did you get the file?           (1)
+    /// ───────────────────────────────────────
+    /// > Carol                            1h
+    ///   Thanks!
+    /// ```
+    /// `>` marks the focused row, `*` marks unread (Phase A doesn't
+    /// have per-row bold; that comes with multi-TextView render in a
+    /// later phase). Right-aligned timestamp, trailing unread count
+    /// in `(N)` form, second-line preview with optional outgoing
+    /// status glyph.
+    fn write_home(&self, out: &mut String) -> Result<(), String> {
+        let total_unread: u32 = self.dialogues.iter().map(|d| d.unread_count).sum();
+        if total_unread > 0 {
+            writeln!(out, "xas                       {} unread", total_unread)
+                .map_err(|e| format!("home hdr: {}", e))?;
+        } else {
+            writeln!(out, "xas").map_err(|e| format!("home hdr: {}", e))?;
+        }
+        writeln!(out, "{}", "-".repeat(37)).map_err(|e| format!("home rule: {}", e))?;
+
+        if self.dialogues.is_empty() {
+            writeln!(out).map_err(|e| format!("home empty: {}", e))?;
+            writeln!(out, "      No conversations yet.")
+                .map_err(|e| format!("home empty: {}", e))?;
+            writeln!(out).map_err(|e| format!("home empty: {}", e))?;
+            writeln!(out, "  Wait for someone to message,")
+                .map_err(|e| format!("home empty: {}", e))?;
+            writeln!(out, "  or use Send from the menu.")
+                .map_err(|e| format!("home empty: {}", e))?;
+            writeln!(out).map_err(|e| format!("home empty: {}", e))?;
+            writeln!(out, "  Enter: return to menu")
+                .map_err(|e| format!("home empty: {}", e))?;
+            return Ok(());
+        }
+
+        let now_ms = unix_now_ms();
+        // Clamp focus index in case the list shrank.
+        let focus = self.home_focus.min(self.dialogues.len().saturating_sub(1));
+
+        for (i, d) in self.dialogues.iter().enumerate() {
+            let focus_marker = if i == focus { '>' } else { ' ' };
+            let unread_marker = if d.unread_count > 0 { '*' } else { ' ' };
+            let timestamp = crate::dialogue::brief_relative(d.last_msg_ts, now_ms);
+
+            let name_short = crate::dialogue::ellipsize(&d.display_name, 24);
+            // First line: focus, name, right-padded timestamp.
+            writeln!(out, "{} {:<24} {:>6}", focus_marker, name_short, timestamp)
+                .map_err(|e| format!("home row name: {}", e))?;
+
+            // Second line: unread marker, status glyph, snippet, count.
+            let status_glyph = match (d.last_msg_outgoing, d.last_msg_status) {
+                (true, SendStatus::Pending) => "..",
+                (true, SendStatus::Sent) => "v ",
+                (true, SendStatus::Delivered) => "vv",
+                (true, SendStatus::Failed) => "! ",
+                _ => "  ",
+            };
+            let snippet_short = crate::dialogue::ellipsize(&d.last_msg_snippet, 26);
+            let badge = if d.unread_count > 0 {
+                let n = d.unread_count.min(99);
+                format!("({})", n)
+            } else {
+                String::new()
+            };
+            writeln!(
+                out,
+                "{} {} {:<26} {:>4}",
+                unread_marker, status_glyph, snippet_short, badge
+            )
+            .map_err(|e| format!("home row body: {}", e))?;
+
+            writeln!(out, "{}", "-".repeat(37))
+                .map_err(|e| format!("home sep: {}", e))?;
+        }
+        writeln!(out).map_err(|e| format!("home foot: {}", e))?;
+        write!(out, "  ↑↓ select   Enter return").map_err(|e| format!("home hint: {}", e))
     }
 
     fn write_inbox(&self, out: &mut String) -> Result<(), String> {
@@ -284,6 +382,17 @@ impl App {
         }
         write!(out, "\nEnter: return").map_err(|e| format!("inbox foot: {}", e))
     }
+}
+
+/// Unix milliseconds, or 0 if the system clock is somehow before
+/// the epoch. Used by the conversation-list renderer to compute
+/// relative timestamps.
+fn unix_now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -453,6 +562,10 @@ fn handle_keys(
             (Screen::Menu, '↓') => app.move_cursor(1),
             (Screen::Menu, '∴') | (Screen::Menu, '\u{d}') => match app.selected {
                 MenuItem::Link => drive_link(app, cmd_tx, event_rx, modals_xns),
+                MenuItem::Home => {
+                    app.home_focus = 0;
+                    app.screen = Screen::Home;
+                }
                 MenuItem::Inbox => app.screen = Screen::Inbox,
                 MenuItem::Send => drive_send(app, cmd_tx, modals_xns),
                 MenuItem::About => app.screen = Screen::About,
@@ -465,6 +578,20 @@ fn handle_keys(
                 app.last_status.clear();
             }
             (Screen::Inbox, '∴') | (Screen::Inbox, '\u{d}') => {
+                app.screen = Screen::Menu;
+            }
+            (Screen::Home, '↑') => {
+                app.home_focus = app.home_focus.saturating_sub(1);
+            }
+            (Screen::Home, '↓') => {
+                let max = app.dialogues.len().saturating_sub(1);
+                if app.home_focus < max {
+                    app.home_focus += 1;
+                }
+            }
+            (Screen::Home, '∴') | (Screen::Home, '\u{d}') => {
+                // Phase A: Enter on Home returns to the menu (Thread
+                // view comes in a later step).
                 app.screen = Screen::Menu;
             }
             (Screen::SendResult { .. }, '∴') | (Screen::SendResult { .. }, '\u{d}') => {
