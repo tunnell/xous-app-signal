@@ -31,11 +31,21 @@ use presage::manager::Registered;
 use presage_store_pddb::PddbStore;
 use xous_net_bridge::{SyncHttpClient, signal_production_roots};
 
-/// Initial worker-thread stack size. Comfortable headroom for
-/// zkgroup batch ops (the heaviest compute presage triggers) and
-/// the smol-rs executor's recursive task graph. Bump this if a
-/// real-flow stage finds it short.
-const WORKER_STACK_BYTES: usize = 4 * 1024 * 1024;
+/// Initial worker-thread stack size.
+///
+/// Sized down from 4 MiB to 1 MiB on 2026-05-08 because the original
+/// 4 MiB caused process-level OOM during link on Precursor (16 MiB
+/// SRAM total, with kernel + 26 services + xas's own state already
+/// resident). On Xous a thread's stack is committed at spawn time
+/// (`map_memory` allocates physical pages eagerly), so a 4 MiB
+/// reservation eats 4 MiB of RAM whether or not it's used.
+///
+/// 1 MiB is the safe minimum for the link path: zkgroup batch ops,
+/// curve25519-dalek scalar mul, Kyber-1024 keygen, and the smol
+/// executor's recursive task graph all comfortably fit. If a real
+/// flow stage stack-overflows, that surfaces as a clear panic at a
+/// known location and we bump this back up.
+const WORKER_STACK_BYTES: usize = 1 * 1024 * 1024;
 
 /// Spawn the Manager worker thread.
 ///
@@ -456,13 +466,17 @@ async fn manager_task(
 
         // Drop the stream so the &mut borrow on `manager` is
         // released before we call `send_message`.
+        log::info!("bridge: manager_task — dropping receive stream to free &mut manager borrow");
         drop(stream);
 
         if let Some(send) = pending_send {
+            log::info!("bridge: manager_task — invoking handle_send");
             handle_send(&mut manager, send, &event_tx).await;
+            log::info!("bridge: manager_task — handle_send returned, re-opening stream");
         }
         // Loop back: re-open the stream and continue.
     }
+    log::info!("bridge: manager_task exiting (outer break)");
 }
 
 /// Process one item from `Manager::receive_messages`. Returns
@@ -575,11 +589,18 @@ async fn handle_send(
 ) {
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use futures::FutureExt;
     use presage::libsignal_service::content::ContentBody;
     use presage::libsignal_service::prelude::Uuid;
     use presage::libsignal_service::proto::DataMessage;
     use presage::libsignal_service::protocol::{Aci, ServiceId};
     use presage::store::ContentsStore;
+
+    log::info!(
+        "bridge/send: handle_send entered; recipient_raw={:?} body_len={}",
+        send.recipient,
+        send.body.len()
+    );
 
     // Recipient may be either a UUID/ACI (36 chars, dashed) or a
     // phone number in e164 form (`+<digits>`). UUIDs go straight through;
@@ -587,10 +608,13 @@ async fn handle_send(
     // populated by phone-sourced sync messages (and `presage` auto-
     // saves contacts on first received message).
     let recipient = if let Ok(uuid) = Uuid::parse_str(send.recipient.trim()) {
+        log::info!("bridge/send: recipient parsed as UUID={}", uuid);
         ServiceId::Aci(Aci::from_uuid_bytes(uuid.into_bytes()))
     } else if send.recipient.trim().starts_with('+') {
+        log::info!("bridge/send: recipient is e164; consulting contacts");
         let target = send.recipient.trim();
         let Ok(contacts_iter) = manager.store().contacts().await else {
+            log::warn!("bridge/send: contacts() returned Err");
             let _ = event_tx
                 .send(Event::SendError(
                     "couldn't read contacts store".to_string(),
@@ -598,10 +622,6 @@ async fn handle_send(
                 .await;
             return;
         };
-        // Find a contact whose phone_number matches the typed e164.
-        // `phonenumber::PhoneNumber` formats as e164 via the `Display`
-        // impl with `Mode::E164`, but its default Display is national —
-        // use `format()` with the explicit mode for a clean compare.
         use presage::libsignal_service::prelude::phonenumber::Mode;
         let mut matched: Option<Uuid> = None;
         for contact_res in contacts_iter {
@@ -614,6 +634,7 @@ async fn handle_send(
             }
         }
         let Some(uuid) = matched else {
+            log::warn!("bridge/send: no contact matched e164={}", target);
             let _ = event_tx
                 .send(Event::SendError(format!(
                     "phone {} not in contacts (receive a message from them first, or use their ACI UUID)",
@@ -622,8 +643,10 @@ async fn handle_send(
                 .await;
             return;
         };
+        log::info!("bridge/send: e164 resolved -> uuid={}", uuid);
         ServiceId::Aci(Aci::from_uuid_bytes(uuid.into_bytes()))
     } else {
+        log::warn!("bridge/send: recipient parse failed: {:?}", send.recipient);
         let _ = event_tx
             .send(Event::SendError(format!(
                 "recipient must be ACI UUID or +e164 phone number; got {:?}",
@@ -644,15 +667,45 @@ async fn handle_send(
         ..Default::default()
     });
 
-    match manager
-        .send_message(recipient, content_body, timestamp)
-        .await
-    {
-        Ok(()) => {
+    log::info!(
+        "bridge/send: calling manager.send_message ts={} (this is the heavy path on first-send: prekey bundle fetch + PQXDH + double-ratchet init + PDDB write)",
+        timestamp
+    );
+
+    // catch_unwind so a panic inside libsignal/presage's send path
+    // doesn't kill manager_task. AssertUnwindSafe is needed because
+    // `&mut manager` is not UnwindSafe by default; we accept the risk
+    // — a panic mid-send may leave the Manager's session state
+    // inconsistent, but the alternative (manager_task dies, every
+    // subsequent send returns "manager task died") is worse. The
+    // surfaced panic message goes to the UI as a normal SendError.
+    let send_fut = std::panic::AssertUnwindSafe(
+        manager.send_message(recipient, content_body, timestamp),
+    );
+    let outcome = send_fut.catch_unwind().await;
+    log::info!("bridge/send: manager.send_message returned");
+
+    match outcome {
+        Ok(Ok(())) => {
+            log::info!("bridge/send: SendComplete ts={}", timestamp);
             let _ = event_tx.send(Event::SendComplete { timestamp }).await;
         }
-        Err(e) => {
+        Ok(Err(e)) => {
+            log::warn!("bridge/send: send_message Err: {}", e);
             let _ = event_tx.send(Event::SendError(format!("{e}"))).await;
+        }
+        Err(panic_payload) => {
+            let msg = if let Some(s) = panic_payload.downcast_ref::<&'static str>() {
+                (*s).to_string()
+            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic payload".to_string()
+            };
+            log::error!("bridge/send: PANIC inside manager.send_message: {}", msg);
+            let _ = event_tx
+                .send(Event::SendError(format!("panic in send: {msg}")))
+                .await;
         }
     }
 }
