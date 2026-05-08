@@ -40,10 +40,13 @@ use std::sync::{Arc, Mutex};
 use async_channel::{Receiver, Sender};
 use blitstr2::GlyphStyle;
 use num_traits::*;
+use uuid::Uuid;
 use ux_api::minigfx::*;
 use ux_api::service::api::Gid;
 use xous::{CID, Message};
 use xous_signal_bridge::{Cmd, Event};
+
+use crate::dialogue::{DialogueSummary, SendStatus, ThreadMessage, rebuild_summaries};
 
 const SERVER_NAME_XAS: &str = "_xas_";
 
@@ -89,21 +92,6 @@ enum MenuItem {
     Quit,
 }
 
-#[derive(Clone, Debug)]
-struct InboxMessage {
-    /// Raw sender ACI/UUID — the unique identifier for thread grouping.
-    sender: String,
-    /// Pretty label resolved at receive time (from the contacts store).
-    /// Falls back to the UUID when no contact entry exists.
-    sender_label: String,
-    body: String,
-    /// Server-side timestamp (millis since epoch). Captured for
-    /// future ordering / dedup; not rendered in the MVP inbox
-    /// (which shows order-of-arrival via deque position).
-    #[allow(dead_code)]
-    timestamp: u64,
-}
-
 struct App {
     gam: gam::Gam,
     content: Gid,
@@ -113,8 +101,20 @@ struct App {
     /// Pre-link → false; post-Link `Cmd::LinkDevice` success → true.
     /// Drives which menu items are visible + selectable.
     linked: bool,
-    /// Recent messages, newest first. Capped at `INBOX_CAPACITY`.
-    messages: VecDeque<InboxMessage>,
+    /// All inbound + outbound messages held in RAM for the lifetime
+    /// of this app run. Capped at `INBOX_CAPACITY` (oldest dropped
+    /// when full). Order is insertion-order (push_back); render
+    /// passes filter / sort / aggregate as needed.
+    messages: Vec<ThreadMessage>,
+    /// Aggregated per-conversation view derived from `messages`.
+    /// Re-built on every message arrival. Phase-A scaffolding for
+    /// the upcoming Screen::Home renderer.
+    #[allow(dead_code)]
+    dialogues: Vec<DialogueSummary>,
+    /// Index of the focused row when Screen::Home is active.
+    /// Phase-A scaffolding; not yet read by any renderer.
+    #[allow(dead_code)]
+    home_focus: usize,
     /// Most-recent inbound sender (used as default recipient when
     /// the user picks Send before any contact is known).
     last_sender: Option<String>,
@@ -274,9 +274,10 @@ impl App {
         write!(out, "Inbox ({})\n\n", self.messages.len())
             .map_err(|e| format!("inbox hdr: {}", e))?;
         // Render newest first; truncate sender + body so the screen
-        // doesn't overflow.
-        for msg in self.messages.iter() {
-            let sender_short = truncate(&msg.sender_label, 22);
+        // doesn't overflow. `messages` is push-back-ordered so we
+        // iterate in reverse to surface the latest at the top.
+        for msg in self.messages.iter().rev() {
+            let sender_short = truncate(&msg.author_label, 22);
             let body_short = truncate(&msg.body, 80);
             write!(out, "from: {}\n  {}\n\n", sender_short, body_short)
                 .map_err(|e| format!("inbox msg: {}", e))?;
@@ -370,7 +371,9 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
         screen: Screen::Menu,
         selected: MenuItem::Link,
         linked: false,
-        messages: VecDeque::with_capacity(INBOX_CAPACITY),
+        messages: Vec::with_capacity(INBOX_CAPACITY),
+        dialogues: Vec::new(),
+        home_focus: 0,
         last_sender: None,
         last_status: String::new(),
         quit_requested: false,
@@ -539,20 +542,37 @@ fn handle_worker_event(
             // contacts store typically has both name and phone for
             // peers who've been synced from the linked phone; only
             // first-sight peers fall through to UUID.
-            let sender_label = sender_name
+            let author_label = sender_name
                 .clone()
                 .or_else(|| sender_phone.clone())
                 .unwrap_or_else(|| sender.clone());
             log::info!(
                 "xas/gam_app: inbound message from {} ({} bytes)",
-                sender_label,
+                author_label,
                 body.len()
             );
-            app.last_sender = Some(sender.clone());
+            // ACI from the worker is a canonical UUID string.
+            // Fall back to the nil UUID if parse fails (defensive
+            // — practically shouldn't happen since the worker only
+            // surfaces senders it recognized).
+            let uuid = Uuid::parse_str(&sender).unwrap_or_else(|_| {
+                log::warn!("xas/gam_app: sender {:?} doesn't parse as UUID; using nil", sender);
+                Uuid::nil()
+            });
+            app.last_sender = Some(sender);
+            // Drop oldest first if we've hit the cap, then append.
             if app.messages.len() >= INBOX_CAPACITY {
-                app.messages.pop_back();
+                app.messages.remove(0);
             }
-            app.messages.push_front(InboxMessage { sender, sender_label, body, timestamp });
+            app.messages.push(ThreadMessage {
+                uuid,
+                author_label,
+                body,
+                timestamp,
+                outgoing: false,
+                status: SendStatus::Sent,
+            });
+            app.dialogues = rebuild_summaries(&app.messages);
         }
         Event::ReceiveStarted => {
             log::info!("xas/gam_app: receive loop established");
