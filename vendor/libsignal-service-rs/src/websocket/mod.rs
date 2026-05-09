@@ -193,6 +193,27 @@ impl SignalWebSocketProcess {
                         self.outgoing_keep_alive_set.take(&id)
                     {
                         let status_code = response.status();
+                        // Diagnostic: explicit log when a KA response
+                        // is correlated. The presence of this line in
+                        // UART (matched against the corresponding
+                        // "ka frame queued for writer req_id=N" line
+                        // by req_id) tells us the KA roundtrip
+                        // completed end-to-end. The absence of this
+                        // line — despite a queued KA — is what
+                        // builds outgoing_keep_alive_set up over time
+                        // and ultimately triggers the close branch
+                        // below. Matched with the writer's "send ok"
+                        // and the reader's "recv frame" lines, this
+                        // pinpoints whether responses fail to leave
+                        // the server, fail in transit, or fail
+                        // upstream of this correlation step.
+                        let outstanding_remaining = self.outgoing_keep_alive_set.len();
+                        tracing::info!(
+                            req_id = id,
+                            status_code,
+                            outstanding_remaining,
+                            "ka response received",
+                        );
                         if status_code != 200 {
                             tracing::warn!(
                                 status_code,

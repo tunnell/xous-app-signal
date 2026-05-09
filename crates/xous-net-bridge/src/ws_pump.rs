@@ -136,6 +136,13 @@ fn reader_loop(
     ws: Arc<Mutex<WebSocket<RustlsStream>>>,
     tx: async_channel::Sender<Result<WsFrame, HttpError>>,
 ) {
+    // Diagnostic: count + log every frame the reader gets off the wire.
+    // Mirrors the writer-side instrumentation. The combined trace tells
+    // us whether KA responses are arriving from the server (matched by
+    // the timing of writer "send ok ka" lines and reader "recv frame
+    // kind=Binary" lines, plus the libsignal "ka response received"
+    // log added in this same image).
+    let mut frame_count: u64 = 0;
     loop {
         // Pull one message from the WS. read() blocks on the underlying
         // TCP, which has a short SO_RCVTIMEO set in `tls_connect`.
@@ -147,27 +154,55 @@ fn reader_loop(
         let msg = {
             let mut guard = match ws.lock() {
                 Ok(g) => g,
-                Err(_) => break, // poisoned — drop everything
+                Err(_) => {
+                    tracing::warn!(frame_count, "ws reader: mutex poisoned, exiting");
+                    break;
+                }
             };
             guard.read()
         };
 
-        let frame = match msg {
-            Ok(Message::Binary(b)) => Ok(WsFrame::Binary(b)),
-            Ok(Message::Text(s)) => Ok(WsFrame::Text(s)),
-            Ok(Message::Ping(b)) => Ok(WsFrame::Ping(b)),
-            Ok(Message::Pong(b)) => Ok(WsFrame::Pong(b)),
+        let (kind, payload_len, frame) = match msg {
+            Ok(Message::Binary(b)) => {
+                let len = b.len();
+                ("Binary", len, Ok(WsFrame::Binary(b)))
+            }
+            Ok(Message::Text(s)) => {
+                let len = s.len();
+                ("Text", len, Ok(WsFrame::Text(s)))
+            }
+            Ok(Message::Ping(b)) => {
+                let len = b.len();
+                ("Ping", len, Ok(WsFrame::Ping(b)))
+            }
+            Ok(Message::Pong(b)) => {
+                let len = b.len();
+                ("Pong", len, Ok(WsFrame::Pong(b)))
+            }
             Ok(Message::Close(frame)) => {
                 let (code, reason) = match frame {
                     Some(CloseFrame { code, reason }) => (code.into(), reason.into_owned()),
                     None => (1005, String::new()),
                 };
+                frame_count += 1;
+                tracing::info!(
+                    frame_count,
+                    kind = "Close",
+                    code,
+                    "ws reader: recv frame, exiting",
+                );
                 let _ = tx.send_blocking(Ok(WsFrame::Close { code, reason }));
                 break;
             }
             Ok(Message::Frame(_)) => continue, // raw control frame; ignore
-            Err(tungstenite::Error::ConnectionClosed) => break,
-            Err(tungstenite::Error::AlreadyClosed) => break,
+            Err(tungstenite::Error::ConnectionClosed) => {
+                tracing::info!(frame_count, "ws reader: ConnectionClosed, exiting");
+                break;
+            }
+            Err(tungstenite::Error::AlreadyClosed) => {
+                tracing::info!(frame_count, "ws reader: AlreadyClosed, exiting");
+                break;
+            }
             // Read timed out with nothing to read. Yield and re-loop —
             // see the keepalive comment above.
             Err(tungstenite::Error::Io(e))
@@ -182,14 +217,24 @@ fn reader_loop(
                 std::thread::sleep(std::time::Duration::from_millis(50));
                 continue;
             }
-            Err(e) => Err(HttpError::Network(format!("ws read: {e}"))),
+            Err(e) => {
+                let s = format!("{e}");
+                tracing::warn!(frame_count, error = %s, "ws reader: read err, forwarding");
+                ("Err", 0, Err(HttpError::Network(format!("ws read: {s}"))))
+            }
         };
+
+        // Successful (or err-as-frame) reception: bump and log.
+        frame_count += 1;
+        tracing::info!(frame_count, kind, payload_len, "ws reader: recv frame");
 
         if tx.send_blocking(frame).is_err() {
             // Receiver dropped; close the connection.
+            tracing::warn!(frame_count, "ws reader: tx send_blocking failed (receiver gone), exiting");
             break;
         }
     }
+    tracing::info!(frame_count, "ws reader: loop exited");
 }
 
 fn writer_loop(ws: Arc<Mutex<WebSocket<RustlsStream>>>, rx: async_channel::Receiver<WsFrame>) {
