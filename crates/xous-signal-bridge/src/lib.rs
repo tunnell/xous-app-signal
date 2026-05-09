@@ -355,16 +355,27 @@ async fn handle_link_device(
                     phone,
                 })
                 .await;
-            // Ask the linked phone to send a contacts sync so the
-            // ContentsStore gets populated with `(uuid, phone_number,
-            // name)` entries. Without this, sending to a phone number
-            // can't be resolved (presage's auto-save-on-receive sets
-            // `phone_number: None`). Best-effort — failure here just
-            // means e164 send-recipient resolution won't work until the
-            // phone manually re-syncs.
-            if let Err(e) = manager.request_contacts().await {
-                log::warn!("bridge/link: request_contacts failed: {}", e);
-            }
+            // Image-20: SKIP request_contacts on link.
+            //
+            // Previously: this called manager.request_contacts() to
+            // populate the ContentsStore with (uuid, phone_number,
+            // name) entries from the linked phone, so xas could send
+            // to e164 phone numbers. The call did multiple WS
+            // roundtrips (establish self-session, fetch own prekey
+            // bundle, send self-targeted contact-sync request) and
+            // BLOCKED the worker for 30-90s on rv32 — preventing
+            // Cmd::StartReceive from being processed in that window
+            // and racing the same Signal-server WS-rotation
+            // problem that's killing user sends.
+            //
+            // For now, dropping the call entirely. xas can already
+            // send to UUIDs (the working path), and the explicit
+            // F2 "Sync" button (currently a stub, see CHORES.md
+            // "UI Tier-2 #3 F2 Sync") will be the user-triggered
+            // way to populate contacts on demand. Phone-number
+            // recipient resolution stays broken until that lands —
+            // an acceptable trade for unblocking send entirely.
+            log::info!("bridge/link: skipping request_contacts (deferred to user-triggered Sync; image-20 chore)");
             Ok(manager)
         }
         Err(e) => {
@@ -796,8 +807,22 @@ async fn handle_send(
     // The substring "websocket closing" appears in both surfaced
     // shapes ("WebSocket closing while sending request" and "...
     // while waiting for a response").
-    const SEND_MAX_ATTEMPTS: u32 = 3;
-    const SEND_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+    // Image-20: bumped from 3 to 6 attempts with exponential backoff.
+    // Image-19 UART showed Signal's edge servers closing WSes very
+    // aggressively (multiple `code=1001 "Connection Idle Timeout"`
+    // events within seconds of each other on rv32). 3 retries × 2s
+    // wasn't enough to land on a WS that survived a full
+    // request-response. 6 retries with exponential gaps span ~62s
+    // total, covering ~10 server-rotation cycles statistically.
+    const SEND_MAX_ATTEMPTS: u32 = 6;
+
+    /// Sleep before attempt N (zero-indexed in the call below):
+    /// attempt 2 -> 2s, attempt 3 -> 4s, 4 -> 8s, 5 -> 16s, 6 -> 32s.
+    /// Total worst-case wait between user-press and giving up: 62s.
+    fn backoff_for(next_attempt: u32) -> std::time::Duration {
+        let secs = 1_u64 << (next_attempt as u64).min(5);
+        std::time::Duration::from_secs(secs)
+    }
 
     let mut last_err: Option<String> = None;
     for attempt in 1..=SEND_MAX_ATTEMPTS {
@@ -830,11 +855,12 @@ async fn handle_send(
                 log::warn!("bridge/send: attempt {} Err: {}", attempt, msg);
                 let retryable = msg.to_lowercase().contains("websocket closing");
                 if retryable && attempt < SEND_MAX_ATTEMPTS {
+                    let delay = backoff_for(attempt);
                     log::info!(
-                        "bridge/send: WsClosing-shaped error; sleeping {:?} then retrying",
-                        SEND_RETRY_DELAY,
+                        "bridge/send: WsClosing-shaped error; sleeping {:?} then retrying (attempt {}->{} of {})",
+                        delay, attempt, attempt + 1, SEND_MAX_ATTEMPTS,
                     );
-                    futures_timer::Delay::new(SEND_RETRY_DELAY).await;
+                    futures_timer::Delay::new(delay).await;
                     last_err = Some(msg);
                     continue;
                 }
