@@ -20,6 +20,20 @@ Xous-specific glue.
 
 ---
 
+## Why a Signal client on Precursor
+
+Smartphones are the primary target for surveillance of journalists and human-rights workers. The [Pegasus Project](https://forbiddenstories.org/about-the-pegasus-project/) — coordinated by Forbidden Stories with forensic support from [Amnesty International's Security Lab](https://securitylab.amnesty.org/case-study-the-pegasus-project/) — documented commercial spyware on devices belonging to journalists, activists, and dissidents in [over 50 countries](https://www.eff.org/deeplinks/2026/04/digital-hopes-real-power-how-arab-spring-fueled-global-surveillance-boom). Zero-click exploits like [BLASTPASS](https://securitylab.amnesty.org/latest/2023/12/india-damning-new-forensic-investigation-reveals-repeated-use-of-pegasus-spyware-to-target-high-profile-journalists/) install spyware without the target tapping anything. End-to-end encryption in apps like Signal is necessary but insufficient when the host operating system itself is compromised — once Pegasus is on the phone, [it can read messages and turn on the microphone and camera regardless of which app you used](https://forbiddenstories.org/about-the-pegasus-project/).
+
+[Precursor](https://www.crowdsupply.com/sutajio-kosagi/precursor) is an open-hardware mobile device built around the principle of [evidence-based trust](https://www.bunniestudios.com/blog/2022/precursor-from-boot-to-root/): every layer from the FPGA bitstream up through the [Xous microkernel](https://betrusted.io/) is inspectable and reproducible, and Precursor [generates and seals its own keys](https://www.bunniestudios.com/blog/?p=5979) without relying on factory secrets. Until now most Precursor applications have focused on credential storage (password managers, FIDO/U2F, cryptocurrency wallets). This project fills the missing piece — a hardened **communications** device — by porting Signal's secondary-device protocol to Xous so that messages a journalist or activist sends from their pocket are protected by hardware they can audit themselves.
+
+**Short-term goal**: a hardened communications device for journalists and activists who already have access to Precursor.
+
+**Long-term goal**: a cheaper successor (the [Betrusted](https://betrusted.io/) ASIC currently in development) that puts this same threat model in reach of users in the Global South, where surveillance pressure is highest and where activists and journalists [most often lack resources to recover from compromise](https://www.amnesty.org/en/latest/news/2024/12/serbia-authorities-using-spyware-and-cellebrite-forensic-extraction-tools-to-hack-journalists-and-activists/).
+
+**Scope tradeoff**: Precursor's hardware constraints (memory budget, no GPU, single-screen monochrome display) mean this client implements a deliberately minimal Signal feature set: secondary-device link, send/receive of text messages. Group calls, video, stickers, message-history transfer, and other features that depend on richer hardware or large state are out of scope. The goal is "your most sensitive conversations on hardware you can audit," not "feature parity with the mobile app."
+
+---
+
 ## Status
 
 | Capability                                | Hosted (Linux X11)     | Precursor hardware                       |
