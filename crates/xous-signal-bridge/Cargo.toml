@@ -29,6 +29,12 @@ futures-lite = { workspace = true }
 # terms.
 futures = { version = "0.3", default-features = false, features = ["std"] }
 
+# Async-runtime-agnostic Delay used by `handle_send`'s retry-on-WsClosing
+# loop. Same crate libsignal-service-rs uses internally for its
+# keepalive timer; already in the dep-graph transitively, declared here
+# for explicitness.
+futures-timer = "3"
+
 # The provisioning URL is a `url::Url` (presage's API uses it
 # directly). Held explicitly so the worker doesn't depend on
 # transitive resolution.

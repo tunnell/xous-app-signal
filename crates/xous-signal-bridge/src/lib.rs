@@ -686,54 +686,106 @@ async fn handle_send(
     });
 
     log::info!(
-        "bridge/send: calling manager.send_message ts={} (this is the heavy path on first-send: prekey bundle fetch + PQXDH + double-ratchet init + PDDB write)",
+        "bridge/send: calling manager.send_message ts={} (heavy path on first-send: prekey bundle fetch + PQXDH + double-ratchet init + PDDB write)",
         timestamp
     );
 
-    // catch_unwind so a panic inside libsignal/presage's send path
-    // doesn't kill manager_task. AssertUnwindSafe is needed because
-    // `&mut manager` is not UnwindSafe by default; we accept the risk
-    // — a panic mid-send may leave the Manager's session state
-    // inconsistent, but the alternative (manager_task dies, every
-    // subsequent send returns "manager task died") is worse. The
-    // surfaced panic message goes to the UI as a normal SendError.
-    let send_fut = std::panic::AssertUnwindSafe(
-        manager.send_message(recipient, content_body, timestamp),
-    );
-    let outcome = send_fut.catch_unwind().await;
-    log::info!("bridge/send: manager.send_message returned");
+    // Retry-on-WsClosing: on rv32 the auth WS dies after ~60-90s
+    // when libsignal-service-rs's keepalive responses don't make it
+    // back from the server. libsignal-service spawns a fresh WS
+    // automatically (we see `ka_count=1` for replacements in UART)
+    // but the in-flight send is dropped. A brief sleep + retry lets
+    // the next attempt land on the new WS instead of bubbling
+    // "WebSocket closing" up to the user.
+    //
+    // Detection is by string match because the error type passes
+    // through several wrapping layers (presage::Error ->
+    // ServiceError -> SignalProtocolError) before reaching us.
+    // The substring "websocket closing" appears in both surfaced
+    // shapes ("WebSocket closing while sending request" and "...
+    // while waiting for a response").
+    const SEND_MAX_ATTEMPTS: u32 = 3;
+    const SEND_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
-    match outcome {
-        Ok(Ok(())) => {
-            log::info!("bridge/send: SendComplete ts={}", timestamp);
-            let _ = event_tx.send(Event::SendComplete { timestamp }).await;
-        }
-        Ok(Err(e)) => {
-            log::warn!("bridge/send: send_message Err: {}", e);
-            let _ = event_tx
-                .send(Event::SendError {
-                    reason: format!("{e}"),
-                    timestamp: Some(timestamp),
-                })
-                .await;
-        }
-        Err(panic_payload) => {
-            let msg = if let Some(s) = panic_payload.downcast_ref::<&'static str>() {
-                (*s).to_string()
-            } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "unknown panic payload".to_string()
-            };
-            log::error!("bridge/send: PANIC inside manager.send_message: {}", msg);
-            let _ = event_tx
-                .send(Event::SendError {
-                    reason: format!("panic in send: {msg}"),
-                    timestamp: Some(timestamp),
-                })
-                .await;
+    let mut last_err: Option<String> = None;
+    for attempt in 1..=SEND_MAX_ATTEMPTS {
+        log::info!(
+            "bridge/send: attempt {}/{} ts={}",
+            attempt, SEND_MAX_ATTEMPTS, timestamp,
+        );
+
+        // catch_unwind so a panic inside libsignal/presage's send path
+        // doesn't kill manager_task. AssertUnwindSafe is needed because
+        // `&mut manager` is not UnwindSafe by default; we accept the risk
+        // — a panic mid-send may leave the Manager's session state
+        // inconsistent, but the alternative (manager_task dies, every
+        // subsequent send returns "manager task died") is worse. The
+        // surfaced panic message goes to the UI as a normal SendError.
+        let send_fut = std::panic::AssertUnwindSafe(
+            manager.send_message(recipient.clone(), content_body.clone(), timestamp),
+        );
+        let outcome = send_fut.catch_unwind().await;
+        log::info!("bridge/send: attempt {} returned", attempt);
+
+        match outcome {
+            Ok(Ok(())) => {
+                log::info!("bridge/send: SendComplete ts={} (attempt {})", timestamp, attempt);
+                let _ = event_tx.send(Event::SendComplete { timestamp }).await;
+                return;
+            }
+            Ok(Err(e)) => {
+                let msg = format!("{e}");
+                log::warn!("bridge/send: attempt {} Err: {}", attempt, msg);
+                let retryable = msg.to_lowercase().contains("websocket closing");
+                if retryable && attempt < SEND_MAX_ATTEMPTS {
+                    log::info!(
+                        "bridge/send: WsClosing-shaped error; sleeping {:?} then retrying",
+                        SEND_RETRY_DELAY,
+                    );
+                    futures_timer::Delay::new(SEND_RETRY_DELAY).await;
+                    last_err = Some(msg);
+                    continue;
+                }
+                let _ = event_tx
+                    .send(Event::SendError {
+                        reason: msg,
+                        timestamp: Some(timestamp),
+                    })
+                    .await;
+                return;
+            }
+            Err(panic_payload) => {
+                let msg = if let Some(s) = panic_payload.downcast_ref::<&'static str>() {
+                    (*s).to_string()
+                } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic payload".to_string()
+                };
+                log::error!(
+                    "bridge/send: PANIC inside manager.send_message attempt {}: {}",
+                    attempt, msg,
+                );
+                let _ = event_tx
+                    .send(Event::SendError {
+                        reason: format!("panic in send: {msg}"),
+                        timestamp: Some(timestamp),
+                    })
+                    .await;
+                return;
+            }
         }
     }
+
+    // Loop ran out of attempts without an early return.
+    let reason = last_err.unwrap_or_else(|| "send retry loop exhausted".to_string());
+    log::warn!("bridge/send: all {} attempts failed; last={}", SEND_MAX_ATTEMPTS, reason);
+    let _ = event_tx
+        .send(Event::SendError {
+            reason: format!("retried {} times: {}", SEND_MAX_ATTEMPTS, reason),
+            timestamp: Some(timestamp),
+        })
+        .await;
 }
 
 /// Run `Manager::load_registered` and stringify the result. On a

@@ -193,7 +193,21 @@ fn reader_loop(
 }
 
 fn writer_loop(ws: Arc<Mutex<WebSocket<RustlsStream>>>, rx: async_channel::Receiver<WsFrame>) {
+    // Diagnostic: count frames seen + sent so we can correlate with
+    // the keepalive-side instrumentation in libsignal-service-rs and
+    // tell whether queued KA frames actually leave the host.
+    let mut frame_count: u64 = 0;
     while let Ok(frame) = rx.recv_blocking() {
+        frame_count += 1;
+        let (kind, payload_len) = match &frame {
+            WsFrame::Binary(b) => ("Binary", b.len()),
+            WsFrame::Text(s) => ("Text", s.len()),
+            WsFrame::Ping(b) => ("Ping", b.len()),
+            WsFrame::Pong(b) => ("Pong", b.len()),
+            WsFrame::Close { .. } => ("Close", 0),
+        };
+        tracing::info!(frame_count, kind, payload_len, "ws writer: dequeued frame");
+
         let msg = match frame {
             WsFrame::Binary(b) => Message::Binary(b),
             WsFrame::Text(s) => Message::Text(s),
@@ -208,14 +222,23 @@ fn writer_loop(ws: Arc<Mutex<WebSocket<RustlsStream>>>, rx: async_channel::Recei
         let send_result = {
             let mut guard = match ws.lock() {
                 Ok(g) => g,
-                Err(_) => break,
+                Err(_) => {
+                    tracing::warn!(frame_count, "ws writer: mutex poisoned, exiting");
+                    break;
+                }
             };
             guard.send(msg)
         };
 
-        if let Err(e) = send_result {
-            tracing::debug!("ws send failed: {e}");
-            break;
+        match send_result {
+            Ok(()) => {
+                tracing::info!(frame_count, kind, payload_len, "ws writer: send ok");
+            }
+            Err(e) => {
+                tracing::warn!(frame_count, kind, ?e, "ws writer: send failed, exiting");
+                break;
+            }
         }
     }
+    tracing::info!(frame_count, "ws writer: loop exited");
 }
