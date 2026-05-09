@@ -419,7 +419,7 @@ async fn handle_link_device(
                     phone,
                 })
                 .await;
-            // Image-20: SKIP request_contacts on link.
+            // SKIP request_contacts on link.
             //
             // Previously: this called manager.request_contacts() to
             // populate the ContentsStore with (uuid, phone_number,
@@ -429,17 +429,17 @@ async fn handle_link_device(
             // bundle, send self-targeted contact-sync request) and
             // BLOCKED the worker for 30-90s on rv32 — preventing
             // Cmd::StartReceive from being processed in that window
-            // and racing the same Signal-server WS-rotation
-            // problem that's killing user sends.
+            // and racing the Signal-server WS-rotation problem that
+            // intermittently kills user sends.
             //
             // For now, dropping the call entirely. xas can already
             // send to UUIDs (the working path), and the explicit
-            // F2 "Sync" button (currently a stub, see CHORES.md
-            // "UI Tier-2 #3 F2 Sync") will be the user-triggered
-            // way to populate contacts on demand. Phone-number
-            // recipient resolution stays broken until that lands —
-            // an acceptable trade for unblocking send entirely.
-            log::info!("bridge/link: skipping request_contacts (deferred to user-triggered Sync; image-20 chore)");
+            // F2 "Sync" UI item (currently a stub) is the
+            // user-triggered way to populate contacts on demand.
+            // Phone-number recipient resolution stays broken until
+            // that lands — an acceptable trade for unblocking
+            // send entirely.
+            log::info!("bridge/link: skipping request_contacts (deferred to user-triggered Sync)");
             Ok(manager)
         }
         Err(e) => {
@@ -871,13 +871,14 @@ async fn handle_send(
     // The substring "websocket closing" appears in both surfaced
     // shapes ("WebSocket closing while sending request" and "...
     // while waiting for a response").
-    // Image-20: bumped from 3 to 6 attempts with exponential backoff.
-    // Image-19 UART showed Signal's edge servers closing WSes very
-    // aggressively (multiple `code=1001 "Connection Idle Timeout"`
-    // events within seconds of each other on rv32). 3 retries × 2s
-    // wasn't enough to land on a WS that survived a full
+    // Signal's edge servers close WSes aggressively on rv32
+    // (multiple `code=1001 "Connection Idle Timeout"` events
+    // within seconds of each other). A 3-retry × 2s window wasn't
+    // enough to reliably land on a WS that survived a full
     // request-response. 6 retries with exponential gaps span ~62s
     // total, covering ~10 server-rotation cycles statistically.
+    // Until the transport is reworked to open a fresh WS per send,
+    // this aggressive retry loop is the workaround.
     const SEND_MAX_ATTEMPTS: u32 = 6;
 
     /// Sleep before attempt N (zero-indexed in the call below):

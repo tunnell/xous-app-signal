@@ -283,25 +283,25 @@ impl SignalWebSocketProcess {
                     ka_delay = futures_timer::Delay::new(push_service::KEEPALIVE_TIMEOUT_SECONDS);
                     use prost::Message;
                     // Tolerate N=3 outstanding keepalives before
-                    // closing. Image-18 confirmed: KA roundtrips
-                    // succeed reliably on rv32 (we see "ka response
-                    // received status_code=200"), but libsignal's
-                    // outgoing_keep_alive_set check is racy. The
+                    // closing. KA roundtrips succeed reliably on
+                    // rv32 ("ka response received status_code=200"
+                    // appears for every queued KA), but the
+                    // outgoing_keep_alive_set check is racy: the
                     // futures::select! arm scheduling can pick the
                     // KA-timer arm before draining a queued
-                    // ws_incoming response — outstanding looks like
-                    // 1 momentarily even though the response was
-                    // milliseconds away. Closing on the very first
-                    // unacked keepalive collapses healthy WSes on
-                    // any platform with non-zero scheduling jitter
-                    // (rv32 in particular). Tolerating up to 3
-                    // outstanding gives the response a couple of
+                    // ws_incoming response, so outstanding looks
+                    // like 1 momentarily even though the response
+                    // is milliseconds away. Closing on the very
+                    // first unacked keepalive collapses healthy
+                    // WSes on any platform with non-zero scheduling
+                    // jitter (rv32 in particular). Tolerating up to
+                    // 3 outstanding gives the response a couple of
                     // KA cycles' worth of grace before we conclude
                     // the WS is genuinely dead. Real TCP failures
                     // surface independently as
                     // ServiceError::HttpTransport via the io::Error
                     // path, so this only relaxes the application-
-                    // level keepalive-watchdog, not the actual
+                    // level keepalive watchdog, not the actual
                     // dead-connection detection.
                     const MAX_OUTSTANDING_KEEPALIVES: usize = 3;
                     if self.outgoing_keep_alive_set.len() >= MAX_OUTSTANDING_KEEPALIVES {
