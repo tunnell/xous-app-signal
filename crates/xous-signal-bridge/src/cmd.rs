@@ -72,11 +72,31 @@ pub enum Cmd {
     /// receiving; ...", timestamp: None }`.
     SendMessage { recipient: String, body: String, timestamp: u64 },
 
+    /// Read account-identity info from the loaded Manager and
+    /// reply via `Event::AccountInfo`. UI uses this to populate
+    /// the Profile screen on a cold start where the device was
+    /// already linked from a prior session — `Event::LinkComplete`
+    /// only fires on a fresh link or when load_registered succeeds
+    /// during the worker's startup retry budget (which can expire
+    /// before PDDB unlocks). Re-tries `load_registered` if the
+    /// Manager isn't loaded yet.
+    GetAccountInfo,
+
     /// Tell the worker to drain its event channel and exit. The main
     /// thread sends this before joining the worker handle so we don't
     /// rely on dropping the cmd channel sender (which works but is
     /// implicit).
     Shutdown,
+}
+
+/// Identity fields read from `Manager::registration_data()`.
+/// Mirrors the shape of `Event::LinkComplete` but lives in its
+/// own struct since we now also surface it via `Event::AccountInfo`.
+#[derive(Debug, Clone)]
+pub struct AccountInfoData {
+    pub device_name: String,
+    pub aci: String,
+    pub phone: String,
 }
 
 /// Events sent from the worker back to the app (main thread).
@@ -114,6 +134,13 @@ pub enum Event {
     /// rejecting the link request. String-typed because the IPC
     /// boundary forces stringification (same shape as `Whoami`).
     LinkError(String),
+
+    /// Reply to `Cmd::GetAccountInfo`. Carries the same fields as
+    /// `LinkComplete` but fires on demand rather than tied to the
+    /// link/load lifecycle. `Err(reason)` when the manager isn't
+    /// loaded (e.g. PDDB still locked or the device was never
+    /// linked).
+    AccountInfo(Result<AccountInfoData, String>),
 
     /// Confirms the receive loop is established. Emitted
     /// after `Manager::receive_messages` has returned a stream and

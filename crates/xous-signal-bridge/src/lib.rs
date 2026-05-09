@@ -123,6 +123,14 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
         // `None` means we haven't linked (or failed to).
         let mut linked: Option<Manager<PddbStore, Registered>> = None;
 
+        // Cached identity fields. Populated whenever the bridge sees
+        // a successful Manager (load_registered or link_secondary_device);
+        // served back via Cmd::GetAccountInfo for the UI Profile screen
+        // on cold-start where Event::LinkComplete may have fired before
+        // the user navigated to Profile (or never fired because PDDB
+        // wasn't unlocked within the load_registered retry budget).
+        let mut cached_account_info: Option<crate::cmd::AccountInfoData> = None;
+
         // Auto-load existing registration so the user doesn't re-link
         // on every boot. PDDB may not be mounted at worker spawn time
         // (mount fires lazily on first IPC, racing with us); retry on
@@ -141,6 +149,11 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                         "bridge: load_registered OK — device={} aci={} phone={}",
                         device_name, aci, phone
                     );
+                    cached_account_info = Some(crate::cmd::AccountInfoData {
+                        device_name: device_name.clone(),
+                        aci: aci.clone(),
+                        phone: phone.clone(),
+                    });
                     let _ = event_tx
                         .send(Event::LinkComplete { device_name, aci, phone })
                         .await;
@@ -197,6 +210,15 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                             // We already sent Event::LinkComplete from
                             // inside handle_link_device. Retain the
                             // Manager so subsequent Cmds can use it.
+                            // Cache the account info too so
+                            // Cmd::GetAccountInfo can serve it after
+                            // the manager is moved into manager_task.
+                            let data = manager.registration_data();
+                            cached_account_info = Some(crate::cmd::AccountInfoData {
+                                device_name: data.device_name.clone().unwrap_or_default(),
+                                aci: data.service_ids.aci.to_string(),
+                                phone: data.phone_number.to_string(),
+                            });
                             linked = Some(manager);
                         }
                         Err(()) => {
@@ -216,6 +238,48 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                     // ignored by the UI (it's no longer on a Link*
                     // screen).
                     tracing::debug!("LinkCancel received; in-flight link runs to completion");
+                }
+                Ok(Cmd::GetAccountInfo) => {
+                    log::info!("bridge: Cmd::GetAccountInfo received");
+                    // Try the cache first (fastest path: this is
+                    // populated after any successful load_registered
+                    // or link_secondary_device).
+                    let outcome = if let Some(info) = cached_account_info.as_ref() {
+                        log::info!("bridge: GetAccountInfo — serving from cache");
+                        Ok(info.clone())
+                    } else {
+                        // No cache. Try a fresh load_registered —
+                        // PDDB may have unlocked since the worker's
+                        // startup retry budget expired.
+                        log::info!("bridge: GetAccountInfo — cache miss, retrying load_registered");
+                        match Manager::load_registered(store.clone()).await {
+                            Ok(manager) => {
+                                let data = manager.registration_data();
+                                let info = crate::cmd::AccountInfoData {
+                                    device_name: data.device_name.clone().unwrap_or_default(),
+                                    aci: data.service_ids.aci.to_string(),
+                                    phone: data.phone_number.to_string(),
+                                };
+                                cached_account_info = Some(info.clone());
+                                // If we don't already have a manager
+                                // (e.g., load failed earlier), keep
+                                // this one — saves a re-load later.
+                                if linked.is_none() && send_to_manager.is_none() {
+                                    linked = Some(manager);
+                                }
+                                Ok(info)
+                            }
+                            Err(e) => {
+                                let msg = format!("{}", e);
+                                log::warn!("bridge: GetAccountInfo — load_registered err: {}", msg);
+                                Err(msg)
+                            }
+                        }
+                    };
+                    if event_tx.send(Event::AccountInfo(outcome)).await.is_err() {
+                        tracing::warn!("event channel dropped while sending AccountInfo");
+                        break;
+                    }
                 }
                 Ok(Cmd::StartReceive) => {
                     log::info!("bridge: Cmd::StartReceive received");

@@ -101,6 +101,28 @@ PR at <https://github.com/tunnell/xous-app-signal>.
   networks, repeat the `wlan off / wlan on / ssid scan / wlan
   status` dance and restart xas.
 
+### "My SSID doesn't show up in the scan."
+- **Precursor only supports 2.4 GHz.** The on-board WF200 radio
+  is 802.11 b/g/n single-band — 5 GHz networks (and most modern
+  mesh systems' "fast" SSID) won't appear in `ssid scan` output
+  no matter what you do. If your home AP only broadcasts on
+  5 GHz, or splits SSIDs by band and you're trying to join the
+  5 GHz one, the scan will return nothing useful.
+- Two practical workarounds:
+  - **Phone hotspot in 2.4 GHz mode.** Most modern phones
+    default to 5 GHz now; you usually have to dig into the
+    hotspot settings to force 2.4 GHz (or "compatibility mode").
+    Easiest portable fix.
+  - **A small router that emits 2.4 GHz reliably.** The
+    [Nitrokey NW750 NitroWall](https://shop.nitrokey.com/shop/nw750-nitrowall-nw750-590)
+    is a known-good option with sane defaults; it's a hardened
+    OpenWrt box that gives you a 2.4 GHz SSID Precursor can
+    join. (Not a paid promotion — just one device that's been
+    verified to work.)
+- After joining, sanity-check with `wlan status` (must show
+  `Connected`) and `net ping 1.1.1.1` (must round-trip) before
+  opening xas.
+
 ### "DNS fails for chat.signal.org."
 - xas includes a CNAME-chain fix for the Xous resolver
   (`xous-core/services/net/src/connection_manager.rs`). If you're

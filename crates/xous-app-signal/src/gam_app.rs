@@ -94,11 +94,9 @@ enum LinkedKind {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum MenuItem {
-    // Pre-link items
     Link,
-    // Always
     About,
-    Quit,
+    Help,
 }
 
 /// Items shown on `Screen::Settings`. Reachable via F4 (or Esc) from
@@ -109,7 +107,6 @@ enum SettingsItem {
     Help,
     About,
     Logout,
-    Quit,
 }
 
 struct App {
@@ -140,7 +137,6 @@ struct App {
     /// One-line text rendered on transient screens (Linked banner,
     /// optional SendError surface). Cleared on transition to Home.
     last_status: String,
-    quit_requested: bool,
     /// True between Cmd::LinkDevice send and Event::Link{Complete,Error}.
     /// While set, handle_worker_event opens the QR modal on LinkUrl
     /// and transitions on LinkComplete/LinkError. Cleared on
@@ -160,13 +156,13 @@ struct App {
 impl App {
     fn menu_items(&self) -> [Option<MenuItem>; 3] {
         if self.linked {
-            // Post-link Menu is opened from Home via the Menu key.
-            // Just two utility actions; the actual conversational
-            // surface lives in Home + Thread.
-            [Some(MenuItem::About), Some(MenuItem::Quit), None]
+            // Post-link Menu is reachable from Home (via the Menu key)
+            // for the few utility actions that don't have a dedicated
+            // F-key. Settings (F4) is the main post-link surface.
+            [Some(MenuItem::About), Some(MenuItem::Help), None]
         } else {
             // Pre-link Menu IS the landing screen.
-            [Some(MenuItem::Link), Some(MenuItem::About), Some(MenuItem::Quit)]
+            [Some(MenuItem::Link), Some(MenuItem::About), Some(MenuItem::Help)]
         }
     }
 
@@ -230,13 +226,34 @@ impl App {
                  Author:  @tunnell\n\n\
                  github.com/tunnell/\n\
                   xous-app-signal\n\n\
+                 Security:\n\
+                  - End-to-end encrypted\n\
+                    via the Signal Protocol\n\
+                    (same Double Ratchet +\n\
+                    PQXDH used by the\n\
+                    official Signal app).\n\
+                  - Network connection to\n\
+                    chat.signal.org is\n\
+                    verified against\n\
+                    Signal's own pinned\n\
+                    Certificate Authority\n\
+                    (no public CA bundle\n\
+                    is trusted).\n\
+                  - Hardware-rooted on\n\
+                    Precursor: every layer\n\
+                    is inspectable; keys\n\
+                    are sealed on-device.\n\n\
                  Built on:\n\
                   - presage v0.8.0-dev\n\
                   - libsignal-service-rs\n\
                   - libsignal v0.91.0\n\n\
                  Limitations (alpha):\n\
                   - No group chats\n\
-                  - No attachments\n\n\
+                  - No attachments\n\
+                  - Send takes 1-4 min\n\
+                    (transport refactor\n\
+                    pending)\n\
+                  - 2.4 GHz Wi-Fi only\n\n\
                  Press Enter to return.",
                 env!("CARGO_PKG_VERSION"),
             )
@@ -247,8 +264,16 @@ impl App {
                  Connecting to Signal\n\
                  servers and requesting\n\
                  a provisioning URL.\n\n\
-                 Cert is verified against\n\
-                 Signal's pinned CA.\n\n\
+                 The TLS certificate is\n\
+                 verified against Signal's\n\
+                 pinned Certificate\n\
+                 Authority (CA) — no\n\
+                 public root CA is\n\
+                 trusted.\n\n\
+                 Linking takes a few\n\
+                 minutes after you scan\n\
+                 the QR. Don't\n\
+                 power-cycle.\n\n\
                  (Please wait.)"
             )
             .map_err(|e| format!("write Linking: {}", e))?,
@@ -287,7 +312,7 @@ impl App {
                 let label = match item {
                     MenuItem::Link => "Link device",
                     MenuItem::About => "About",
-                    MenuItem::Quit => "Quit",
+                    MenuItem::Help => "Help",
                 };
                 write!(out, "{} {}\n", mark, label).map_err(|e| format!("item: {}", e))?;
             }
@@ -450,13 +475,12 @@ impl App {
         Ok(())
     }
 
-    fn settings_items(&self) -> [SettingsItem; 5] {
+    fn settings_items(&self) -> [SettingsItem; 4] {
         [
             SettingsItem::Profile,
             SettingsItem::Help,
             SettingsItem::About,
             SettingsItem::Logout,
-            SettingsItem::Quit,
         ]
     }
 
@@ -480,7 +504,6 @@ impl App {
                 SettingsItem::Help => "Help",
                 SettingsItem::About => "About",
                 SettingsItem::Logout => "Logout",
-                SettingsItem::Quit => "Quit",
             };
             writeln!(out, "{} {}", mark, label).map_err(|e| format!("set item: {}", e))?;
         }
@@ -824,7 +847,6 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
         home_focus: 0,
         compose_buffer: String::new(),
         last_status: String::new(),
-        quit_requested: false,
         linking_in_progress: false,
         settings_selected: SettingsItem::Profile,
         account_device_name: None,
@@ -851,19 +873,9 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
                     log::info!("xas/gam_app: keys {:?}", keys);
                     handle_keys(&mut app, keys, &cmd_tx, &event_rx, &modals_xns);
                 });
-                if app.quit_requested {
-                    let _ = app.gam.switch_to_app(gam::APP_NAME_SHELLCHAT, token);
-                    log::info!("xas/gam_app: hidden via Quit; staying alive");
-                    if app.linked {
-                        app.screen = Screen::Home;
-                        app.home_focus = 0;
-                    } else {
-                        app.screen = Screen::Menu;
-                        app.selected = MenuItem::Link;
-                    }
-                    app.last_status.clear();
-                    app.quit_requested = false;
-                }
+                // Quit was removed from the menus (it didn't actually
+                // exit anything — just hid the app and reset state);
+                // the app stays foregrounded for its lifetime.
             }
             Some(XasOp::FocusChange) => {
                 xous::msg_scalar_unpack!(msg, new_state_code, _, _, _, {
@@ -912,7 +924,7 @@ fn handle_keys(
             (Screen::Menu, '∴') | (Screen::Menu, '\u{d}') => match app.selected {
                 MenuItem::Link => drive_link(app, cmd_tx, event_rx, modals_xns),
                 MenuItem::About => app.screen = Screen::About,
-                MenuItem::Quit => app.quit_requested = true,
+                MenuItem::Help => app.screen = Screen::Help,
             },
             // Esc on the post-link Menu returns to Home (the landing).
             // Pre-link, Menu IS the landing — Esc is a no-op.
@@ -1101,28 +1113,53 @@ fn handle_keys(
             (Screen::Settings, '↓') => app.settings_move(1),
             (Screen::Settings, '∴') | (Screen::Settings, '\u{d}') => {
                 match app.settings_selected {
-                    SettingsItem::Profile => app.screen = Screen::Profile,
+                    SettingsItem::Profile => {
+                        // If Profile fields aren't loaded yet (cold
+                        // start with linked-from-PDDB but no fresh
+                        // LinkComplete), fire Cmd::GetAccountInfo
+                        // so the bridge can read registration_data
+                        // and emit Event::AccountInfo. UI updates
+                        // when Event arrives.
+                        if app.account_aci.is_none() {
+                            log::info!("xas/gam_app: Profile entry, account info not loaded — sending Cmd::GetAccountInfo");
+                            if let Err(e) = cmd_tx.send_blocking(Cmd::GetAccountInfo) {
+                                log::warn!("xas/gam_app: Cmd::GetAccountInfo send err: {:?}", e);
+                            }
+                        }
+                        app.screen = Screen::Profile;
+                    }
                     SettingsItem::Help => app.screen = Screen::Help,
                     SettingsItem::About => app.screen = Screen::About,
                     SettingsItem::Logout => drive_logout(modals_xns),
-                    SettingsItem::Quit => app.quit_requested = true,
                 }
             }
-            (Screen::Settings, '\u{1b}') | (Screen::Settings, '☰') => {
+            (Screen::Settings, '\u{1b}') | (Screen::Settings, '☰') | (Screen::Settings, '\u{11}') => {
                 app.screen = Screen::Home;
             }
-            // Profile / Help: Enter or Esc returns to Settings.
+            // Profile / Help / About: Enter, Esc, or F1 returns to
+            // the screen we came from. For Help we always go to
+            // Home (F3 is the global Help shortcut from Home).
+            // F1 acts as a "back" affordance because Esc isn't
+            // present on the Precursor key set.
             (Screen::Profile, '∴')
             | (Screen::Profile, '\u{d}')
-            | (Screen::Profile, '\u{1b}') => {
+            | (Screen::Profile, '\u{1b}')
+            | (Screen::Profile, '\u{11}') => {
                 app.screen = Screen::Settings;
             }
             (Screen::Help, '∴')
             | (Screen::Help, '\u{d}')
-            | (Screen::Help, '\u{1b}') => {
-                // Help is reachable from Home (F3) AND Settings.
-                // For simplicity always return to Home.
+            | (Screen::Help, '\u{1b}')
+            | (Screen::Help, '\u{11}') => {
+                // Help is reachable from Home (F3), pre-link Menu,
+                // and Settings. Always return to Home for
+                // simplicity — user can re-open Settings via F4.
                 app.screen = Screen::Home;
+            }
+            // F1 on About also returns to the previous surface
+            // (Home if linked, Menu otherwise).
+            (Screen::About, '\u{11}') | (Screen::About, '\u{1b}') => {
+                app.screen = if app.linked { Screen::Home } else { Screen::Menu };
             }
             // Linking is transient (waiting on worker); rawkeys are
             // ignored.
@@ -1285,6 +1322,27 @@ fn handle_worker_event(
         Event::ShuttingDown => {
             log::info!("xas/gam_app: worker is shutting down");
             app.last_status = "worker shutdown".to_string();
+        }
+        Event::AccountInfo(Ok(info)) => {
+            log::info!(
+                "xas/gam_app: AccountInfo OK device={} aci={} phone={}",
+                info.device_name, info.aci, info.phone,
+            );
+            app.account_device_name = Some(info.device_name);
+            app.account_aci = Some(info.aci);
+            app.account_phone = Some(info.phone);
+            // If we're currently rendering the Profile screen,
+            // refresh so the placeholder "(not loaded)" flips to
+            // the real values immediately.
+            if matches!(app.screen, Screen::Profile) {
+                let _ = app.render();
+            }
+        }
+        Event::AccountInfo(Err(reason)) => {
+            log::warn!("xas/gam_app: AccountInfo Err: {}", reason);
+            // Leave account_* fields as-is. Profile screen will
+            // continue to show "(not loaded)" placeholders. Not
+            // worth showing a popup since this is a passive lookup.
         }
         Event::Pong | Event::Whoami(_) => {}
     }
