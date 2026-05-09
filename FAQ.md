@@ -58,7 +58,8 @@ PR at <https://github.com/tunnell/xous-app-signal>.
 
 ### "Messages from groups don't appear."
 - Group messages aren't supported in alpha. Only 1:1 conversations
-  render.
+  render. There's no roadmap for group support yet — file an issue
+  if you need it.
 
 ### "Attachments don't appear."
 - Attachments aren't supported in alpha. The text body of an
@@ -114,7 +115,8 @@ PR at <https://github.com/tunnell/xous-app-signal>.
 ## Keyboard
 
 ### "What do F1–F4 do?"
-- **F1**: New chat (prompts for a UUID; phone-number lookup TBD).
+- **F1**: New chat (prompts for a UUID; phone-number and Signal
+  username lookup are TBD — see Tier-2 in CHORES.md).
 - **F2**: Sync — placeholder; not yet implemented.
 - **F3**: Help — opens this FAQ summary in-app.
 - **F4**: Settings — Profile / Help / About / Logout / Quit.

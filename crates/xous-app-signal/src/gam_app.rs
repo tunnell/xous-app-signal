@@ -234,6 +234,9 @@ impl App {
                   - presage v0.8.0-dev\n\
                   - libsignal-service-rs\n\
                   - libsignal v0.91.0\n\n\
+                 Limitations (alpha):\n\
+                  - No group chats\n\
+                  - No attachments\n\n\
                  Press Enter to return.",
                 env!("CARGO_PKG_VERSION"),
             )
@@ -532,9 +535,9 @@ impl App {
              roaming support yet.\n\n\
              Known limits:\n\
               - Send may fail (WS keepalive)\n\
+              - No group chats\n\
               - No images / attachments\n\
-              - No history scroll / search\n\
-              - One SSID at a time\n\n\
+              - No history scroll / search\n\n\
              File a bug:\n\
              github.com/tunnell/\n\
               xous-app-signal/issues\n\n\
@@ -646,6 +649,27 @@ fn mark_thread_read(app: &mut App, uuid: Uuid) {
     }
 }
 
+/// True if `s` matches the Signal "username" shape: a non-empty
+/// nickname (3–32 chars, ASCII alnum or `_`) followed by `.` and
+/// 2–9 digits, e.g. `alice.42`. Used only for classifying user input
+/// in the New chat modal so the rejection message can be specific.
+fn looks_like_signal_username(s: &str) -> bool {
+    let (nick, rest) = match s.split_once('.') {
+        Some(parts) => parts,
+        None => return false,
+    };
+    if !(3..=32).contains(&nick.len()) {
+        return false;
+    }
+    if !nick.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return false;
+    }
+    if !(2..=9).contains(&rest.len()) {
+        return false;
+    }
+    rest.chars().all(|c| c.is_ascii_digit())
+}
+
 /// Settings → Logout. Stub: the actual flow needs to wipe the
 /// presage account state in PDDB and stop the worker. Tracked as a
 /// Tier-2 chore. For now show a notification with the manual path.
@@ -673,7 +697,11 @@ fn drive_new_chat(app: &mut App, modals_xns: &xous_names::XousNames) {
             return;
         }
     };
-    let raw = match modals.alert_builder("New chat — UUID or +E.164").field(None, None).build() {
+    let raw = match modals
+        .alert_builder("New chat — UUID, +E.164, or name.000")
+        .field(None, None)
+        .build()
+    {
         Ok(payloads) => payloads.first().as_str().trim().to_string(),
         Err(e) => {
             log::info!("xas/gam_app: F1 new chat cancelled / err: {:?}", e);
@@ -683,18 +711,29 @@ fn drive_new_chat(app: &mut App, modals_xns: &xous_names::XousNames) {
     if raw.is_empty() {
         return;
     }
-    // Phone-number input is best-effort: we don't have a server
-    // round-trip wired here yet, so anything that isn't a UUID is
-    // logged and skipped. UUID input is the working path.
+    // Phone-number and username (Signal "name.000" form) input is
+    // best-effort: both need a server round-trip we don't have yet.
+    // UUID input is the working path. The error path classifies the
+    // input so the user knows which lookup is missing.
     let uuid = match Uuid::parse_str(&raw) {
         Ok(u) => u,
         Err(_) => {
+            let kind = if raw.starts_with('+') && raw.len() > 1 && raw[1..].chars().all(|c| c.is_ascii_digit()) {
+                "Phone-number"
+            } else if looks_like_signal_username(&raw) {
+                "Username"
+            } else {
+                "Contact"
+            };
             log::info!(
-                "xas/gam_app: F1 new chat — non-UUID input {:?}; phone-number lookup not yet supported",
-                raw
+                "xas/gam_app: F1 new chat — {} input {:?}; lookup not yet supported",
+                kind, raw,
             );
             let _ = modals.show_notification(
-                "Phone-number lookup not\nsupported yet. Enter a UUID.",
+                &format!(
+                    "{} lookup not\nsupported yet. Enter a UUID\nfor now.",
+                    kind
+                ),
                 None,
             );
             return;
