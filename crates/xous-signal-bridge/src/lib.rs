@@ -411,12 +411,71 @@ async fn manager_task(
     use futures::StreamExt;
     use futures::select;
 
+    // Why this exits the inner pump loop. The pump runs inside a
+    // single `loop { select! { ... } }`; we need to surface to the
+    // outer 'outer loop both "user sent something, drop the stream
+    // and call handle_send" and "stream died, drop everything and
+    // re-open with backoff" cases without using `continue 'outer`
+    // from inside the select! macro (which works syntactically but
+    // is awkward to read at this level of nesting).
+    enum InnerExit {
+        Send(InnerSend),
+        Reopen { reason: String },
+        Shutdown,
+    }
+
     // Tell the UI we're listening (only on the first stream open).
     let mut announced = false;
+
+    // Consecutive failures since the last successful event. Used to
+    // (a) decide backoff before re-opening the stream and
+    // (b) deduplicate the "receive error" event so the UI sees one
+    // banner per outage, not one per retry. Reset to 0 after a
+    // successful `manager.receive_messages()` AND after we observe
+    // an actual stream item — opening Ok then immediately seeing
+    // None counts as a failure (we made no real progress).
+    let mut consecutive_failures: u32 = 0;
+    // Cap on how many consecutive failures we tolerate before giving
+    // up entirely. With backoff capped at 30s, this is roughly an
+    // 8-minute window of constant retries before we surface a fatal
+    // ReceiveError and exit. Empirically, the rv32 net stack
+    // recovers from idle-WS death in well under a minute, so any
+    // failure that persists past this is something we genuinely
+    // can't paper over.
+    const MAX_CONSECUTIVE_FAILURES: u32 = 20;
 
     log::info!("bridge: manager_task entered");
 
     'outer: loop {
+        // Backoff before reopening if this isn't the first attempt.
+        // 1s * 1.5^n capped at 30s. Sleep happens BEFORE the open
+        // attempt so a failed open also gets the delay without
+        // double-sleeping.
+        if consecutive_failures > 0 {
+            // 1500 = 1s in ms with 1.5^0; the f64 path is fine in a
+            // backoff context — we don't need millisecond accuracy.
+            let backoff_ms =
+                (1000.0 * 1.5_f64.powi(consecutive_failures as i32 - 1)).min(30_000.0) as u64;
+            log::info!(
+                "bridge: manager_task — backoff {}ms before re-open (consecutive_failures={})",
+                backoff_ms, consecutive_failures,
+            );
+            futures_timer::Delay::new(std::time::Duration::from_millis(backoff_ms)).await;
+            if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                log::error!(
+                    "bridge: manager_task — gave up after {} consecutive failures",
+                    consecutive_failures,
+                );
+                let _ = event_tx
+                    .send(Event::ReceiveError(format!(
+                        "receive failed {} times; restart xas to retry",
+                        consecutive_failures,
+                    )))
+                    .await;
+                return;
+            }
+        }
+
         // Open the stream for this iteration.
         log::info!("bridge: manager_task — opening receive_messages stream");
         let mut stream = match manager.receive_messages().await {
@@ -425,11 +484,19 @@ async fn manager_task(
                 Box::pin(s)
             }
             Err(e) => {
-                log::warn!("bridge: manager_task — receive_messages err: {}", e);
-                let _ = event_tx
-                    .send(Event::ReceiveError(format!("receive_messages: {e}")))
-                    .await;
-                return;
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                log::warn!(
+                    "bridge: manager_task — receive_messages err (failure #{}): {}",
+                    consecutive_failures, e,
+                );
+                // Surface only the first error in a streak so the UI
+                // shows one banner per outage, not N.
+                if consecutive_failures == 1 {
+                    let _ = event_tx
+                        .send(Event::ReceiveError(format!("receive_messages: {e}")))
+                        .await;
+                }
+                continue 'outer;
             }
         };
 
@@ -441,39 +508,42 @@ async fn manager_task(
             announced = true;
         }
 
-        // Pump items + send-cmds. Break out to re-open the stream
-        // whenever a send arrives.
-        let pending_send: Option<InnerSend> = loop {
+        // Pump items + send-cmds.
+        let exit: InnerExit = loop {
             select! {
                 item = stream.next().fuse() => {
                     match item {
                         Some(item) => {
                             log::info!("bridge: stream item received");
+                            // Real progress on this stream — clear
+                            // the failure counter so the next reopen
+                            // (when handle_send forces one) doesn't
+                            // sleep at all.
+                            consecutive_failures = 0;
                             if !process_received(item, &store, &event_tx).await {
                                 // event_tx closed — bail.
                                 return;
                             }
                         }
                         None => {
-                            // Stream ended — usually means the WS
-                            // closed. Surface as a receive error
-                            // and quit.
-                            let _ = event_tx
-                                .send(Event::ReceiveError(
-                                    "receive stream ended".to_string(),
-                                ))
-                                .await;
-                            return;
+                            // Stream ended — typically because the
+                            // identified WS died (rv32: keepalive
+                            // responses not coming back, libsignal
+                            // closes after 2 outstanding). Don't
+                            // exit the task — re-open after backoff.
+                            break InnerExit::Reopen {
+                                reason: "stream ended".to_string(),
+                            };
                         }
                     }
                 }
                 send = send_rx.recv().fuse() => {
                     match send {
-                        Ok(s) => break Some(s),
+                        Ok(s) => break InnerExit::Send(s),
                         Err(_) => {
                             // Sender side dropped — worker dispatcher
                             // ended; shutting down.
-                            break 'outer;
+                            break InnerExit::Shutdown;
                         }
                     }
                 }
@@ -481,14 +551,36 @@ async fn manager_task(
         };
 
         // Drop the stream so the &mut borrow on `manager` is
-        // released before we call `send_message`.
+        // released before we call anything else on `manager`.
         log::info!("bridge: manager_task — dropping receive stream to free &mut manager borrow");
         drop(stream);
 
-        if let Some(send) = pending_send {
-            log::info!("bridge: manager_task — invoking handle_send");
-            handle_send(&mut manager, send, &event_tx).await;
-            log::info!("bridge: manager_task — handle_send returned, re-opening stream");
+        match exit {
+            InnerExit::Send(send) => {
+                log::info!("bridge: manager_task — invoking handle_send");
+                handle_send(&mut manager, send, &event_tx).await;
+                log::info!("bridge: manager_task — handle_send returned, re-opening stream");
+                // Keep consecutive_failures as is. If handle_send
+                // failed because the WS was already dying, the
+                // upcoming receive_messages() call may also fail —
+                // and we want backoff to kick in then.
+            }
+            InnerExit::Reopen { reason } => {
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                log::warn!(
+                    "bridge: manager_task — stream closed (failure #{}, reason={}), re-opening with backoff",
+                    consecutive_failures, reason,
+                );
+                if consecutive_failures == 1 {
+                    let _ = event_tx
+                        .send(Event::ReceiveError(format!(
+                            "receive {} (auto-retrying)",
+                            reason
+                        )))
+                        .await;
+                }
+            }
+            InnerExit::Shutdown => break 'outer,
         }
         // Loop back: re-open the stream and continue.
     }
