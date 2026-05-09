@@ -14,7 +14,16 @@ use protobuf::ProtobufResponseExt;
 use serde::{Deserialize, Serialize};
 use tracing::{debug_span, Instrument};
 
-pub const KEEPALIVE_TIMEOUT_SECONDS: Duration = Duration::from_secs(55);
+/// Interval between application-level keepalives on the auth WS.
+///
+/// Signal's server idle-closes after ~55s. Upstream uses 55s
+/// here, which leaves no margin: any timer skew or scheduler
+/// jitter on the rv32 target lets the server close the socket
+/// before our keepalive arrives, surfacing as
+/// `"WebSocket closing while waiting for a response"` on the
+/// next send. Cut to 30s for headroom while we diagnose whether
+/// `futures_timer::Delay` is firing reliably on Xous.
+pub const KEEPALIVE_TIMEOUT_SECONDS: Duration = Duration::from_secs(30);
 pub static DEFAULT_DEVICE_ID: LazyLock<libsignal_core::DeviceId> =
     LazyLock::new(|| libsignal_core::DeviceId::try_from(1).unwrap());
 

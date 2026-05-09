@@ -237,36 +237,63 @@ impl SignalWebSocketProcess {
         // KEEPALIVE_TIMEOUT_SECONDS. Same external behaviour, no tokio
         // timer reactor needed.
         let mut ka_delay = futures_timer::Delay::new(std::time::Duration::ZERO);
+        // Diagnostic: track timer-fire times so we can verify on rv32 that
+        // futures_timer is actually firing on schedule (vs the local fix
+        // shipping but never reaching the wire).
+        let ka_loop_start = std::time::Instant::now();
+        let mut ka_count: u64 = 0;
+        let mut ka_last: Option<std::time::Instant> = None;
 
         loop {
             futures::select! {
                 _ = (&mut ka_delay).fuse() => {
+                    let now = std::time::Instant::now();
+                    let since_start = now.duration_since(ka_loop_start);
+                    let since_last = ka_last.map(|t| now.duration_since(t));
+                    ka_last = Some(now);
+                    ka_count += 1;
+                    tracing::info!(
+                        ka_count,
+                        elapsed_ms = since_start.as_millis() as u64,
+                        gap_ms = since_last.map(|d| d.as_millis() as u64).unwrap_or(0),
+                        "ka timer fired",
+                    );
                     // Reset the timer for the next tick.
                     ka_delay = futures_timer::Delay::new(push_service::KEEPALIVE_TIMEOUT_SECONDS);
                     use prost::Message;
                     if !self.outgoing_keep_alive_set.is_empty() {
-                        tracing::warn!("Websocket will be closed due to failed keepalives.");
+                        tracing::warn!(
+                            outstanding = self.outgoing_keep_alive_set.len(),
+                            "Websocket will be closed due to failed keepalives.",
+                        );
                         // Stage 6.1: send a Close frame (code 1001 = Going Away).
                         let _ = self.ws_outgoing.send(WsFrame::Close { code: 1001, reason: String::new() }).await;
                         self.outgoing_keep_alive_set.clear();
                         break;
                     }
-                    tracing::debug!("sending keep-alive");
+                    tracing::info!(path = %self.keep_alive_path, "ka sending");
                     let request = WebSocketRequestMessage::new(Method::GET)
                         .id(self.next_request_id())
                         .path(&self.keep_alive_path)
                         .build();
-                    self.outgoing_keep_alive_set.insert(request.id.unwrap());
+                    let req_id = request.id.unwrap();
+                    self.outgoing_keep_alive_set.insert(req_id);
                     let msg = WebSocketMessage {
                         r#type: Some(web_socket_message::Type::Request.into()),
                         request: Some(request),
                         ..Default::default()
                     };
                     let buffer = msg.encode_to_vec();
-                    if let Err(e) = self.ws_outgoing.send(WsFrame::Binary(buffer)).await {
-                        tracing::info!("Websocket sink has closed: {:?}.", e);
-                        break;
-                    };
+                    let buf_len = buffer.len();
+                    match self.ws_outgoing.send(WsFrame::Binary(buffer)).await {
+                        Ok(()) => {
+                            tracing::info!(req_id, buf_len, "ka frame queued for writer");
+                        }
+                        Err(e) => {
+                            tracing::warn!(?e, "ka send: ws_outgoing closed");
+                            break;
+                        }
+                    }
                 },
                 // Process requests from the application, forward them to Signal
                 x = self.requests.next() => {
