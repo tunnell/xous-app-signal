@@ -67,18 +67,23 @@ enum XasOp {
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum Screen {
-    /// Pre-link app menu (Link / About / Quit) and post-link app
-    /// menu opened from Home via the Menu key (About / Quit).
+    /// Pre-link app menu (Link / About / Quit). Post-link landing
+    /// is `Home`; the equivalent post-link surface is `Settings`.
     Menu,
     About,
     Linking,
     Linked { kind: LinkedKind },
     /// Post-link landing: conversation list. Default screen after
-    /// `LinkComplete`. Pressing the Menu key from here opens the
-    /// app menu (About / Quit).
+    /// `LinkComplete`. F4 / Esc opens `Settings`.
     Home,
     /// Per-conversation history view + compose input.
     Thread { uuid: Uuid },
+    /// Post-link settings sub-menu (Profile / Help / About / Logout / Quit).
+    Settings,
+    /// Account info display (Name / Number / Username).
+    Profile,
+    /// FAQ + issue-tracker pointer.
+    Help,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -93,6 +98,17 @@ enum MenuItem {
     Link,
     // Always
     About,
+    Quit,
+}
+
+/// Items shown on `Screen::Settings`. Reachable via F4 (or Esc) from
+/// `Home` once the device is linked.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SettingsItem {
+    Profile,
+    Help,
+    About,
+    Logout,
     Quit,
 }
 
@@ -130,6 +146,15 @@ struct App {
     /// and transitions on LinkComplete/LinkError. Cleared on
     /// terminal events.
     linking_in_progress: bool,
+    /// Cursor on Screen::Settings.
+    settings_selected: SettingsItem,
+    /// Account info captured from Event::LinkComplete in this session.
+    /// On a cold start where the device is already linked from a
+    /// prior session, these stay None until a Cmd::GetAccountInfo
+    /// path is wired (Tier 2 chore).
+    account_device_name: Option<String>,
+    account_aci: Option<String>,
+    account_phone: Option<String>,
 }
 
 impl App {
@@ -203,6 +228,8 @@ impl App {
                  for Xous on Precursor.\n\n\
                  Version: {}\n\
                  Author:  @tunnell\n\n\
+                 github.com/tunnell/\n\
+                  xous-app-signal\n\n\
                  Built on:\n\
                   - presage v0.8.0-dev\n\
                   - libsignal-service-rs\n\
@@ -236,6 +263,9 @@ impl App {
             }
             Screen::Home => self.write_home(&mut tv.text)?,
             Screen::Thread { uuid } => self.write_thread(&mut tv.text, uuid)?,
+            Screen::Settings => self.write_settings(&mut tv.text)?,
+            Screen::Profile => self.write_profile(&mut tv.text)?,
+            Screen::Help => self.write_help(&mut tv.text)?,
         }
 
         self.gam
@@ -295,10 +325,10 @@ impl App {
             writeln!(out).map_err(|e| format!("home empty: {}", e))?;
             writeln!(out, "  Wait for someone to message,")
                 .map_err(|e| format!("home empty: {}", e))?;
-            writeln!(out, "  or use Send from the menu.")
+            writeln!(out, "  or press F1 to start one.")
                 .map_err(|e| format!("home empty: {}", e))?;
             writeln!(out).map_err(|e| format!("home empty: {}", e))?;
-            writeln!(out, "  Enter: return to menu")
+            writeln!(out, "  F1 New  F2 Sync  F3 Help  F4 Settings")
                 .map_err(|e| format!("home empty: {}", e))?;
             return Ok(());
         }
@@ -343,7 +373,8 @@ impl App {
                 .map_err(|e| format!("home sep: {}", e))?;
         }
         writeln!(out).map_err(|e| format!("home foot: {}", e))?;
-        write!(out, "  ↑↓ select   Enter open").map_err(|e| format!("home hint: {}", e))
+        write!(out, "  ↑↓ Sel  Enter Open\n  F1 New  F2 Sync  F3 Help  F4 Settings")
+            .map_err(|e| format!("home hint: {}", e))
     }
 
     /// Render the per-conversation history view (read-only in Phase A).
@@ -409,9 +440,108 @@ impl App {
         // Compose input. Cursor is `_` at the end of the buffer for
         // Phase A — no horizontal scroll if the buffer is wider than
         // the visible width, just shows the trailing chars.
-        write!(out, "> {}_", crate::dialogue::ellipsize(&self.compose_buffer, 30))
+        writeln!(out, "> {}_", crate::dialogue::ellipsize(&self.compose_buffer, 30))
             .map_err(|e| format!("thread compose: {}", e))?;
+        write!(out, "Enter Send  Esc Back  F4 Settings")
+            .map_err(|e| format!("thread hint: {}", e))?;
         Ok(())
+    }
+
+    fn settings_items(&self) -> [SettingsItem; 5] {
+        [
+            SettingsItem::Profile,
+            SettingsItem::Help,
+            SettingsItem::About,
+            SettingsItem::Logout,
+            SettingsItem::Quit,
+        ]
+    }
+
+    fn settings_move(&mut self, delta: isize) {
+        let items = self.settings_items();
+        let idx = items
+            .iter()
+            .position(|s| *s == self.settings_selected)
+            .unwrap_or(0);
+        let len = items.len() as isize;
+        let new = (idx as isize + delta).rem_euclid(len);
+        self.settings_selected = items[new as usize];
+    }
+
+    fn write_settings(&self, out: &mut String) -> Result<(), String> {
+        write!(out, "Settings\n\n").map_err(|e| format!("set hdr: {}", e))?;
+        for item in self.settings_items() {
+            let mark = if item == self.settings_selected { ">" } else { " " };
+            let label = match item {
+                SettingsItem::Profile => "Profile",
+                SettingsItem::Help => "Help",
+                SettingsItem::About => "About",
+                SettingsItem::Logout => "Logout",
+                SettingsItem::Quit => "Quit",
+            };
+            writeln!(out, "{} {}", mark, label).map_err(|e| format!("set item: {}", e))?;
+        }
+        write!(out, "\n↑↓ Sel  Enter Open  Esc Back")
+            .map_err(|e| format!("set foot: {}", e))
+    }
+
+    fn write_profile(&self, out: &mut String) -> Result<(), String> {
+        let none = "(not loaded)";
+        let device = self
+            .account_device_name
+            .as_deref()
+            .unwrap_or(none);
+        let phone = self.account_phone.as_deref().unwrap_or(none);
+        let aci = self.account_aci.as_deref().unwrap_or(none);
+        write!(
+            out,
+            "Profile\n\n\
+             Name:     {}\n\
+             Number:   {}\n\
+             Username: {}\n\n\
+             ACI:      {}\n\n\
+             (Loaded only after a fresh\n\
+              link this session. Persist\n\
+              across sessions is a TODO.)\n\n\
+             Press Enter to return.",
+            device,
+            phone,
+            "(not synced)",
+            aci,
+        )
+        .map_err(|e| format!("profile: {}", e))
+    }
+
+    fn write_help(&self, out: &mut String) -> Result<(), String> {
+        write!(
+            out,
+            "Help\n\n\
+             xas — Signal client for\n\
+             Precursor (Xous OS).\n\
+             Status: alpha.\n\n\
+             Wi-Fi (do this first, in\n\
+             shellchat, before opening\n\
+             xas):\n\
+               wlan off\n\
+               wlan on\n\
+               ssid scan\n\
+               wlan status   (until\n\
+                 'Connected')\n\
+               net ping 1.1.1.1\n\
+             Use one SSID only — no\n\
+             roaming support yet.\n\n\
+             Known limits:\n\
+              - Send may fail (WS keepalive)\n\
+              - No images / attachments\n\
+              - No history scroll / search\n\
+              - One SSID at a time\n\n\
+             File a bug:\n\
+             github.com/tunnell/\n\
+              xous-app-signal/issues\n\n\
+             Full FAQ: see FAQ.md in repo.\n\n\
+             Press Enter to return."
+        )
+        .map_err(|e| format!("help: {}", e))
     }
 
 }
@@ -479,6 +609,7 @@ fn seed_mock_messages_if_requested(app: &mut App) {
             timestamp: now_ms.saturating_sub(*age_ms),
             outgoing: *outgoing,
             status: *status,
+            read: *outgoing, // outgoing always read; incoming starts unread
         });
     }
     app.dialogues = rebuild_summaries(&app.messages);
@@ -498,6 +629,79 @@ fn unix_now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+/// Mark every message belonging to `uuid` as read, then rebuild
+/// the dialogue summaries so unread counts reflect the new state.
+fn mark_thread_read(app: &mut App, uuid: Uuid) {
+    let mut changed = false;
+    for m in app.messages.iter_mut() {
+        if m.uuid == uuid && !m.read {
+            m.read = true;
+            changed = true;
+        }
+    }
+    if changed {
+        app.dialogues = rebuild_summaries(&app.messages);
+    }
+}
+
+/// Settings → Logout. Stub: the actual flow needs to wipe the
+/// presage account state in PDDB and stop the worker. Tracked as a
+/// Tier-2 chore. For now show a notification with the manual path.
+fn drive_logout(modals_xns: &xous_names::XousNames) {
+    if let Ok(modals) = modals::Modals::new(modals_xns) {
+        let _ = modals.show_notification(
+            "Logout not yet implemented.\n\
+             To re-link, wipe the PDDB\n\
+             (or `pddb wipe` in shellchat)\n\
+             then reflash and link again.",
+            None,
+        );
+    }
+}
+
+/// F1 on Home: prompt for a UUID (or +e164) and open an empty
+/// thread for it. The compose box becomes the entry point; the
+/// thread becomes a real conversation as soon as a message goes
+/// out or comes back.
+fn drive_new_chat(app: &mut App, modals_xns: &xous_names::XousNames) {
+    let modals = match modals::Modals::new(modals_xns) {
+        Ok(m) => m,
+        Err(e) => {
+            log::warn!("xas/gam_app: F1 new chat — Modals::new err {:?}", e);
+            return;
+        }
+    };
+    let raw = match modals.alert_builder("New chat — UUID or +E.164").field(None, None).build() {
+        Ok(payloads) => payloads.first().as_str().trim().to_string(),
+        Err(e) => {
+            log::info!("xas/gam_app: F1 new chat cancelled / err: {:?}", e);
+            return;
+        }
+    };
+    if raw.is_empty() {
+        return;
+    }
+    // Phone-number input is best-effort: we don't have a server
+    // round-trip wired here yet, so anything that isn't a UUID is
+    // logged and skipped. UUID input is the working path.
+    let uuid = match Uuid::parse_str(&raw) {
+        Ok(u) => u,
+        Err(_) => {
+            log::info!(
+                "xas/gam_app: F1 new chat — non-UUID input {:?}; phone-number lookup not yet supported",
+                raw
+            );
+            let _ = modals.show_notification(
+                "Phone-number lookup not\nsupported yet. Enter a UUID.",
+                None,
+            );
+            return;
+        }
+    };
+    app.screen = Screen::Thread { uuid };
+    app.compose_buffer.clear();
 }
 
 
@@ -583,6 +787,10 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
         last_status: String::new(),
         quit_requested: false,
         linking_in_progress: false,
+        settings_selected: SettingsItem::Profile,
+        account_device_name: None,
+        account_aci: None,
+        account_phone: None,
     };
     seed_mock_messages_if_requested(&mut app);
     app.render().ok();
@@ -700,13 +908,41 @@ fn handle_keys(
                 // do nothing — user can still press the Menu key
                 // to access About / Quit.
                 if let Some(d) = app.dialogues.get(app.home_focus) {
-                    app.screen = Screen::Thread { uuid: d.uuid };
+                    let opened = d.uuid;
+                    mark_thread_read(app, opened);
+                    app.screen = Screen::Thread { uuid: opened };
                 }
             }
-            // Menu / Esc on Home opens the app menu.
+            // Menu / Esc on Home opens Settings.
             (Screen::Home, '☰') | (Screen::Home, '\u{1b}') => {
-                app.screen = Screen::Menu;
-                app.selected = MenuItem::About;
+                app.screen = Screen::Settings;
+                app.settings_selected = SettingsItem::Profile;
+            }
+            // F1 (Precursor sends 0x11): "New chat" — prompt for UUID
+            // or +e164, then open the empty Thread.
+            (Screen::Home, '\u{11}') => {
+                drive_new_chat(app, modals_xns);
+            }
+            // F2 (0x12): Sync — placeholder. Needs a bridge-side
+            // Cmd::SyncContacts plus a manager_task handler.
+            // Tier-2 chore. For now show a notification.
+            (Screen::Home, '\u{12}') => {
+                log::info!("xas/gam_app: F2 sync requested (not yet implemented)");
+                if let Ok(modals) = modals::Modals::new(modals_xns) {
+                    let _ = modals.show_notification(
+                        "Sync not yet implemented.\nSee Help for status.",
+                        None,
+                    );
+                }
+            }
+            // F3 (0x13): Help / FAQ.
+            (Screen::Home, '\u{13}') => {
+                app.screen = Screen::Help;
+            }
+            // F4 (0x14): Settings.
+            (Screen::Home, '\u{14}') => {
+                app.screen = Screen::Settings;
+                app.settings_selected = SettingsItem::Profile;
             }
             (Screen::Thread { uuid }, '∴') | (Screen::Thread { uuid }, '\u{d}') => {
                 // Enter behavior depends on compose buffer state:
@@ -738,6 +974,7 @@ fn handle_keys(
                         timestamp: send_ts,
                         outgoing: true,
                         status: SendStatus::Pending,
+                        read: true,
                     });
                     app.dialogues = rebuild_summaries(&app.messages);
                     if let Err(e) = cmd_tx.send_blocking(Cmd::SendMessage {
@@ -765,6 +1002,88 @@ fn handle_keys(
             }
             (Screen::Thread { .. }, c) if is_compose_char(c) => {
                 app.compose_buffer.push(c);
+            }
+            // F1 on Thread: same as Enter when buffer non-empty (send).
+            // No-op on empty buffer (don't surprise-back-out via F1).
+            (Screen::Thread { uuid }, '\u{11}') => {
+                if !app.compose_buffer.is_empty() {
+                    let body = std::mem::take(&mut app.compose_buffer);
+                    let recipient_uuid = *uuid;
+                    let send_ts = unix_now_ms();
+                    let recipient_str = recipient_uuid.to_string();
+                    log::info!(
+                        "xas/gam_app: F1 send to={} ({} bytes) ts={}",
+                        recipient_str,
+                        body.len(),
+                        send_ts,
+                    );
+                    if app.messages.len() >= INBOX_CAPACITY {
+                        app.messages.remove(0);
+                    }
+                    app.messages.push(ThreadMessage {
+                        uuid: recipient_uuid,
+                        author_label: "You".to_string(),
+                        body: body.clone(),
+                        timestamp: send_ts,
+                        outgoing: true,
+                        status: SendStatus::Pending,
+                        read: true,
+                    });
+                    app.dialogues = rebuild_summaries(&app.messages);
+                    if let Err(e) = cmd_tx.send_blocking(Cmd::SendMessage {
+                        recipient: recipient_str,
+                        body,
+                        timestamp: send_ts,
+                    }) {
+                        log::warn!("xas/gam_app: Cmd::SendMessage send err: {:?}", e);
+                        if let Some(m) = app
+                            .messages
+                            .iter_mut()
+                            .rev()
+                            .find(|m| m.outgoing && m.timestamp == send_ts)
+                        {
+                            m.status = SendStatus::Failed;
+                        }
+                        app.dialogues = rebuild_summaries(&app.messages);
+                    }
+                }
+            }
+            // F4 on Thread: open Settings.
+            (Screen::Thread { .. }, '\u{14}') => {
+                app.screen = Screen::Settings;
+                app.settings_selected = SettingsItem::Profile;
+            }
+            // F3 on Thread: Help.
+            (Screen::Thread { .. }, '\u{13}') => {
+                app.screen = Screen::Help;
+            }
+            // Settings sub-menu navigation + selection.
+            (Screen::Settings, '↑') => app.settings_move(-1),
+            (Screen::Settings, '↓') => app.settings_move(1),
+            (Screen::Settings, '∴') | (Screen::Settings, '\u{d}') => {
+                match app.settings_selected {
+                    SettingsItem::Profile => app.screen = Screen::Profile,
+                    SettingsItem::Help => app.screen = Screen::Help,
+                    SettingsItem::About => app.screen = Screen::About,
+                    SettingsItem::Logout => drive_logout(modals_xns),
+                    SettingsItem::Quit => app.quit_requested = true,
+                }
+            }
+            (Screen::Settings, '\u{1b}') | (Screen::Settings, '☰') => {
+                app.screen = Screen::Home;
+            }
+            // Profile / Help: Enter or Esc returns to Settings.
+            (Screen::Profile, '∴')
+            | (Screen::Profile, '\u{d}')
+            | (Screen::Profile, '\u{1b}') => {
+                app.screen = Screen::Settings;
+            }
+            (Screen::Help, '∴')
+            | (Screen::Help, '\u{d}')
+            | (Screen::Help, '\u{1b}') => {
+                // Help is reachable from Home (F3) AND Settings.
+                // For simplicity always return to Home.
+                app.screen = Screen::Home;
             }
             // Linking is transient (waiting on worker); rawkeys are
             // ignored.
@@ -817,6 +1136,9 @@ fn handle_worker_event(
             app.screen = Screen::Linked { kind: LinkedKind::Success };
             app.last_status =
                 format!("device: {}\naci:    {}\nphone:  {}", device_name, aci, phone);
+            app.account_device_name = Some(device_name);
+            app.account_aci = Some(aci);
+            app.account_phone = Some(phone);
             // Auto-fire StartReceive so the inbox begins
             // accumulating. Bridge dedupes; calling again later is
             // harmless.
@@ -865,6 +1187,7 @@ fn handle_worker_event(
                 timestamp,
                 outgoing: false,
                 status: SendStatus::Sent,
+                read: false,
             });
             app.dialogues = rebuild_summaries(&app.messages);
         }

@@ -50,6 +50,11 @@ pub struct ThreadMessage {
     pub outgoing: bool,
     /// Lifecycle state.
     pub status: SendStatus,
+    /// Whether the user has seen this message. Auto-true for outgoing.
+    /// Auto-false for incoming until the Thread is opened (reading
+    /// the messages) or the user invokes "Mark all read". Drives the
+    /// `unread_count` aggregation in `rebuild_summaries`.
+    pub read: bool,
 }
 
 /// Aggregated per-conversation view. One per UUID. Built by
@@ -100,9 +105,16 @@ pub fn rebuild_summaries(messages: &[ThreadMessage]) -> Vec<DialogueSummary> {
 
         // Prefer the author label of any incoming message — that's the
         // contact's name. Outgoing messages have author_label == "You",
-        // which is not the conversation's display name.
+        // which is not the conversation's display name. If the author
+        // label looks like a raw UUID (36 chars with dashes), the
+        // worker couldn't find the contact in the store; surface a
+        // shorter "uuid:1234abcd" instead of the full hex blob.
         if !m.outgoing {
-            entry.display_name = m.author_label.clone();
+            entry.display_name = if looks_like_raw_uuid(&m.author_label) {
+                short_uuid_label(&m.uuid)
+            } else {
+                m.author_label.clone()
+            };
         }
 
         if m.timestamp >= entry.last_msg_ts {
@@ -112,7 +124,7 @@ pub fn rebuild_summaries(messages: &[ThreadMessage]) -> Vec<DialogueSummary> {
             entry.last_msg_status = m.status;
         }
 
-        if !m.outgoing && m.status == SendStatus::Sent {
+        if !m.outgoing && m.status == SendStatus::Sent && !m.read {
             entry.unread_count = entry.unread_count.saturating_add(1);
         }
     }
@@ -173,6 +185,24 @@ fn short_uuid_label(uuid: &Uuid) -> String {
     format!("uuid:{}", prefix)
 }
 
+/// Heuristic: does this string look like a raw UUID? Used to detect
+/// when the worker fell back to passing the canonical UUID string as
+/// `author_label` because the contact lookup returned nothing. Matches
+/// both dashed (36-char) and undashed (32-char) hex forms.
+fn looks_like_raw_uuid(s: &str) -> bool {
+    let len = s.len();
+    if len == 36 {
+        s.chars()
+            .enumerate()
+            .all(|(i, c)| matches!(i, 8 | 13 | 18 | 23) == (c == '-')
+                && (c == '-' || c.is_ascii_hexdigit()))
+    } else if len == 32 {
+        s.chars().all(|c| c.is_ascii_hexdigit())
+    } else {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +222,7 @@ mod tests {
             timestamp: ts,
             outgoing: false,
             status: SendStatus::Sent,
+            read: false,
         }
     }
 
@@ -203,6 +234,7 @@ mod tests {
             timestamp: ts,
             outgoing: true,
             status,
+            read: true,
         }
     }
 
@@ -365,6 +397,37 @@ mod tests {
         // Snippet capped at 32 chars per the implementation.
         assert!(v[0].last_msg_snippet.chars().count() <= 32);
         assert!(v[0].last_msg_snippet.ends_with('…'));
+    }
+
+    #[test]
+    fn rebuild_unread_excludes_read_messages() {
+        // Three incoming messages from one sender; the first two are
+        // marked read (e.g. user opened the thread before the third
+        // arrived). Unread count should reflect only the unread one.
+        let mut msgs = vec![
+            incoming(uuid_a(), 100, "first", "Alice"),
+            incoming(uuid_a(), 200, "second", "Alice"),
+            incoming(uuid_a(), 300, "third", "Alice"),
+        ];
+        msgs[0].read = true;
+        msgs[1].read = true;
+        let v = rebuild_summaries(&msgs);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].unread_count, 1);
+    }
+
+    #[test]
+    fn rebuild_all_read_yields_zero_unread() {
+        let mut msgs = vec![
+            incoming(uuid_a(), 100, "hi", "Alice"),
+            incoming(uuid_b(), 200, "hello", "Bob"),
+        ];
+        for m in &mut msgs {
+            m.read = true;
+        }
+        let v = rebuild_summaries(&msgs);
+        assert_eq!(v.len(), 2);
+        assert!(v.iter().all(|d| d.unread_count == 0));
     }
 
     #[test]
