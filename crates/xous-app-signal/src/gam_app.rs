@@ -186,7 +186,13 @@ impl App {
         tv.draw_border = true;
         tv.clear_area = true;
         tv.rounded_border = Some(3);
-        tv.style = GlyphStyle::Regular;
+        // Bold on the conversation-list and thread screens for
+        // legibility — those are the primary surfaces. Other transient
+        // screens (About, Linked banner, Linking) keep Regular.
+        tv.style = match self.screen {
+            Screen::Home | Screen::Thread { .. } => GlyphStyle::Bold,
+            _ => GlyphStyle::Regular,
+        };
 
         match &self.screen {
             Screen::Menu => self.write_menu(&mut tv.text)?,
@@ -280,7 +286,7 @@ impl App {
         } else {
             writeln!(out, "xas").map_err(|e| format!("home hdr: {}", e))?;
         }
-        writeln!(out, "{}", "-".repeat(37)).map_err(|e| format!("home rule: {}", e))?;
+        writeln!(out, "{}", "-".repeat(45)).map_err(|e| format!("home rule: {}", e))?;
 
         if self.dialogues.is_empty() {
             writeln!(out).map_err(|e| format!("home empty: {}", e))?;
@@ -333,7 +339,7 @@ impl App {
             )
             .map_err(|e| format!("home row body: {}", e))?;
 
-            writeln!(out, "{}", "-".repeat(37))
+            writeln!(out, "{}", "-".repeat(45))
                 .map_err(|e| format!("home sep: {}", e))?;
         }
         writeln!(out).map_err(|e| format!("home foot: {}", e))?;
@@ -368,7 +374,7 @@ impl App {
             .map(|d| d.display_name.clone())
             .unwrap_or_else(|| format!("uuid:{:.8}", uuid.simple().to_string()));
         writeln!(out, "{}", header).map_err(|e| format!("thread hdr: {}", e))?;
-        writeln!(out, "{}", "-".repeat(37)).map_err(|e| format!("thread rule: {}", e))?;
+        writeln!(out, "{}", "-".repeat(45)).map_err(|e| format!("thread rule: {}", e))?;
 
         let now_ms = unix_now_ms();
         let thread_msgs: Vec<&ThreadMessage> =
@@ -399,7 +405,7 @@ impl App {
                 writeln!(out).map_err(|e| format!("thread row sep: {}", e))?;
             }
         }
-        writeln!(out, "{}", "-".repeat(37)).map_err(|e| format!("thread foot rule: {}", e))?;
+        writeln!(out, "{}", "-".repeat(45)).map_err(|e| format!("thread foot rule: {}", e))?;
         // Compose input. Cursor is `_` at the end of the buffer for
         // Phase A — no horizontal scroll if the buffer is wider than
         // the visible width, just shows the trailing chars.
