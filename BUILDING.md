@@ -39,6 +39,14 @@ wrong — please open an issue.
 
 ### Required for hardware path only
 
+- The **Xous Rust target sysroot** for `riscv32imac-unknown-xous-elf`.
+  See section 1.5 for what this is, why it's required, and how to
+  install it. The summary: `riscv32imac-unknown-xous-elf` is a Rust
+  tier-3 target — the compiler knows the target name but the std
+  library binaries are not shipped via rustup. You need to install
+  them once before you can cross-compile xas. **`rustup target add
+  riscv32imac-unknown-xous-elf` is NOT enough by itself** — see
+  section 1.5 for the actual install path.
 - A **Precursor PVT2** (the RISC-V hardware device).
 - A **USB-C cable** that supports data (not power-only) — to
   connect Precursor to your build host (or to a Raspberry Pi).
@@ -62,6 +70,17 @@ wrong — please open an issue.
 ---
 
 ## 1. Clone the source
+
+> **Reproducibility note (2026-05-09)**: at time of writing, the
+> two GitHub forks referenced below carry the work-in-progress
+> commits behind the alpha released by tunnell. If you cloned
+> moments after they were last pushed, you should be in sync. If
+> they haven't been pushed at all (check the `Updated` timestamp
+> on each repo), the most reliable path is to `cargo clone` from
+> someone who has the local checkout, OR apply the patches in
+> `upstream-patches.md` against the canonical upstream
+> repositories listed there. We're working on getting these
+> properly published.
 
 xas depends on a forked `xous-core` because two upstream bugs
 need to be patched for the Wi-Fi + WebSocket path to work
@@ -104,6 +123,116 @@ Verify the layout:
 you cloned as `~/code/xas/xous-core`.
 
 ---
+
+## 1.5. Install the Xous Rust target sysroot (hardware path only)
+
+**Skip this section if you only intend to use hosted mode.** It
+applies only when you'll cross-compile xas for the Precursor's
+`riscv32imac-unknown-xous-elf` target.
+
+### Why this is a separate step
+
+When you build a Rust crate for a target, the compiler needs a
+precompiled `std` (and friends — `core`, `alloc`,
+`compiler_builtins`, etc.) that's been built for that target.
+Rust's release process distributes these for "tier-1" and
+"tier-2" targets via `rustup target add`. **`riscv32imac-unknown-xous-elf`
+is a tier-3 target**, which means the Rust project supports the
+target *in source* but doesn't build or distribute the std
+binaries through rustup.
+
+You can confirm this by running:
+
+```sh
+rustup target add riscv32imac-unknown-xous-elf
+```
+
+You'll see:
+
+```
+warn: skipping unavailable component rust-std for target
+      riscv32imac-unknown-xous-elf
+```
+
+The target is "added" (recognized), but the precompiled
+`rust-std` component isn't downloaded — it doesn't exist as a
+published rustup component. Try to build now and you'll get
+errors like `error[E0463]: can't find crate for `core``.
+
+You have to install the sysroot some other way.
+
+### How to install it (recommended path)
+
+The cleanest install is via xous-core's xtask, which on a fresh
+box ends up running `rustup target add` (with the same warning)
+and **also** has historically grabbed a precompiled sysroot from
+the Xous community's distribution channel. The exact mechanism
+depends on the xous-core revision.
+
+```sh
+cd ~/code/xas/xous-core
+cargo xtask install-toolkit
+```
+
+When prompted, answer **Y** to install. The first run takes a few
+minutes (downloads + unpacks std + companion crates).
+
+To verify success:
+
+```sh
+ls ~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/riscv32imac-unknown-xous-elf/lib/ \
+    | grep '^libstd-'
+```
+
+You should see one or more `libstd-*.rlib` files. If the
+directory is empty or doesn't exist, the install didn't take —
+fall back to the build-from-source path below.
+
+### Fallback: build the sysroot from source
+
+If `cargo xtask install-toolkit` doesn't successfully populate the
+sysroot (the project ships a stale `docs/build-rust-sysroot.sh`
+which is only correct for the pre-Rust-1.55 source tree layout
+and will not work as-is), you have two options:
+
+**Option A — `-Z build-std`** (works on any nightly-capable
+Rust). Add `-Z build-std=std,panic_abort` to your cargo
+invocations. This rebuilds std from source on every clean build,
+which is slow (~5 min added to each cold build) but works
+without any extra setup beyond `rustup component add rust-src`.
+You may need to also `RUSTC_BOOTSTRAP=1 cargo ...` if your
+toolchain is stable rather than nightly.
+
+**Option B — manually build the sysroot** from the Xous Rust
+fork (`xous-os/rust`). The script that does this is in
+`xous-core/docs/build-rust-sysroot.sh`, but it's stale: it
+references the pre-1.55 `src/libcore`, `src/liballoc`, `src/libstd`
+layout. To make it work today, you'd need to update the paths
+to `library/core`, `library/alloc`, `library/std` and possibly
+chase down a few related changes. Allow ~1-2 hours.
+
+If you find yourself reaching for option B, please open an issue
+at <https://github.com/tunnell/xous-app-signal/issues> — the
+goal is for option A to "just work" via `cargo xtask
+install-toolkit` and the manual fallback to be unnecessary.
+
+### Why this isn't easier
+
+Three things conspire to make this awkward:
+
+1. The Rust project hasn't promoted `riscv32imac-unknown-xous-elf`
+   to tier-2. That would require ongoing maintainer commitment to
+   keep the target buildable on every Rust release. The Xous
+   community has chosen to keep the target tier-3 (lower
+   maintenance burden) for now.
+2. Tier-3 targets don't get precompiled rust-std distributed via
+   rustup — every project that uses one has to bootstrap a
+   sysroot somehow.
+3. The Xous community could publish a prebuilt sysroot tarball
+   per Rust release as a workaround (Option C, not yet done) —
+   that would make the install one-line: download, extract,
+   point cargo at it. We've filed this as an upstream improvement
+   suggestion; until then, the bootstrap dance above is the path.
 
 ## 2. Hosted-mode path (Linux x86_64, no hardware)
 
