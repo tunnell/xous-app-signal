@@ -25,7 +25,8 @@
 //! - **Inbox**: list of received messages (sender + body +
 //!   timestamp). Enter returns to Menu.
 //!
-//! - **SendResult { ok, status }**: outcome of a `Cmd::SendMessage`
+//! - **(SendResult / Inbox screens were removed in the conversation-list redesign;
+//!   their roles are folded into Home + Thread.)
 //!   round-trip. Enter returns to Menu.
 //!
 //! Worker integration: events from the bridge worker (`event_rx`)
@@ -66,22 +67,18 @@ enum XasOp {
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum Screen {
+    /// Pre-link app menu (Link / About / Quit) and post-link app
+    /// menu opened from Home via the Menu key (About / Quit).
     Menu,
     About,
     Linking,
     Linked { kind: LinkedKind },
-    Inbox,
-    /// Conversation list — Phase A scaffolding. Renders one row per
-    /// UUID from `App.dialogues`, with `App.home_focus` driving the
-    /// `>` cursor. Phase A keeps the existing menu intact and routes
-    /// here only via `MenuItem::Home`; later phases replace the menu
-    /// landing with this screen.
+    /// Post-link landing: conversation list. Default screen after
+    /// `LinkComplete`. Pressing the Menu key from here opens the
+    /// app menu (About / Quit).
     Home,
-    /// Per-conversation history view, read-only in Phase A. Shows
-    /// the messages from `App.messages` filtered by `uuid`, oldest
-    /// at top. A later step adds a compose input at the bottom.
+    /// Per-conversation history view + compose input.
     Thread { uuid: Uuid },
-    SendResult { ok: bool, status: String },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -94,13 +91,6 @@ enum LinkedKind {
 enum MenuItem {
     // Pre-link items
     Link,
-    // Post-link items
-    Inbox,
-    Send,
-    /// Conversation-list view (Phase A scaffolding). Sits alongside
-    /// Inbox/Send for now; later phases promote it to the default
-    /// post-link landing screen and drop Inbox/Send.
-    Home,
     // Always
     About,
     Quit,
@@ -131,11 +121,8 @@ struct App {
     /// is silently dropped — Phase B widens this to anything the
     /// GAM font can render.
     compose_buffer: String,
-    /// Most-recent inbound sender (used as default recipient when
-    /// the user picks Send before any contact is known).
-    last_sender: Option<String>,
-    /// One-line text rendered on transient screens (Linked,
-    /// SendResult). Cleared on transition to Menu.
+    /// One-line text rendered on transient screens (Linked banner,
+    /// optional SendError surface). Cleared on transition to Home.
     last_status: String,
     quit_requested: bool,
     /// True between Cmd::LinkDevice send and Event::Link{Complete,Error}.
@@ -146,23 +133,15 @@ struct App {
 }
 
 impl App {
-    fn menu_items(&self) -> [Option<MenuItem>; 5] {
+    fn menu_items(&self) -> [Option<MenuItem>; 3] {
         if self.linked {
-            [
-                Some(MenuItem::Home),
-                Some(MenuItem::Inbox),
-                Some(MenuItem::Send),
-                Some(MenuItem::About),
-                Some(MenuItem::Quit),
-            ]
+            // Post-link Menu is opened from Home via the Menu key.
+            // Just two utility actions; the actual conversational
+            // surface lives in Home + Thread.
+            [Some(MenuItem::About), Some(MenuItem::Quit), None]
         } else {
-            [
-                Some(MenuItem::Link),
-                Some(MenuItem::About),
-                Some(MenuItem::Quit),
-                None,
-                None,
-            ]
+            // Pre-link Menu IS the landing screen.
+            [Some(MenuItem::Link), Some(MenuItem::About), Some(MenuItem::Quit)]
         }
     }
 
@@ -249,18 +228,8 @@ impl App {
                 )
                 .map_err(|e| format!("write Linked: {}", e))?
             }
-            Screen::Inbox => self.write_inbox(&mut tv.text)?,
             Screen::Home => self.write_home(&mut tv.text)?,
             Screen::Thread { uuid } => self.write_thread(&mut tv.text, uuid)?,
-            Screen::SendResult { ok, status } => {
-                let title = if *ok { "Sent" } else { "Send failed" };
-                write!(
-                    tv.text,
-                    "{}\n\n{}\n\nPress Enter to return.",
-                    title, status
-                )
-                .map_err(|e| format!("write SendResult: {}", e))?
-            }
         }
 
         self.gam
@@ -278,9 +247,6 @@ impl App {
                 let mark = if item == self.selected { ">" } else { " " };
                 let label = match item {
                     MenuItem::Link => "Link device",
-                    MenuItem::Home => "Home",
-                    MenuItem::Inbox => "Inbox",
-                    MenuItem::Send => "Send message",
                     MenuItem::About => "About",
                     MenuItem::Quit => "Quit",
                 };
@@ -442,25 +408,6 @@ impl App {
         Ok(())
     }
 
-    fn write_inbox(&self, out: &mut String) -> Result<(), String> {
-        if self.messages.is_empty() {
-            write!(out, "Inbox\n\n(no messages yet)\n\nWaiting for inbound\nmessages...\n\nEnter: return")
-                .map_err(|e| format!("inbox empty: {}", e))?;
-            return Ok(());
-        }
-        write!(out, "Inbox ({})\n\n", self.messages.len())
-            .map_err(|e| format!("inbox hdr: {}", e))?;
-        // Render newest first; truncate sender + body so the screen
-        // doesn't overflow. `messages` is push-back-ordered so we
-        // iterate in reverse to surface the latest at the top.
-        for msg in self.messages.iter().rev() {
-            let sender_short = truncate(&msg.author_label, 22);
-            let body_short = truncate(&msg.body, 80);
-            write!(out, "from: {}\n  {}\n\n", sender_short, body_short)
-                .map_err(|e| format!("inbox msg: {}", e))?;
-        }
-        write!(out, "\nEnter: return").map_err(|e| format!("inbox foot: {}", e))
-    }
 }
 
 /// Whether a character is acceptable in the Thread compose buffer.
@@ -469,6 +416,71 @@ impl App {
 /// widens to anything the GAM font can render.
 fn is_compose_char(c: char) -> bool {
     c.is_alphanumeric() || c == ' ' || c.is_ascii_punctuation()
+}
+
+/// If `XAS_MOCK_MESSAGES=1` is set in the environment, seed `App` with
+/// a small fake conversation history so hosted-mode UI iteration
+/// shows a populated Home + Thread without needing signal-cli traffic.
+/// Linked state is unaffected; messages are RAM-only and disappear
+/// across runs unless `pddb dump` is invoked.
+///
+/// Hosted-only: `std::env::var` is harmless on rv32 too (no env there)
+/// but the path simply does nothing without the variable set.
+fn seed_mock_messages_if_requested(app: &mut App) {
+    if std::env::var("XAS_MOCK_MESSAGES").ok().as_deref() != Some("1") {
+        return;
+    }
+    log::info!("xas/gam_app: XAS_MOCK_MESSAGES=1 — seeding mock history");
+
+    let now_ms = unix_now_ms();
+    let alice = Uuid::from_u128(0x0a11ce_aaaaaa_bbbbbb_cccccc_dddddd_001);
+    let bob = Uuid::from_u128(0x0b0b_bbbbbb_cccccc_dddddd_eeeeee_002);
+    let dad = Uuid::from_u128(0xdad0_cccccc_dddddd_eeeeee_ffffff_003);
+    let unknown = Uuid::from_u128(0x9999_dddddd_eeeeee_ffffff_111111_004);
+
+    let mocks: &[(Uuid, &str, &str, u64, bool, SendStatus)] = &[
+        (alice, "Alice Nguyen", "sure, meet at 6", 2 * 60_000, false, SendStatus::Sent),
+        (alice, "Alice Nguyen", "I'll bring drinks", 1 * 60_000, false, SendStatus::Sent),
+        (alice, "Alice Nguyen", "actually make it 6:30", 30_000, false, SendStatus::Sent),
+        (bob, "Bob Kowalski", "did you get the file?", 12 * 60_000, false, SendStatus::Sent),
+        (bob, "You", "yes, on my way", 11 * 60_000, true, SendStatus::Delivered),
+        (bob, "Bob Kowalski", "thanks!", 5 * 60_000, false, SendStatus::Sent),
+        (dad, "Dad", "lunch sunday?", 25 * 60 * 60_000, false, SendStatus::Sent),
+        (dad, "You", "On my way", 24 * 60 * 60_000, true, SendStatus::Delivered),
+        (
+            unknown,
+            "+14155550199",
+            "Your Uber has arrived",
+            3 * 60 * 60_000,
+            false,
+            SendStatus::Sent,
+        ),
+        (
+            unknown,
+            "+14155550199",
+            "Your driver is waiting",
+            2 * 60 * 60_000,
+            false,
+            SendStatus::Sent,
+        ),
+    ];
+
+    for (uuid, label, body, age_ms, outgoing, status) in mocks {
+        app.messages.push(ThreadMessage {
+            uuid: *uuid,
+            author_label: label.to_string(),
+            body: body.to_string(),
+            timestamp: now_ms.saturating_sub(*age_ms),
+            outgoing: *outgoing,
+            status: *status,
+        });
+    }
+    app.dialogues = rebuild_summaries(&app.messages);
+    // Mark linked + jump straight into Home so the demo lands on the
+    // populated conversation list rather than the pre-link Welcome.
+    app.linked = true;
+    app.screen = Screen::Home;
+    app.home_focus = 0;
 }
 
 /// Unix milliseconds, or 0 if the system clock is somehow before
@@ -482,15 +494,6 @@ fn unix_now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut r: String = s.chars().take(max.saturating_sub(1)).collect();
-        r.push('…');
-        r
-    }
-}
 
 pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String> {
     log::info!("xas/gam_app: starting GAM-rendered loop");
@@ -571,11 +574,11 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
         dialogues: Vec::new(),
         home_focus: 0,
         compose_buffer: String::new(),
-        last_sender: None,
         last_status: String::new(),
         quit_requested: false,
         linking_in_progress: false,
     };
+    seed_mock_messages_if_requested(&mut app);
     app.render().ok();
 
     loop {
@@ -598,8 +601,13 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
                 if app.quit_requested {
                     let _ = app.gam.switch_to_app(gam::APP_NAME_SHELLCHAT, token);
                     log::info!("xas/gam_app: hidden via Quit; staying alive");
-                    app.screen = Screen::Menu;
-                    app.selected = if app.linked { MenuItem::Inbox } else { MenuItem::Link };
+                    if app.linked {
+                        app.screen = Screen::Home;
+                        app.home_focus = 0;
+                    } else {
+                        app.screen = Screen::Menu;
+                        app.selected = MenuItem::Link;
+                    }
                     app.last_status.clear();
                     app.quit_requested = false;
                 }
@@ -650,23 +658,27 @@ fn handle_keys(
             (Screen::Menu, '↓') => app.move_cursor(1),
             (Screen::Menu, '∴') | (Screen::Menu, '\u{d}') => match app.selected {
                 MenuItem::Link => drive_link(app, cmd_tx, event_rx, modals_xns),
-                MenuItem::Home => {
-                    app.home_focus = 0;
-                    app.screen = Screen::Home;
-                }
-                MenuItem::Inbox => app.screen = Screen::Inbox,
-                MenuItem::Send => drive_send(app, cmd_tx, modals_xns),
                 MenuItem::About => app.screen = Screen::About,
                 MenuItem::Quit => app.quit_requested = true,
             },
-            (Screen::About, '∴') | (Screen::About, '\u{d}') => app.screen = Screen::Menu,
-            (Screen::Linked { .. }, '∴') | (Screen::Linked { .. }, '\u{d}') => {
-                app.screen = Screen::Menu;
-                app.selected = if app.linked { MenuItem::Inbox } else { MenuItem::Link };
-                app.last_status.clear();
+            // Esc on the post-link Menu returns to Home (the landing).
+            // Pre-link, Menu IS the landing — Esc is a no-op.
+            (Screen::Menu, '\u{1b}') if app.linked => {
+                app.screen = Screen::Home;
+                app.selected = MenuItem::About;
             }
-            (Screen::Inbox, '∴') | (Screen::Inbox, '\u{d}') => {
-                app.screen = Screen::Menu;
+            (Screen::About, '∴') | (Screen::About, '\u{d}') => {
+                app.screen = if app.linked { Screen::Home } else { Screen::Menu };
+            }
+            (Screen::Linked { .. }, '∴') | (Screen::Linked { .. }, '\u{d}') => {
+                if app.linked {
+                    app.screen = Screen::Home;
+                    app.home_focus = 0;
+                } else {
+                    app.screen = Screen::Menu;
+                    app.selected = MenuItem::Link;
+                }
+                app.last_status.clear();
             }
             (Screen::Home, '↑') => {
                 app.home_focus = app.home_focus.saturating_sub(1);
@@ -679,12 +691,16 @@ fn handle_keys(
             }
             (Screen::Home, '∴') | (Screen::Home, '\u{d}') => {
                 // Open the focused thread. If the list is empty,
-                // fall back to the menu.
+                // do nothing — user can still press the Menu key
+                // to access About / Quit.
                 if let Some(d) = app.dialogues.get(app.home_focus) {
                     app.screen = Screen::Thread { uuid: d.uuid };
-                } else {
-                    app.screen = Screen::Menu;
                 }
+            }
+            // Menu / Esc on Home opens the app menu.
+            (Screen::Home, '☰') | (Screen::Home, '\u{1b}') => {
+                app.screen = Screen::Menu;
+                app.selected = MenuItem::About;
             }
             (Screen::Thread { uuid }, '∴') | (Screen::Thread { uuid }, '\u{d}') => {
                 // Enter behavior depends on compose buffer state:
@@ -743,10 +759,6 @@ fn handle_keys(
             }
             (Screen::Thread { .. }, c) if is_compose_char(c) => {
                 app.compose_buffer.push(c);
-            }
-            (Screen::SendResult { .. }, '∴') | (Screen::SendResult { .. }, '\u{d}') => {
-                app.screen = Screen::Menu;
-                app.selected = MenuItem::Send;
             }
             // Linking is transient (waiting on worker); rawkeys are
             // ignored.
@@ -836,7 +848,6 @@ fn handle_worker_event(
                 log::warn!("xas/gam_app: sender {:?} doesn't parse as UUID; using nil", sender);
                 Uuid::nil()
             });
-            app.last_sender = Some(sender);
             // Drop oldest first if we've hit the cap, then append.
             if app.messages.len() >= INBOX_CAPACITY {
                 app.messages.remove(0);
@@ -866,8 +877,8 @@ fn handle_worker_event(
             // state. No screen change — the Thread is already showing
             // the message.
             //
-            // Otherwise (no match), the send was menu-initiated via
-            // `drive_send`; show the legacy SendResult screen.
+            // Otherwise (no match), the worker emitted an event for
+            // a send we don't have an optimistic row for. Log + ignore.
             let matched = app
                 .messages
                 .iter_mut()
@@ -877,17 +888,13 @@ fn handle_worker_event(
                 m.status = SendStatus::Delivered;
                 app.dialogues = rebuild_summaries(&app.messages);
             } else {
-                app.screen = Screen::SendResult {
-                    ok: true,
-                    status: format!("server timestamp = {}", timestamp),
-                };
+                log::info!(
+                    "xas/gam_app: SendComplete ts={} with no matching pending row",
+                    timestamp
+                );
             }
         }
         Event::SendError { reason, timestamp } => {
-            // Same pattern as SendComplete: if a matching pending
-            // Thread message exists, mark it Failed in place;
-            // otherwise treat as a menu-Send result and pop the
-            // SendResult screen.
             let matched = timestamp.and_then(|ts| {
                 app.messages
                     .iter_mut()
@@ -899,7 +906,12 @@ fn handle_worker_event(
                 app.dialogues = rebuild_summaries(&app.messages);
                 app.last_status = format!("Send: {}", reason);
             } else {
-                app.screen = Screen::SendResult { ok: false, status: reason };
+                log::warn!(
+                    "xas/gam_app: SendError reason={} ts={:?} with no matching row",
+                    reason,
+                    timestamp
+                );
+                app.last_status = format!("Send: {}", reason);
             }
         }
         Event::ShuttingDown => {
@@ -995,90 +1007,3 @@ fn drive_link(
     // Return now; events arrive via the forwarder.
 }
 
-/// Drive the send flow. Two TextEntry modals (recipient + body)
-/// then a `Cmd::SendMessage` whose result lands as a worker event
-/// processed by `handle_worker_event` (which sets the
-/// `Screen::SendResult` view).
-fn drive_send(app: &mut App, cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::XousNames) {
-    let modals = match modals::Modals::new(modals_xns) {
-        Ok(m) => m,
-        Err(e) => {
-            app.screen = Screen::SendResult {
-                ok: false,
-                status: format!("modals init: {:?}", e),
-            };
-            return;
-        }
-    };
-
-    // Step 1: recipient. Default to last received sender if any.
-    let default_recipient = app.last_sender.clone().unwrap_or_default();
-    let recipient = match modals
-        .alert_builder("Recipient (ACI/phone):")
-        .field(Some(default_recipient), None)
-        .build()
-    {
-        Ok(payloads) => payloads.first().as_str().trim().to_string(),
-        Err(e) => {
-            app.screen = Screen::SendResult {
-                ok: false,
-                status: format!("recipient modal: {:?}", e),
-            };
-            return;
-        }
-    };
-    if recipient.is_empty() {
-        app.screen = Screen::SendResult {
-            ok: false,
-            status: "no recipient".to_string(),
-        };
-        return;
-    }
-
-    // Step 2: body.
-    let body = match modals
-        .alert_builder("Message body:")
-        .field(Some(String::new()), None)
-        .build()
-    {
-        Ok(payloads) => payloads.first().as_str().to_string(),
-        Err(e) => {
-            app.screen = Screen::SendResult {
-                ok: false,
-                status: format!("body modal: {:?}", e),
-            };
-            return;
-        }
-    };
-    if body.is_empty() {
-        app.screen = Screen::SendResult {
-            ok: false,
-            status: "empty body".to_string(),
-        };
-        return;
-    }
-
-    log::info!(
-        "xas/gam_app: send to={} ({} body bytes)",
-        recipient,
-        body.len()
-    );
-    let send_ts = unix_now_ms();
-    if let Err(e) =
-        cmd_tx.send_blocking(Cmd::SendMessage { recipient, body, timestamp: send_ts })
-    {
-        app.screen = Screen::SendResult {
-            ok: false,
-            status: format!("Cmd::SendMessage send: {:?}", e),
-        };
-        return;
-    }
-
-    // The result comes back asynchronously via the forwarder
-    // thread → WorkerEvent → handle_worker_event → SendResult.
-    // Stay on Menu until that fires; render a placeholder.
-    app.screen = Screen::SendResult {
-        ok: true,
-        status: "sending...".to_string(),
-    };
-}
