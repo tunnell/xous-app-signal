@@ -15,15 +15,14 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug_span, Instrument};
 
 /// Interval between application-level keepalives on the auth WS.
-///
-/// Signal's server idle-closes after ~55s. Upstream uses 55s
-/// here, which leaves no margin: any timer skew or scheduler
-/// jitter on the rv32 target lets the server close the socket
-/// before our keepalive arrives, surfacing as
-/// `"WebSocket closing while waiting for a response"` on the
-/// next send. Cut to 30s for headroom while we diagnose whether
-/// `futures_timer::Delay` is firing reliably on Xous.
-pub const KEEPALIVE_TIMEOUT_SECONDS: Duration = Duration::from_secs(30);
+/// Upstream value (55s). Restored from the temporary 30s used while
+/// diagnosing the rv32 WebSocket-closing bug — that turned out to be
+/// a kernel/std encoding mismatch in xous-core/services/net (fixed in
+/// std_glue.rs::respond_with_error byte-1 mirror), not a keepalive
+/// timing issue. Shorter interval increased timer-vs-response race
+/// pressure on libsignal's keepalive close logic; back to 55s gives
+/// the close-tolerance fix below more breathing room.
+pub const KEEPALIVE_TIMEOUT_SECONDS: Duration = Duration::from_secs(55);
 pub static DEFAULT_DEVICE_ID: LazyLock<libsignal_core::DeviceId> =
     LazyLock::new(|| libsignal_core::DeviceId::try_from(1).unwrap());
 
