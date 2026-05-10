@@ -57,9 +57,9 @@ or a roadmap item (planned but not yet built).
 | Conversation list (Home) | ✅ | Per-thread last-message + relative timestamp + unread indicator |
 | Per-thread message view | ✅ | Optimistic-render compose; auto-mark-read on thread open |
 | Group chats (read or write) | ❌ | Roadmap. Adds ~1 MiB of state per group + UI surface |
-| Disappearing messages | ❌ | Roadmap. presage exposes the timer; xas doesn't render it yet |
+| Disappearing messages | ❌ | Body still displays but no timer indicator; xas doesn't honor the expire_timer (no auto-delete). Roadmap |
 | Typing indicators | ❌ | Roadmap. Low priority |
-| Read receipts (sending) | ⚠️ | Sent automatically by libsignal on read; not user-controllable in xas |
+| Read receipts (sending) | ❌ | Auto-mark-read on thread open updates UI state only; xas doesn't call any send-receipt API. Roadmap |
 | Stories | ❌ | Out of scope. Built around media |
 
 ### Media + attachments
@@ -69,7 +69,7 @@ or a roadmap item (planned but not yet built).
 | Image / video / file attachments (send or receive) | ❌ | Out of scope. Display + storage budget too small for media-first UX |
 | Voice notes | ❌ | Hardware: no microphone codec wired through Xous |
 | Stickers | ❌ | Out of scope. Display is monochrome |
-| Emoji reactions | ❌ | Roadmap. Renderable as glyphs |
+| Emoji reactions | ❌ | Inbound reactions arrive as DataMessages with empty body and are silently dropped at process_received. No outbound UI either. Roadmap |
 
 ### Calling
 
@@ -84,8 +84,9 @@ or a roadmap item (planned but not yet built).
 |---|---|---|
 | Display name + phone number on Profile | ✅ | Read from registration data |
 | Profile editing (name / picture / about) | ❌ | Roadmap. Read-only today |
-| Username (`@alice.42`) on Profile | ❌ | Roadmap. presage may not yet expose; needs verification |
-| Username / phone-number lookup in "New chat" | ❌ | Today only UUID is accepted; F1 New chat rejects username + E.164 with "lookup not yet supported." Roadmap |
+| Username (`@alice.42`) on Profile | ❌ | No API to read one's own Signal username in our build (RegistrationData has no username field; Profile struct has no username field). The primary phone holds that state |
+| Username lookup in "New chat" | ✅ | F1 → enter `name.42` → presage's `lookup_username` resolves to ACI; UI opens a Thread |
+| Phone-number lookup in "New chat" | ❌ | Needs CDSI which requires boring-sys (BoringSSL) — disabled in this build because it can't target rv32-xous |
 | Logout | ⚠️ | Stub today (tells the user to wipe PDDB manually); real implementation on roadmap |
 | Multiple linked accounts | ❌ | Single-account device by design |
 | Primary registration (this device IS the primary) | ❌ | Out of scope. Secondary-device only — your phone stays primary |
