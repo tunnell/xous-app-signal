@@ -1,4 +1,4 @@
-//! App menu — UI.md §5.10.
+//! App menu.
 //!
 //! Modal: New chat / Mark all read / (sep) / Link another device /
 //! Settings / About / (sep) / Test worker (echo) / Quit.

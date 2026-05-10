@@ -1,4 +1,4 @@
-//! Empty conversation list — UI.md §5.6.
+//! Empty conversation list.
 //!
 //! Shown after a successful link when the local store has no threads
 //! yet. The hint footer collapses to one item ("Menu") since no

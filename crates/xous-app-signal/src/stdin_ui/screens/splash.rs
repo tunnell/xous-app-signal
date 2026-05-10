@@ -1,4 +1,4 @@
-//! Splash / first-run screen — UI.md §5.1.
+//! Splash / first-run screen.
 //!
 //! Four menu items: Link this device / Register a phone number (greyed)
 //! / About / Quit. Up/Down moves focus, Home selects.

@@ -1,9 +1,9 @@
-//! Conversation list — UI.md §5.6 (empty) and §5.7 (populated).
+//! Conversation list.
 //!
 //! On entry the driver sends `Cmd::StartReceive`. The screen's status
 //! tracks whether the receive loop is active; received messages are
 //! appended to a flat `Vec<MessageSummary>` (could later group by
-//! thread per UI.md §5.7's pinned/unpinned layout, but for MVP a
+//! thread per the original UI design (since superseded; see git log for the spec)'s pinned/unpinned layout, but for MVP a
 //! single chronological list is enough).
 
 use crate::stdin_ui::key::Key;
@@ -87,7 +87,7 @@ impl ConversationListScreen {
         out.push(String::new());
 
         if self.messages.is_empty() {
-            // Empty state — UI.md §5.6.
+            // Empty state.
             out.push(String::new());
             out.push(String::from("              No messages yet."));
             out.push(String::new());

@@ -19,7 +19,7 @@ pub const WIDTH: usize = 50;
 pub const HEIGHT: usize = 22;
 
 /// Render one frame to stdout, framed with the status bar and hint
-/// footer described in UI.md §3. Lines too long for `WIDTH` are
+/// footer described in the original UI design (since superseded; see git log for the spec) Lines too long for `WIDTH` are
 /// truncated; lines shorter are padded out so the box-rendering
 /// stays aligned.
 ///

@@ -1,4 +1,4 @@
-//! About screen — UI.md §5.11.
+//! About screen.
 //!
 //! End-user verifiability surface: lists every upstream version we
 //! pin, so a photograph of this screen reproduces the build. All

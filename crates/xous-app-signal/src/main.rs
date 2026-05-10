@@ -12,7 +12,7 @@
 //! 4. Worker shutdown is the responsibility of the UI driver — it
 //!    sends `Cmd::Shutdown` on Quit.
 //!
-//! See docs/ROADMAP.md and docs/UI.md for the design.
+//! See docs/ARCHITECTURE.md and docs/UI.md for the runtime + UI design.
 
 mod dialogue;
 mod gam_app;

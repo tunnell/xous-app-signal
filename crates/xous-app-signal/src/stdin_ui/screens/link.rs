@@ -1,4 +1,4 @@
-//! Linking-flow screens — UI.md §5.2-5.5.
+//! Linking-flow screens.2-5.5.
 //!
 //! Four sub-states: `Starting` (waiting for the URL), `ShowUrl` (URL
 //! received; user scans/copies), `Confirming` (phone scanned;
@@ -51,7 +51,7 @@ impl LinkStartingScreen {
 }
 
 // ---------------------------------------------------------------
-// LinkShowUrl — UI.md §5.2. URL has arrived. Rendered as monospaced
+// LinkShowUrl. URL has arrived. Rendered as monospaced
 // text in this stdin-driven UI; QR rendering happens in `gam_app.rs`
 // for the GAM-driven path.
 // ---------------------------------------------------------------
@@ -110,7 +110,7 @@ fn chunk_str(s: &str, width: usize) -> Vec<&str> {
 }
 
 // ---------------------------------------------------------------
-// LinkConfirming — UI.md §5.3. Phone has scanned; user must confirm
+// LinkConfirming. Phone has scanned; user must confirm
 // on phone. We can't peek into presage's internal state to know
 // when this happens; the screen shows a static "confirm on phone"
 // message until the worker emits LinkComplete or LinkError.
@@ -147,7 +147,7 @@ impl LinkConfirmingScreen {
 }
 
 // ---------------------------------------------------------------
-// LinkDone — UI.md §5.4. Linking complete. Shows registration data
+// LinkDone. Linking complete. Shows registration data
 // for verifiability. Home transitions to the empty-list screen.
 // ---------------------------------------------------------------
 
@@ -208,7 +208,7 @@ fn short(s: &str, max: usize) -> String {
 }
 
 // ---------------------------------------------------------------
-// LinkError — UI.md §5.5. Linking failed. Shows the error string +
+// LinkError. Linking failed. Shows the error string +
 // a Retry/Cancel choice.
 // ---------------------------------------------------------------
 

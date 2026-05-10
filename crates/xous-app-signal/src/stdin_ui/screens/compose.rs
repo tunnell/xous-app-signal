@@ -1,4 +1,4 @@
-//! Compose screen — UI.md §5.9.
+//! Compose screen.
 //!
 //! One per send. Holds the recipient (set on construction from the
 //! most-recent received message's sender, or could be entered
