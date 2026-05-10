@@ -23,7 +23,7 @@ use presage::libsignal_service::protocol::{IdentityKeyPair, SenderCertificate};
 use presage::manager::RegistrationData;
 use presage::store::StateStore;
 
-use crate::{Error, PddbStore};
+use crate::{Error, PddbStore, backend_get_json, backend_put_json};
 
 /// PDDB dictionary that holds all `StateStore` keys.
 const DICT: &str = "signal.state";
@@ -40,13 +40,7 @@ impl StateStore for PddbStore {
     type StateStoreError = Error;
 
     async fn load_registration_data(&self) -> Result<Option<RegistrationData>, Error> {
-        match self.backend.get(DICT, KEY_REGISTRATION)? {
-            Some(bytes) => {
-                let data: RegistrationData = serde_json::from_slice(&bytes)?;
-                Ok(Some(data))
-            }
-            None => Ok(None),
-        }
+        backend_get_json(&*self.backend, DICT, KEY_REGISTRATION)
     }
 
     async fn set_aci_identity_key_pair(&self, key_pair: IdentityKeyPair) -> Result<(), Error> {
@@ -62,9 +56,7 @@ impl StateStore for PddbStore {
     }
 
     async fn save_registration_data(&mut self, state: &RegistrationData) -> Result<(), Error> {
-        let bytes = serde_json::to_vec(state).map_err(Error::encode)?;
-        self.backend.put(DICT, KEY_REGISTRATION, &bytes)?;
-        Ok(())
+        backend_put_json(&*self.backend, DICT, KEY_REGISTRATION, state)
     }
 
     async fn sender_certificate(&self) -> Result<Option<SenderCertificate>, Error> {

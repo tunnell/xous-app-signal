@@ -45,7 +45,7 @@ use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{Error, PddbStore};
+use crate::{Error, PddbStore, backend_get_json, backend_put_json};
 
 // --- Dictionary names ---
 
@@ -220,17 +220,12 @@ impl ContentsStore for PddbStore {
         profile: Profile,
     ) -> Result<(), Error> {
         let dict_key = profile_dict_key(uuid, key);
-        let bytes = serde_json::to_vec(&profile).map_err(Error::encode)?;
-        self.backend.put(DICT_PROFILES, &dict_key, &bytes)?;
-        Ok(())
+        backend_put_json(&*self.backend, DICT_PROFILES, &dict_key, &profile)
     }
 
     async fn profile(&self, uuid: Uuid, key: ProfileKey) -> Result<Option<Profile>, Error> {
         let dict_key = profile_dict_key(uuid, key);
-        match self.backend.get(DICT_PROFILES, &dict_key)? {
-            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
-            None => Ok(None),
-        }
+        backend_get_json(&*self.backend, DICT_PROFILES, &dict_key)
     }
 
     async fn save_profile_avatar(
@@ -281,9 +276,7 @@ impl ContentsStore for PddbStore {
 
     async fn save_contact(&mut self, contact: &Contact) -> Result<(), Error> {
         let dict_key = contact.uuid.to_string();
-        let bytes = serde_json::to_vec(contact).map_err(Error::encode)?;
-        self.backend.put(DICT_CONTACTS, &dict_key, &bytes)?;
-        Ok(())
+        backend_put_json(&*self.backend, DICT_CONTACTS, &dict_key, contact)
     }
 
     async fn contacts(&self) -> Result<Self::ContactsIter, Error> {
@@ -301,10 +294,7 @@ impl ContentsStore for PddbStore {
 
     async fn contact_by_id(&self, id: &ServiceId) -> Result<Option<Contact>, Error> {
         let dict_key = id.raw_uuid().to_string();
-        match self.backend.get(DICT_CONTACTS, &dict_key)? {
-            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
-            None => Ok(None),
-        }
+        backend_get_json(&*self.backend, DICT_CONTACTS, &dict_key)
     }
 
     async fn clear_contacts(&mut self) -> Result<(), Error> {
@@ -321,9 +311,7 @@ impl ContentsStore for PddbStore {
     ) -> Result<(), Error> {
         let group: Group = group.into();
         let dict_key = group_key(&master_key);
-        let bytes = serde_json::to_vec(&group).map_err(Error::encode)?;
-        self.backend.put(DICT_GROUPS, &dict_key, &bytes)?;
-        Ok(())
+        backend_put_json(&*self.backend, DICT_GROUPS, &dict_key, &group)
     }
 
     async fn groups(&self) -> Result<Self::GroupsIter, Error> {
@@ -345,10 +333,7 @@ impl ContentsStore for PddbStore {
 
     async fn group(&self, master_key: GroupMasterKeyBytes) -> Result<Option<Group>, Error> {
         let dict_key = group_key(&master_key);
-        match self.backend.get(DICT_GROUPS, &dict_key)? {
-            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
-            None => Ok(None),
-        }
+        backend_get_json(&*self.backend, DICT_GROUPS, &dict_key)
     }
 
     async fn save_group_avatar(
@@ -379,17 +364,12 @@ impl ContentsStore for PddbStore {
 
     async fn add_sticker_pack(&mut self, pack: &StickerPack) -> Result<(), Error> {
         let dict_key = sticker_pack_key(&pack.id);
-        let bytes = serde_json::to_vec(pack).map_err(Error::encode)?;
-        self.backend.put(DICT_STICKER_PACKS, &dict_key, &bytes)?;
-        Ok(())
+        backend_put_json(&*self.backend, DICT_STICKER_PACKS, &dict_key, pack)
     }
 
     async fn sticker_pack(&self, id: &[u8]) -> Result<Option<StickerPack>, Error> {
         let dict_key = sticker_pack_key(id);
-        match self.backend.get(DICT_STICKER_PACKS, &dict_key)? {
-            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
-            None => Ok(None),
-        }
+        backend_get_json(&*self.backend, DICT_STICKER_PACKS, &dict_key)
     }
 
     async fn remove_sticker_pack(&mut self, id: &[u8]) -> Result<bool, Error> {
@@ -418,9 +398,7 @@ impl ContentsStore for PddbStore {
         let dict = thread_dict_name(thread);
         let key = message_key(message.metadata.timestamp);
         let stored = StoredMessage::from_content(message);
-        let bytes = serde_json::to_vec(&stored).map_err(Error::encode)?;
-        self.backend.put(&dict, &key, &bytes)?;
-        Ok(())
+        backend_put_json(&*self.backend, &dict, &key, &stored)
     }
 
     async fn delete_message(&mut self, thread: &Thread, timestamp: u64) -> Result<bool, Error> {
@@ -434,11 +412,8 @@ impl ContentsStore for PddbStore {
     async fn message(&self, thread: &Thread, timestamp: u64) -> Result<Option<Content>, Error> {
         let dict = thread_dict_name(thread);
         let key = message_key(timestamp);
-        match self.backend.get(&dict, &key)? {
-            Some(bytes) => {
-                let stored: StoredMessage = serde_json::from_slice(&bytes)?;
-                stored.into_content().map(Some)
-            }
+        match backend_get_json::<StoredMessage>(&*self.backend, &dict, &key)? {
+            Some(stored) => stored.into_content().map(Some),
             None => Ok(None),
         }
     }
