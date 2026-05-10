@@ -1,54 +1,41 @@
 [alias]
-# Stage 9b: `cargo xtask <subcommand>` runs the build-glue crate
-# at `xtask/`. Subcommands: build-rv32, dist, renode-test, help.
-# See xtask/src/main.rs for the full surface.
+# `cargo xtask <subcommand>` runs the local build-glue crate at
+# `xtask/` (NOT xous-core's xtask, which is invoked from the
+# xous-core directory). Subcommands: build-rv32, dist,
+# renode-test. See xtask/src/main.rs for the full surface.
 xtask = "run --package xtask --"
 
-# Per-target Cargo flags.
+# Per-target Cargo flags for the rv32-xous build.
 #
-# `curve25519_dalek_backend = "u32e_backend"` activates the Precursor-only
-# curve25519 IP-core HW accelerator inside the vendored
-# `betrusted-io/curve25519-dalek` fork (driver at
-# vendor/curve25519-dalek/curve25519-dalek/src/backend/serial/u32e/).
-# Set ONLY for rv32-xous builds — on hosted Linux the same code falls back
-# to the portable Rust backend, which is what we want for tests.
+# `getrandom_backend="custom"` tells the `getrandom` 0.3 crate
+# to expect a `__getrandom_v03_custom` extern provided by the
+# user's code. We supply it from `crates/xous-app-signal/src/main.rs`,
+# backed by xous-core's TRNG service. Without this rustflag, rv32
+# builds fail to find a getrandom backend and won't link.
 #
-# This is a **Precursor-only** acceleration choice. Bao1x has a different
-# PKE engine and would need a separate backend; the design accommodates a
-# future swap by leaving this cfg target-scoped. Per docs/REPORT.md
-# Decision 6.
-
+# Long-term resolution: either a 0.3-line xous fork upstreamed
+# into xous-core (so it ships with the toolchain), or a native
+# Xous backend embedded in upstream getrandom alongside the
+# `linux_android`/`apple` ones. Tracked in CHORES.md.
 [target.riscv32imac-unknown-xous-elf]
 rustflags = [
-    # Stage 6.1 phase 3f: getrandom 0.3 custom backend for rv32-xous.
-    # xous-core has a getrandom 0.2 fork (already patched in this
-    # workspace's [patch.crates-io]) but not yet 0.3. The cfg below
-    # tells getrandom 0.3 to expect a `__getrandom_v03_custom` extern
-    # in the user's code; we provide it from xous-app-signal/src/main.rs.
-    # This is a Stage 6.1 stop-gap — the right long-term fix is either a
-    # 0.3-line xous fork upstreamed into xous-core, or a `linux_android`-
-    # style native xous backend embedded in upstream getrandom.
     "--cfg", "getrandom_backend=\"custom\"",
 
-    # Stage 9b-deploy Phase C-3: u32e_backend STILL DISABLED, this
-    # time for a deeper reason than Stage 6.1's utralib feature.
-    # Re-enable attempt at Phase C found that with u32e active,
-    # `FieldElement` resolves to `u32e::field::Engine25519` (the
-    # IP-core engine handle), which is *not* interchangeable with
-    # `FieldElement2625`. The vendored libsignal lizard port (used
-    # by zkgroup's `RistrettoPoint::from_uniform_bytes_single_elligator`,
-    # called during the profile-fetch / group-message paths) mixes
-    # the two field types freely — its arithmetic only type-checks
-    # with the portable `u32` backend. Re-enabling u32e cleanly
-    # requires either:
-    #   (a) writing Engine25519 ↔ FieldElement2625 conversions in
-    #       the vendored curve25519-dalek lizard module (substantial:
-    #       fast-converting between IP-core state and the limb
-    #       representation while preserving the field semantics), or
-    #   (b) a libsignal upstream change to make zkgroup's lizard use
-    #       avoid the type mix.
-    # Both are out of scope here — Phase C delivers C-1 (real
-    # getrandom) and defers C-3 with reproducible failure notes in
-    # stage/REPORT-9b-deploy-C.md.
+    # The vendored betrusted-io fork of curve25519-dalek includes a
+    # `u32e_backend` that uses Precursor's Curve25519 IP-core
+    # accelerator. Currently DISABLED because libsignal's vendored
+    # zkgroup uses a "lizard" port (in
+    # `RistrettoPoint::from_uniform_bytes_single_elligator`) that
+    # mixes the IP-core engine's `Engine25519` field type freely
+    # with the portable `FieldElement2625`. The two aren't
+    # interchangeable, so the build only type-checks with the
+    # portable backend.
+    #
+    # Re-enabling cleanly requires either:
+    #   (a) Engine25519 ↔ FieldElement2625 conversions in the
+    #       vendored curve25519-dalek lizard module, or
+    #   (b) an upstream libsignal change to make zkgroup's lizard
+    #       use avoid the type mix.
+    # Both out of scope for now; uncomment once one ships.
     # "--cfg", "curve25519_dalek_backend=\"u32e_backend\"",
 ]
