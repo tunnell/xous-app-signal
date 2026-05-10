@@ -1348,25 +1348,28 @@ fn handle_worker_event(
     }
 }
 
-/// Hosted-mode helper: read `~/precursor-signal/.link_attempts`,
-/// increment it, return the device name to default to. Each link
-/// attempt gets a fresh `xasN` so the user can correlate this run's
-/// QR with the entry that lands in their phone's Linked Devices list.
+/// Hosted-mode helper: read `$HOME/.xas-link-attempts`, increment
+/// it, return the device name to default to. Each link attempt
+/// gets a fresh `xasN` so the user can correlate this run's QR
+/// with the entry that lands in their phone's Linked Devices list.
 ///
 /// File semantics: missing → create with `0`, use `0`, write `1`.
-/// Existing → read N, use N, write N+1.
+/// Existing → read N, use N, write N+1. If `$HOME` isn't set or
+/// the read/write fails, fall back to the bare `"xas"` name.
 ///
 /// Hosted-only: on rv32 there's no general filesystem, so this
 /// quietly falls back to "xas".
 #[cfg(not(target_os = "xous"))]
 fn next_attempt_device_name() -> String {
-    use std::path::Path;
-    let path = Path::new("/home/tunnell/precursor-signal/.link_attempts");
-    let n: u32 = std::fs::read_to_string(path)
+    let Ok(home) = std::env::var("HOME") else {
+        return "xas".to_string();
+    };
+    let path = std::path::PathBuf::from(home).join(".xas-link-attempts");
+    let n: u32 = std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or(0);
-    let _ = std::fs::write(path, format!("{}", n + 1));
+    let _ = std::fs::write(&path, format!("{}", n + 1));
     format!("xas{}", n)
 }
 

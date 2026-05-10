@@ -176,10 +176,9 @@ repositories:
    toolchain `r?` cycles take weeks; the kernel-side mirror in
    #1 is the immediately-shippable workaround.
 
-PR drafts for all three are tracked in
-`/home/tunnell/code/xas/upstream_prs/` (out-of-tree). Once #1
-lands upstream, BUILDING.md will be updated to point at stock
-`betrusted-io/xous-core`.
+PR drafts for all three are kept in the maintainer's working
+directory (out-of-tree). Once #1 lands upstream, BUILDING.md
+will be updated to point at stock `betrusted-io/xous-core`.
 
 ---
 
@@ -220,3 +219,36 @@ be readily incorporated into other future
 [Xous](https://github.com/betrusted-io/xous-core) related projects.
 We are **required** to license any derivative works of
 [libsignal](https://github.com/signalapp/libsignal) under the AGPL-3.0 license.
+
+---
+
+## Contributing — including AI-assisted contributions
+
+Contributions are welcome via pull request against the `dev`
+branch. See [`tests/README.md`](tests/README.md) for the
+branch convention and what release-cycle gates a PR has to
+pass before it can land in `main`.
+
+**AI-assisted contributions are explicitly welcome**, on one
+condition: **disclose them**. AI coding agents have been used
+in this codebase's development, and the project is honest about
+that — both because end-user verifiability is a stated value and
+because reviewers benefit from knowing where to look harder.
+
+Concretely:
+
+- If you used an AI agent to help write the diff, mention it in
+  the PR description. A short note is fine — "drafted with an AI
+  agent and reviewed line-by-line" or similar. No need to name
+  the specific tool.
+- The author of the commit is still you. AI agents are tools,
+  not co-authors. Don't add AI-attribution trailers to commit
+  messages.
+- Apply the same review discipline you'd apply to any code: the
+  PR is your work in the sense that you're vouching for it.
+  Read every line you submit.
+
+The reason for the disclosure norm is alignment with the
+project's threat model: users of this client need to be able to
+audit it. Knowing which sections were AI-assisted lets reviewers
+weight their attention.
