@@ -140,8 +140,8 @@ apps/xas/
 │   ├── libsignal-service-rs/   ← reqwest-replaced fork (Stage 6)
 │   └── curve25519-dalek/       ← betrusted-io fork + lizard port
 ├── docs/
-│   ├── REPORT.md, ROADMAP.md, INTEGRATION.md, SYNC.md (this), CALL_GRAPH.md
-│   └── stage/REPORT-*.md
+│   ├── ARCHITECTURE.md, INTEGRATION.md, SYNC.md (this), UI.md
+│   └── stage/REPORT-*.md  (historical per-stage execution reports)
 └── tests/renode/
     ├── xas-smoke.resc, xas-smoke.robot, run-renode-tests.sh   ← Stage 9b
 ```

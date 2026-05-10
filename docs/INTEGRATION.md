@@ -57,8 +57,8 @@ xous-core-for-xas/
         │                                 path members; otherwise minimal
         ├── README.md                   ← copy from xous-app-signal/README.md
         ├── docs/
-        │   ├── REPORT.md, ROADMAP.md, INTEGRATION.md (this file), CALL_GRAPH.md
-        │   └── stage/REPORT-*.md
+        │   ├── ARCHITECTURE.md, INTEGRATION.md (this file), SYNC.md, UI.md
+        │   └── stage/REPORT-*.md  (historical per-stage execution reports)
         ├── crates/
         │   ├── xous-app-signal/        ← the binary
         │   ├── xous-signal-bridge/

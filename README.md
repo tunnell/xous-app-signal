@@ -194,7 +194,7 @@ xous-app-signal/
 │   ├── xous-modals-ipc/        hand-rolled modals IPC client
 │   ├── xous-signal-bridge/     Manager-on-worker + IPC forwarder
 │   ├── xous-app-signal/        binary entry point (binary name: `xas`)
-│   └── xous-app-signal-ui/     stdin-driven UI (legacy; gam_app.rs is current)
+│   └── xous-app-signal-ui/     stdin-driven UI fallback for standalone runs (no Xous server)
 ├── docs/                       ARCHITECTURE.md (reader's-eye-view of the codebase)
 ├── precursor/                  scripts + notes for the hardware-test workflow
 ├── tests/                      hosted-mode harnesses + Renode harnesses
