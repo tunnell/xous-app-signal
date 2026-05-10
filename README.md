@@ -30,166 +30,156 @@ Smartphones are the primary target for surveillance of journalists and human-rig
 
 **Long-term goal**: a cheaper successor (the [Betrusted](https://betrusted.io/) ASIC currently in development) that puts this same threat model in reach of users in the Global South, where surveillance pressure is highest and where activists and journalists [most often lack resources to recover from compromise](https://www.amnesty.org/en/latest/news/2024/12/serbia-authorities-using-spyware-and-cellebrite-forensic-extraction-tools-to-hack-journalists-and-activists/).
 
-**Scope tradeoff**: Precursor's hardware constraints (memory budget, no GPU, single-screen monochrome display) mean this client implements a deliberately minimal Signal feature set: secondary-device link, send/receive of text messages. Group calls, video, stickers, message-history transfer, and other features that depend on richer hardware or large state are out of scope. The goal is "your most sensitive conversations on hardware you can audit," not "feature parity with the mobile app."
+**Scope tradeoff**: Precursor's hardware constraints (16 MiB
+total RAM, no GPU, single-screen monochrome 336×536 display, no
+audio/video hardware) mean this client implements a deliberately
+minimal Signal feature set. The goal is "your most sensitive
+conversations on hardware you can audit," not "feature parity
+with the mobile app." The feature support matrix below makes the
+tradeoffs explicit.
 
 ---
 
-## Status
+## Feature support
 
-| Capability                                | Hosted (Linux X11)     | Precursor hardware                       |
-|-------------------------------------------|------------------------|------------------------------------------|
-| Link as secondary device (QR scan)        | working                | **working**                              |
-| Persistence across kernel restarts (PDDB) | working                | working                                  |
-| Auto-reload registration on boot          | working                | working                                  |
-| Receive 1:1 text messages                 | working                | **working**                              |
-| Send 1:1 text messages (UUID or e164)     | working                | broken — `"WebSocket closing while waiting for a response"` (likely WS keepalive not firing on rv32) |
-| Contact name / phone display              | wired, lightly tested  | wired, lightly tested                    |
-| Wi-Fi onboarding from inside xas          | n/a (host stack)       | not yet — use `wlan join` from shellchat |
-| Group messaging / attachments / calls     | out of scope (for now) | out of scope (for now)                   |
+Verified working on Precursor PVT2 hardware unless noted. Each
+capability that maps to a Signal app feature is listed; the third
+column says whether the gap is fundamental (hardware can't do it)
+or a roadmap item (planned but not yet built).
 
-Hardware bring-up is in progress. **Milestones reached on real
-Precursor:** boot to PDDB unlock; DNS resolution including CNAME chains;
-TLS to chat.signal.org against the pinned CA; WebSocket upgrade;
-provisioning-UUID receive + QR render on the physical LCD; phone-side
-QR scan; ProvisionEnvelope decrypt on rv32 (Curve25519 + AES-CBC + HMAC);
-prekey generation (signed Curve25519 + Kyber-1024 last-resort);
-`POST /v1/devices/link`; `LinkComplete` + persistence to PDDB; inbound
-Signal-protocol message decrypt + display on xas's inbox screen.
+### Messaging
 
-**The remaining gap is send.** First send fails with a libsignal-service
-error: `"WebSocket closing while waiting for a response"`. The most likely
-cause (per the project's `linking.md` field guide) is that the WebSocket
-keepalive isn't firing on rv32, so Signal's server idle-closes the auth
-WS while xas is still waiting to use it. The current build catches that
-error cleanly and surfaces it in the UI; root-cause fix is parked in
-`../CHORES.md`.
+| Feature | Status | Note |
+|---|---|---|
+| Link as a secondary device (QR scan) | ✅ | Boot, PDDB unlock, QR scan, decrypt ProvisionEnvelope, register, persist |
+| Receive 1:1 text messages | ✅ | Near-instant once linked |
+| Send 1:1 text messages | ✅ | Latency 1–4 min — Signal edge-server WS rotation race; transport refactor on roadmap |
+| Conversation list (Home) | ✅ | Per-thread last-message + relative timestamp + unread indicator |
+| Per-thread message view | ✅ | Optimistic-render compose; auto-mark-read on thread open |
+| Group chats (read or write) | ❌ | Roadmap. Adds ~1 MiB of state per group + UI surface |
+| Disappearing messages | ❌ | Roadmap. presage exposes the timer; xas doesn't render it yet |
+| Typing indicators | ❌ | Roadmap. Low priority |
+| Read receipts (sending) | ⚠️ | Sent automatically by libsignal on read; not user-controllable in xas |
+| Stories | ❌ | Out of scope. Built around media |
 
-The same code path runs in hosted-mode emulation on Linux for fast UI
-iteration; every UI primitive talks to the GAM service via Xous IPC and is
-target-agnostic.
+### Media + attachments
 
-For full state, in-flight builds, and how to continue, see the docs in this
-repo's parent directory:
-- `OVERVIEW.md` — landing page with current state at a glance.
-- `STATE.md` — what's working / broken / in-flight, plus build + flash commands.
-- `UI-DESIGN.md` — comprehensive plan for the next UI redesign (conversation-list home).
-- `CHORES.md` — deferred follow-ups (Wi-Fi onboarding rework, dep audits, send fix).
+| Feature | Status | Note |
+|---|---|---|
+| Image / video / file attachments (send or receive) | ❌ | Out of scope. Display + storage budget too small for media-first UX |
+| Voice notes | ❌ | Hardware: no microphone codec wired through Xous |
+| Stickers | ❌ | Out of scope. Display is monochrome |
+| Emoji reactions | ❌ | Roadmap. Renderable as glyphs |
 
----
+### Calling
 
-## Quickstart (hosted)
+| Feature | Status | Note |
+|---|---|---|
+| Voice calls | ❌ | Hardware: no audio path on Precursor |
+| Video calls | ❌ | Hardware: no camera, no codec |
 
-These instructions exercise the link → receive → send loop on a Linux dev
-machine using xous-core's hosted-mode emulator, without flashing real
-hardware. Two real Signal accounts are required.
+### Account + profile
 
-### Prerequisites
+| Feature | Status | Note |
+|---|---|---|
+| Display name + phone number on Profile | ✅ | Read from registration data |
+| Profile editing (name / picture / about) | ❌ | Roadmap. Read-only today |
+| Username (`@alice.42`) on Profile | ❌ | Roadmap. presage may not yet expose; needs verification |
+| Username / phone-number lookup in "New chat" | ❌ | Today only UUID is accepted; F1 New chat rejects username + E.164 with "lookup not yet supported." Roadmap |
+| Logout | ⚠️ | Stub today (tells the user to wipe PDDB manually); real implementation on roadmap |
+| Multiple linked accounts | ❌ | Single-account device by design |
+| Primary registration (this device IS the primary) | ❌ | Out of scope. Secondary-device only — your phone stays primary |
 
-- Linux x86_64, an SSH session with X11 forwarding (or a local desktop).
-- Rust 1.95+ via rustup.
-- A working X11 display (`xset q` returns instantly).
-- Two Signal accounts: one with the
-  [Signal Android/iOS app](https://signal.org/), one with
-  [signal-cli](https://github.com/AsamK/signal-cli) installed and linked
-  as a secondary on the second account. signal-cli is your test peer.
-- A clone of `betrusted-io/xous-core` (or a compatible fork) at
-  `../repos/xous-core` relative to this checkout.
+### Hardware integration
 
-### Build and run
+| Feature | Status | Note |
+|---|---|---|
+| Wi-Fi (2.4 GHz only — Precursor is single-band) | ✅ | Configured via shellchat (`wlan off; wlan on; ssid scan; wlan status`); no in-app onboarding |
+| Hardware-rooted key sealing (PDDB) | ✅ | Inherited from Xous; xas writes registration + sessions through `presage-store-pddb` |
+| Sealed sender (Signal Protocol) | ✅ | Handled transparently by libsignal-service-rs |
+| PQXDH (post-quantum key agreement) | ✅ | libsignal default; verified working on rv32 |
 
-```sh
-# 1. Clone next to a xous-core checkout:
-mkdir signal && cd signal
-git clone https://github.com/betrusted-io/xous-core repos/xous-core
-git clone <this repo> xous-app-signal
+### Things handled by upstream code (not xas's own logic)
 
-# 2. Build the hosted xas binary:
-cd xous-app-signal
-cargo build --release -p xous-app-signal --features pddb-real,hosted
-
-# 3. Boot xous-core hosted with xas bundled. Run from xous-core's root:
-cd ../repos/xous-core
-cargo xtask run xas:../../xous-app-signal/target/release/xas
-```
-
-Once an X11 window labelled "Precursor" appears, navigate launcher → Apps
-→ xas, pick "Link device", and accept the default device-name. A QR code
-will appear; scan it from the Signal app on your phone.
-
-### Headless link verification
-
-`tests/hosted/test_link_qr.sh` drives the boot → launcher → xas → Link
-sequence headlessly and gates on the provisioning URL appearing in the
-kernel log. Use it as a smoke test:
-
-```sh
-INSPECT_HOLD=900 bash tests/hosted/test_link_qr.sh
-```
-
-The `INSPECT_HOLD` env var keeps the kernel alive for the given seconds
-after the QR appears so you can scan from your phone.
-
-### End-to-end receive + send
-
-After linking, your other Signal account can send messages to xas. The
-kernel log will show:
-
-```
-xas/gam_app: inbound message from <name-or-phone-or-uuid> (N bytes)
-```
-
-To send back, navigate to xas Menu → Send. Recipient accepts either a UUID
-(ACI) or an e164 phone number (`+15551234567`); the latter is resolved
-against the contact list synced from the linked phone.
+xas leverages the Signal Protocol implementation in
+[`signalapp/libsignal`](https://github.com/signalapp/libsignal)
+(via [`libsignal-service-rs`](https://github.com/whisperfish/libsignal-service-rs)
+and [`presage`](https://github.com/whisperfish/presage)). Cryptographic
+primitives — Double Ratchet, X3DH/PQXDH, sealed sender, prekeys,
+identity keys — are **not reimplemented** here. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for what xas adds
+on top of those libraries (mostly: Xous IPC plumbing, a
+sync-blocking-on-async transport bridge, and the GAM-rendered
+UI).
 
 ---
 
-## Hardware deploy
+## Where to learn more
 
-Hardware build, flash, and test commands are documented in
-[`../STATE.md`](../STATE.md). Summary:
+- [`BUILDING.md`](BUILDING.md) — clone-to-running instructions
+  for both hosted-mode emulator and Precursor hardware paths
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how xas
+  works, written for a Rust developer with passing crypto
+  knowledge
+- [`tests/README.md`](tests/README.md) — overview of the four
+  testing approaches (unit / hosted / Renode / Precursor),
+  pros and cons, and the dev/main branch convention
+- [`precursor/README.md`](precursor/README.md) — hardware-test
+  workflow: build, flash, watch UART (read this BEFORE running
+  any flash command — its "Brick prevention" section is
+  non-negotiable)
 
-```sh
-# Build the rv32 xas binary:
-cd xous-app-signal && cargo xtask dist
+---
 
-# Bundle into a signed kernel image (apps + a few services XIP'd
-# from flash to free RAM; kernel needs big-heap for libsignal):
-cd ../xous-core && cargo xtask app-image-xip \
-    xas:../xous-app-signal/dist/xas-rv32/xas vault \
-    --kernel-feature big-heap \
-    --git-describe v0.9.8-791-gc707f9d8 --git-rev c707f9d8
+## Building and testing
 
-# Flash kernel-only (recoverable, ~25 min):
-python3 tools/usb_update.py \
-    -k target/riscv32imac-unknown-xous-elf/release/xous.img --bounce
-```
+End-to-end build instructions for both the **hosted-mode**
+emulator (Linux x86_64, no hardware needed) and the **Precursor
+hardware** path live in [`BUILDING.md`](BUILDING.md). It's
+written to be followed cold — clone, set up toolchain, build,
+run, link to a Signal account.
 
-Pre-flash, confirm the Precursor is in the loader window
-(`lsusb | grep 1209` should show `1209:5bf0`, not `1209:3613`).
+For testing, see [`tests/README.md`](tests/README.md), which
+compares the four available approaches (unit tests / hosted /
+Renode / Precursor) with a pros-cons table so you can pick the
+right one for the change at hand. Hardware-test scripts (build,
+flash, watch UART) and the brick-prevention rules live in
+[`precursor/README.md`](precursor/README.md) — read it before
+running any flash command.
 
-`big-heap` is a xous-core kernel feature that raises the per-process heap
-cap from 512 KiB to 12 MiB; xas's libsignal+presage+rustls+smol working set
-exceeds the default cap during link. App-image-XIP keeps app and large
-service code in flash rather than RAM, freeing ~5 MiB on the 16 MiB SoC.
+---
 
-Wi-Fi must be configured via shellchat before launching xas; in-app
-onboarding is deferred (see `../CHORES.md`). The sequence that has
-worked reliably in practice:
+## Upstream patches
 
-```
-wlan off
-wlan on
-ssid scan
-wlan status     # repeat until it shows "connected"
-```
+xas depends on patches that are not yet in the upstream
+repositories:
 
-`wlan off` first resets any half-associated state from a previous boot;
-`wlan on` powers the radio; `ssid scan` triggers association against
-the SSID/PSK already saved on the EC; `wlan status` is the readiness
-gate. If `wlan status` never reports connected, the SSID/PSK may need
-to be (re)set via `wlan setssid <name>` + `wlan setpass <pw>` (one-time;
-the EC remembers them across reboots).
+1. **`betrusted-io/xous-core` net-service encoding fix.** The
+   kernel writes `NetError` codes at byte 4 of the response
+   buffer; the Rust stdlib's Xous backend reads from byte 1 in
+   the recv path. The mismatch made `ErrorKind::TimedOut`
+   unreachable from `TcpStream::recv` — fatal for any
+   long-lived WS that uses `set_read_timeout` to interleave
+   reads and writes. We mirror the code at byte 1 too.
+   `BUILDING.md` instructs you to clone the `xas` branch of
+   [`tunnell/xous-core`](https://github.com/tunnell/xous-core)
+   which carries the fix.
+2. **`whisperfish/libsignal-service-rs` keepalive tolerance.**
+   Upstream closes the WS the moment any keepalive is
+   outstanding. Under any non-zero scheduling jitter (e.g.
+   rv32) this races and closes healthy connections. We tolerate
+   up to 3 outstanding before deciding the WS is dead. The fix
+   lives in `vendor/libsignal-service-rs/` in this repo.
+3. **`rust-lang/rust` Xous std-side recv encoding.** The
+   long-arc fix that makes #1 unnecessary upstream — change the
+   recv decode to read byte 4 (matching the send decode). Rust
+   toolchain `r?` cycles take weeks; the kernel-side mirror in
+   #1 is the immediately-shippable workaround.
+
+PR drafts for all three are tracked in
+`/home/tunnell/code/xas/upstream_prs/` (out-of-tree). Once #1
+lands upstream, BUILDING.md will be updated to point at stock
+`betrusted-io/xous-core`.
 
 ---
 
@@ -205,21 +195,11 @@ xous-app-signal/
 │   ├── xous-signal-bridge/     Manager-on-worker + IPC forwarder
 │   ├── xous-app-signal/        binary entry point (binary name: `xas`)
 │   └── xous-app-signal-ui/     stdin-driven UI (legacy; gam_app.rs is current)
-├── docs/                       design docs (REPORT, CALL_GRAPH, ROADMAP)
-├── stage/                      per-stage execution reports
-├── tests/hosted/               headless link/receive harness
+├── docs/                       ARCHITECTURE.md (reader's-eye-view of the codebase)
+├── precursor/                  scripts + notes for the hardware-test workflow
+├── tests/                      hosted-mode harnesses + Renode harnesses
 └── vendor/                     vendored forks of presage / libsignal-service-rs / curve25519-dalek
 ```
-
----
-
-## Tests
-
-```sh
-cargo test --workspace --features pddb-real
-```
-
-22+ unit tests covering the PDDB store traits, plus the headless link test.
 
 ---
 
