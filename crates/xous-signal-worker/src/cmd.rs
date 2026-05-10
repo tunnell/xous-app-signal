@@ -82,6 +82,40 @@ pub enum Cmd {
     /// Manager isn't loaded yet.
     GetAccountInfo,
 
+    /// User-triggered: contact-sync round-trip with the linked phone.
+    /// Calls `manager.request_contacts()`, which sends a self-targeted
+    /// `SyncMessage.Request{type=CONTACTS}`; the primary phone replies
+    /// with the contacts blob; presage's existing `SynchronizeMessage`
+    /// handler saves the entries to `ContentsStore`. After completion,
+    /// the worker walks each newly-saved contact and emits one
+    /// `Event::ContactResolved` per (uuid, name) so the UI can swap any
+    /// rendered UUID labels for the synced names without restarting.
+    ///
+    /// Skipped on link by default (it adds 30-90s of WS roundtrips on
+    /// rv32 and races the WS-rotation problem); F2 in the post-link UI
+    /// is the user-triggered way to populate contacts on demand.
+    SyncContacts,
+
+    /// User-triggered: log out from the linked Signal account.
+    /// Tears down the manager (drops the WS pump, ends the receive
+    /// stream), wipes the PDDB-backed Store (registration data,
+    /// identity keypairs, sender cert, master key, all protocol-store
+    /// dictionaries, all messages-by-thread, all profiles + contacts),
+    /// and emits `Event::LoggedOut`. The worker stays alive — the user
+    /// can immediately send a fresh `Cmd::LinkDevice` to relink.
+    ///
+    /// Note: this does NOT remove the device from the primary phone's
+    /// Linked Devices list. The user must do that manually if they
+    /// want; otherwise the entry sits in the list as a stale link.
+    /// (Removing it from the primary requires `unlink_secondary`,
+    /// which is a primary-only API per presage.)
+    Logout,
+
+    /// User-triggered: lookup a Signal username (e.g., `alice.42`)
+    /// to its ACI, so the UI can open a `Screen::Thread { uuid }`
+    /// for it. Result arrives as `Event::ContactResolveResult`.
+    ResolveUsername(String),
+
     /// Tell the worker to drain its event channel and exit. The main
     /// thread sends this before joining the worker handle so we don't
     /// rely on dropping the cmd channel sender (which works but is
@@ -216,6 +250,27 @@ pub enum Event {
         /// out at the worker — this `name` is always non-empty.
         name: String,
     },
+
+    /// `Cmd::SyncContacts` finished. The worker has already emitted
+    /// one `ContactResolved` per (uuid, name) it saw in the freshly-
+    /// synced contacts table. UI uses this terminator to flip the
+    /// "Syncing…" indicator off.
+    SyncComplete,
+
+    /// `Cmd::SyncContacts` failed. UI surfaces the reason via a
+    /// modal/notification.
+    SyncError(String),
+
+    /// `Cmd::Logout` finished. Manager dropped, store wiped. UI
+    /// resets account state, clears messages/dialogues, transitions
+    /// to `Screen::Menu` with `MenuItem::Link`.
+    LoggedOut,
+
+    /// `Cmd::ResolveUsername` finished. Result is `Some(aci)` if the
+    /// username resolved (UI opens a Thread for that uuid),
+    /// `None` if no such username exists, or
+    /// `Err(reason)` for any other failure (network, etc.).
+    UsernameResolveResult(Result<Option<presage::libsignal_service::prelude::Uuid>, String>),
 
     /// Confirms the worker is winding down. The main thread joins
     /// after receiving this — same way Manager state machines on

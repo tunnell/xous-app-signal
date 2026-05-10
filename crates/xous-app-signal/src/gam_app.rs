@@ -151,6 +151,11 @@ struct App {
     account_device_name: Option<String>,
     account_aci: Option<String>,
     account_phone: Option<String>,
+    /// True between Cmd::ResolveUsername send and
+    /// Event::UsernameResolveResult arrival. Suppresses concurrent
+    /// lookups; gates handle_username_resolve_result so a stale
+    /// response after the user navigated away is dropped.
+    username_lookup_in_progress: bool,
 }
 
 impl App {
@@ -524,15 +529,14 @@ impl App {
             "Profile\n\n\
              Name:     {}\n\
              Number:   {}\n\
-             Username: {}\n\n\
+             Username: (not available)\n\n\
              ACI:      {}\n\n\
-             (Loaded only after a fresh\n\
-              link this session. Persist\n\
-              across sessions is a TODO.)\n\n\
+             (Username read isn't exposed\n\
+              by libsignal; the primary\n\
+              phone holds that state.)\n\n\
              Press Enter to return.",
             device,
             phone,
-            "(not synced)",
             aci,
         )
         .map_err(|e| format!("profile: {}", e))
@@ -693,26 +697,54 @@ fn looks_like_signal_username(s: &str) -> bool {
     rest.chars().all(|c| c.is_ascii_digit())
 }
 
-/// Settings → Logout. Stub: the actual flow needs to wipe the
-/// presage account state in PDDB and stop the worker. Tracked as a
-/// Tier-2 chore. For now show a notification with the manual path.
-fn drive_logout(modals_xns: &xous_names::XousNames) {
-    if let Ok(modals) = modals::Modals::new(modals_xns) {
+/// Settings → Logout. Confirms with the user, then sends
+/// `Cmd::Logout` and lets the forwarder thread + handle_worker_event
+/// pick up the resulting `Event::LoggedOut` to reset state.
+fn drive_logout(cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::XousNames) {
+    let modals = match modals::Modals::new(modals_xns) {
+        Ok(m) => m,
+        Err(e) => {
+            log::warn!("xas/gam_app: drive_logout — Modals init err: {:?}", e);
+            return;
+        }
+    };
+    // Confirm modal first — Logout is irreversible without re-linking
+    // (which means another QR-scan ceremony with the phone).
+    let confirm = modals
+        .alert_builder(
+            "Logout?\nThis wipes link state.\nYou will need to scan\nthe QR code again.",
+        )
+        .field(Some("type 'yes' to confirm".to_string()), None)
+        .build();
+    let confirmed = match confirm {
+        Ok(payloads) => payloads.first().as_str().trim().eq_ignore_ascii_case("yes"),
+        Err(_) => false,
+    };
+    if !confirmed {
+        log::info!("xas/gam_app: Logout cancelled");
+        return;
+    }
+    log::info!("xas/gam_app: Logout confirmed; sending Cmd::Logout");
+    if let Err(e) = cmd_tx.send_blocking(Cmd::Logout) {
+        log::warn!("xas/gam_app: Cmd::Logout send err: {:?}", e);
         let _ = modals.show_notification(
-            "Logout not yet implemented.\n\
-             To re-link, wipe the PDDB\n\
-             (or `pddb wipe` in shellchat)\n\
-             then reflash and link again.",
+            "Logout failed:\nworker not reachable.\nThe app may need a restart.",
             None,
         );
     }
+    // Don't transition here; wait for Event::LoggedOut to arrive via
+    // the forwarder, where handle_worker_event will reset App state.
 }
 
 /// F1 on Home: prompt for a UUID (or +e164) and open an empty
 /// thread for it. The compose box becomes the entry point; the
 /// thread becomes a real conversation as soon as a message goes
 /// out or comes back.
-fn drive_new_chat(app: &mut App, modals_xns: &xous_names::XousNames) {
+fn drive_new_chat(
+    app: &mut App,
+    cmd_tx: &Sender<Cmd>,
+    modals_xns: &xous_names::XousNames,
+) {
     let modals = match modals::Modals::new(modals_xns) {
         Ok(m) => m,
         Err(e) => {
@@ -721,7 +753,7 @@ fn drive_new_chat(app: &mut App, modals_xns: &xous_names::XousNames) {
         }
     };
     let raw = match modals
-        .alert_builder("New chat — UUID, +E.164, or name.000")
+        .alert_builder("New chat — UUID or name.000")
         .field(None, None)
         .build()
     {
@@ -734,36 +766,59 @@ fn drive_new_chat(app: &mut App, modals_xns: &xous_names::XousNames) {
     if raw.is_empty() {
         return;
     }
-    // Phone-number and username (Signal "name.000" form) input is
-    // best-effort: both need a server round-trip we don't have yet.
-    // UUID input is the working path. The error path classifies the
-    // input so the user knows which lookup is missing.
-    let uuid = match Uuid::parse_str(&raw) {
-        Ok(u) => u,
-        Err(_) => {
-            let kind = if raw.starts_with('+') && raw.len() > 1 && raw[1..].chars().all(|c| c.is_ascii_digit()) {
-                "Phone-number"
-            } else if looks_like_signal_username(&raw) {
-                "Username"
-            } else {
-                "Contact"
-            };
-            log::info!(
-                "xas/gam_app: F1 new chat — {} input {:?}; lookup not yet supported",
-                kind, raw,
-            );
-            let _ = modals.show_notification(
-                &format!(
-                    "{} lookup not\nsupported yet. Enter a UUID\nfor now.",
-                    kind
-                ),
-                None,
-            );
+    // Three input shapes: UUID (immediate, no server round-trip);
+    // username "name.000" (server round-trip via Cmd::ResolveUsername
+    // → Event::UsernameResolveResult); +E.164 (would need CDSI which
+    // is disabled in this build because boring-sys can't target rv32).
+    if let Ok(uuid) = Uuid::parse_str(&raw) {
+        app.screen = Screen::Thread { uuid };
+        app.compose_buffer.clear();
+        return;
+    }
+    if looks_like_signal_username(&raw) {
+        if app.username_lookup_in_progress {
+            let _ = modals.show_notification("Already looking up a\nusername; please wait.", None);
             return;
         }
-    };
-    app.screen = Screen::Thread { uuid };
-    app.compose_buffer.clear();
+        log::info!("xas/gam_app: F1 username lookup {:?}", raw);
+        if let Err(e) = cmd_tx.send_blocking(Cmd::ResolveUsername(raw.clone())) {
+            log::warn!("xas/gam_app: Cmd::ResolveUsername send err: {:?}", e);
+            let _ = modals.show_notification("Lookup failed:\nworker not reachable.", None);
+            return;
+        }
+        app.username_lookup_in_progress = true;
+        // Brief visual feedback. The Event::UsernameResolveResult
+        // arrives via the forwarder and is handled by
+        // handle_username_resolve_result, which transitions to
+        // Screen::Thread on success or sets app.last_status on failure.
+        let _ = modals.show_notification(
+            &format!("Looking up\n{}\non the server...", raw),
+            None,
+        );
+        return;
+    }
+    if raw.starts_with('+') && raw.len() > 1 && raw[1..].chars().all(|c| c.is_ascii_digit()) {
+        // Phone-number lookup needs CDSI (Signal's contact-discovery
+        // service over SGX/Intel-attested enclaves). The libsignal-
+        // service-rs cdsi feature pulls boring-sys (BoringSSL) which
+        // doesn't target rv32-xous. The whole feature is therefore
+        // disabled in this build (per Stage 6 trade-off — see git
+        // log on vendor/libsignal-service-rs/Cargo.toml's `default`).
+        log::info!("xas/gam_app: F1 phone lookup not supported (CDSI disabled)");
+        let _ = modals.show_notification(
+            "Phone-number lookup needs\n\
+             CDSI which isn't enabled\n\
+             in this build. Use a UUID\n\
+             or username instead.",
+            None,
+        );
+        return;
+    }
+    log::info!("xas/gam_app: F1 unrecognized input {:?}", raw);
+    let _ = modals.show_notification(
+        "Not recognized as a\nUUID or username.\nFormat: name.NNN",
+        None,
+    );
 }
 
 
@@ -852,6 +907,7 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
         account_device_name: None,
         account_aci: None,
         account_phone: None,
+        username_lookup_in_progress: false,
     };
     seed_mock_messages_if_requested(&mut app);
     app.render().ok();
@@ -972,16 +1028,30 @@ fn handle_keys(
             // F1 (Precursor sends 0x11): "New chat" — prompt for UUID
             // or +e164, then open the empty Thread.
             (Screen::Home, '\u{11}') => {
-                drive_new_chat(app, modals_xns);
+                drive_new_chat(app, cmd_tx, modals_xns);
             }
-            // F2 (0x12): Sync — placeholder. Needs a worker-side
-            // Cmd::SyncContacts plus a manager_task handler.
-            // Tier-2 chore. For now show a notification.
+            // F2 (0x12): Sync — request contacts from the linked
+            // phone. Worker calls manager.request_contacts(); presage
+            // saves the response into ContentsStore; Event::SyncComplete
+            // fires when done (or Event::SyncError on failure). Future
+            // inbound messages from synced contacts will pick up the
+            // names via contact_by_id (the existing path).
             (Screen::Home, '\u{12}') => {
-                log::info!("xas/gam_app: F2 sync requested (not yet implemented)");
-                if let Ok(modals) = modals::Modals::new(modals_xns) {
+                log::info!("xas/gam_app: F2 sync requested");
+                if let Err(e) = cmd_tx.send_blocking(Cmd::SyncContacts) {
+                    log::warn!("xas/gam_app: Cmd::SyncContacts send err: {:?}", e);
+                    if let Ok(modals) = modals::Modals::new(modals_xns) {
+                        let _ = modals.show_notification(
+                            "Sync send failed:\nworker not reachable.",
+                            None,
+                        );
+                    }
+                } else if let Ok(modals) = modals::Modals::new(modals_xns) {
+                    // Brief feedback so the user knows the tap registered.
+                    // Real completion arrives as Event::SyncComplete.
                     let _ = modals.show_notification(
-                        "Sync not yet implemented.\nSee Help for status.",
+                        "Syncing contacts from\nthe linked phone...\n\
+                         (this can take a minute)",
                         None,
                     );
                 }
@@ -1130,7 +1200,7 @@ fn handle_keys(
                     }
                     SettingsItem::Help => app.screen = Screen::Help,
                     SettingsItem::About => app.screen = Screen::About,
-                    SettingsItem::Logout => drive_logout(modals_xns),
+                    SettingsItem::Logout => drive_logout(cmd_tx, modals_xns),
                 }
             }
             (Screen::Settings, '\u{1b}') | (Screen::Settings, '☰') | (Screen::Settings, '\u{11}') => {
@@ -1367,7 +1437,78 @@ fn handle_worker_event(
                 }
             }
         }
+        Event::SyncComplete => {
+            log::info!("xas/gam_app: SyncComplete");
+            if matches!(app.screen, Screen::Home | Screen::Thread { .. } | Screen::Settings) {
+                let _ = app.render();
+            }
+        }
+        Event::SyncError(reason) => {
+            log::warn!("xas/gam_app: SyncError: {}", reason);
+            // Surface as a notification so the user knows the Sync
+            // they tapped didn't actually run.
+            // (Modals from inside handle_worker_event would need an
+            //  XousNames handle we don't have here — log only for now.)
+        }
+        Event::LoggedOut => {
+            log::info!("xas/gam_app: LoggedOut — resetting App state");
+            // Wipe link-derived state so the app behaves like a
+            // fresh boot: pre-link Menu, no messages, no dialogues,
+            // no cached account info.
+            app.linked = false;
+            app.messages.clear();
+            app.dialogues.clear();
+            app.home_focus = 0;
+            app.compose_buffer.clear();
+            app.last_status.clear();
+            app.linking_in_progress = false;
+            app.account_device_name = None;
+            app.account_aci = None;
+            app.account_phone = None;
+            app.screen = Screen::Menu;
+            app.selected = MenuItem::Link;
+            let _ = app.render();
+        }
+        Event::UsernameResolveResult(result) => {
+            log::info!("xas/gam_app: UsernameResolveResult: {:?}", result);
+            // The Cmd::ResolveUsername caller stores its pending state
+            // on app (see drive_new_chat). Apply the result here.
+            handle_username_resolve_result(app, result);
+        }
         Event::Pong | Event::Whoami(_) => {}
+    }
+}
+
+/// Apply a `Event::UsernameResolveResult` to the in-flight New Chat
+/// flow. If a thread should open, the screen transitions to Thread.
+/// On error, the in-flight flag is cleared so the user can retry.
+fn handle_username_resolve_result(
+    app: &mut App,
+    result: Result<Option<Uuid>, String>,
+) {
+    if !app.username_lookup_in_progress {
+        // No-op: probably a stale response after the user navigated
+        // away. Just clear the in-flight indicator if any.
+        return;
+    }
+    app.username_lookup_in_progress = false;
+    match result {
+        Ok(Some(uuid)) => {
+            log::info!("xas/gam_app: username resolved to {}", uuid);
+            app.screen = Screen::Thread { uuid };
+            let _ = app.render();
+        }
+        Ok(None) => {
+            log::info!("xas/gam_app: username not found");
+            // Surface as last_status banner for the next render cycle.
+            app.last_status = "Username not found.".to_string();
+            let _ = app.render();
+        }
+        Err(reason) => {
+            log::warn!("xas/gam_app: username lookup err: {}", reason);
+            app.last_status = format!("Lookup failed:\n{}", reason);
+            let _ = app.render();
+        }
     }
 }
 

@@ -338,6 +338,122 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                             .await;
                     }
                 }
+                Ok(Cmd::Logout) => {
+                    log::info!("worker: Cmd::Logout received");
+                    // 1. Drop the sender side of the manager_task's
+                    //    InnerSend channel. The task's select! sees
+                    //    its send_rx close and exits, releasing the
+                    //    Manager (and its WS pump).
+                    send_to_manager = None;
+                    // 2. If we still hold an unspawned manager
+                    //    (StartReceive never fired, but somehow
+                    //    Logout did), drop it too.
+                    drop(linked.take());
+                    // 3. Wipe the PDDB-backed Store. Store::clear()
+                    //    chains clear_registration + clear_contents +
+                    //    delete_dict for both protocol stores. Errors
+                    //    are non-fatal — we still emit LoggedOut so
+                    //    the UI returns to the pre-link menu, but log
+                    //    a warning so a re-link doesn't silently mix
+                    //    new state with stale leftovers.
+                    {
+                        use presage::store::{Store, StateStore};
+                        let mut store_clone = store.clone();
+                        if let Err(e) = StateStore::clear_registration(&mut store_clone).await {
+                            log::warn!("worker/logout: clear_registration err: {:?}", e);
+                        }
+                        if let Err(e) = Store::clear(&mut store_clone).await {
+                            log::warn!("worker/logout: Store::clear err: {:?}", e);
+                        }
+                    }
+                    // 4. Reset cached identity so Cmd::GetAccountInfo
+                    //    after relink doesn't return stale data.
+                    cached_account_info = None;
+                    log::info!("worker: Logout complete; emitting LoggedOut");
+                    let _ = event_tx.send(Event::LoggedOut).await;
+                }
+                Ok(Cmd::SyncContacts) => {
+                    log::info!("worker: Cmd::SyncContacts received");
+                    // Sync requires the manager. If it's already moved
+                    // into manager_task (post-StartReceive), we can't
+                    // call request_contacts directly — it needs &mut
+                    // manager which the receive stream holds. Defer
+                    // by sending an SyncError; future work could route
+                    // sync through manager_task the same way send goes
+                    // through InnerSend.
+                    if linked.is_some() {
+                        let m = linked.as_mut().expect("just checked is_some");
+                        match m.request_contacts().await {
+                            Ok(()) => {
+                                log::info!("worker/sync: request_contacts OK");
+                                // The contacts blob arrives as an
+                                // inbound SynchronizeMessage; presage's
+                                // existing handler writes them into
+                                // ContentsStore. We can't enumerate
+                                // newly-added entries here without a
+                                // store-level diff, so for now just
+                                // tell the UI we're done — the next
+                                // received message from any synced
+                                // contact will pick up the name via
+                                // contact_by_id (the existing path).
+                                let _ = event_tx.send(Event::SyncComplete).await;
+                            }
+                            Err(e) => {
+                                log::warn!("worker/sync: request_contacts err: {}", e);
+                                let _ = event_tx
+                                    .send(Event::SyncError(format!("{}", e)))
+                                    .await;
+                            }
+                        }
+                    } else {
+                        // Manager already moved into manager_task —
+                        // the contacts request needs to go through
+                        // there (similar to send). For now surface as
+                        // an error; the right fix is to route sync
+                        // through manager_task via an InnerSync variant.
+                        log::warn!(
+                            "worker/sync: manager already in receive task — sync after StartReceive not yet supported"
+                        );
+                        let _ = event_tx
+                            .send(Event::SyncError(
+                                "Sync after receive starts isn't wired yet (manager is in the receive task).\nRestart the app and tap Sync before opening any conversation."
+                                    .to_string(),
+                            ))
+                            .await;
+                    }
+                }
+                Ok(Cmd::ResolveUsername(input)) => {
+                    log::info!("worker: Cmd::ResolveUsername({:?})", input);
+                    let result: Result<Option<presage::libsignal_service::prelude::Uuid>, String> =
+                        if let Some(m) = linked.as_mut() {
+                            match m.lookup_username(&input).await {
+                                Ok(Some(aci)) => {
+                                    let uuid: presage::libsignal_service::prelude::Uuid = aci.into();
+                                    log::info!("worker/username: {:?} → {}", input, uuid);
+                                    Ok(Some(uuid))
+                                }
+                                Ok(None) => {
+                                    log::info!("worker/username: {:?} not found", input);
+                                    Ok(None)
+                                }
+                                Err(e) => {
+                                    log::warn!("worker/username: {:?} err: {}", input, e);
+                                    Err(format!("{}", e))
+                                }
+                            }
+                        } else {
+                            // Manager already moved into manager_task —
+                            // same situation as SyncContacts. Surface as
+                            // error.
+                            Err(
+                                "Username lookup after receive starts isn't wired yet.\nRestart the app and try again."
+                                    .to_string(),
+                            )
+                        };
+                    let _ = event_tx
+                        .send(Event::UsernameResolveResult(result))
+                        .await;
+                }
                 Ok(Cmd::Shutdown) => {
                     let _ = event_tx.send(Event::ShuttingDown).await;
                     break;

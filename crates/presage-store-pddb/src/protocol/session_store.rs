@@ -26,9 +26,7 @@ use presage::libsignal_service::protocol::{
     ProtocolAddress, SessionRecord, SessionStore, SignalProtocolError,
 };
 
-use super::{
-    IdentityType, PddbProtocolStore, backend_get_json_protocol, dict_session, protocol_backend_err,
-};
+use super::{IdentityType, PddbProtocolStore, backend_get_json_protocol, dict_session};
 
 /// Cache key — `(identity, address.name(), device_id)`. The address
 /// part is split from the device id so `flush_sessions` can group
