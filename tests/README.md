@@ -7,13 +7,14 @@ linked below.
 
 ```
 tests/
-├── hosted/   ← Xous kernel running as a Linux process
-└── renode/   ← rv32 SoC emulator harnesses
+├── hosted/      ← Xous kernel running as a Linux process
+├── renode/      ← rv32 SoC emulator harnesses
+└── precursor/   ← real Precursor PVT2 hardware (manual, UART-observed)
 ```
 
-(There's also [`../precursor/`](../precursor/) at the repo root —
-the real-hardware path. Sibling to `tests/` because hardware is
-manual, not part of an automated harness.)
+Plus the in-repo unit-test suite (`cargo test --features hosted
+-p xous-app-signal --bins`) — those live alongside the code
+they exercise, not under `tests/`.
 
 ---
 
@@ -24,7 +25,7 @@ manual, not part of an automated harness.)
 | **Unit tests** (`cargo test --features hosted -p xous-app-signal --bins`) | seconds | Pure data modules (dialogue summarization, read-state aggregation, name fallback ordering) | Anything touching IPC, network, GAM, PDDB |
 | **Hosted** ([`tests/hosted/`](hosted/)) | seconds-to-minutes | Full Xous kernel + services + xas, real Wi-Fi via host kernel, real Signal-server round-trips, GAM rendered to a window | rv32 net stack bugs, WF200 SPI bugs, FPGA gateware bugs, real-PDDB-encryption interactions |
 | **Renode** ([`tests/renode/`](renode/)) | minutes (slow emulator) | rv32 instruction-level fidelity, real loader, real kernel, almost-real net stack | WF200 SPI (no peripheral model), real Signal-server (no internet from inside the emulator without proxy work), wall-clock timing bugs |
-| **Precursor** ([`../precursor/`](../precursor/)) | ~30 min/cycle (build + flash) | Everything: rv32 net stack, WF200 SPI, FPGA gateware, real PDDB, real timing, real RF | Slow iteration; no breakpoints (UART only) |
+| **Precursor** ([`tests/precursor/`](precursor/)) | ~30 min/cycle (build + flash) | Everything: rv32 net stack, WF200 SPI, FPGA gateware, real PDDB, real timing, real RF | Slow iteration; no breakpoints (UART only) |
 
 ---
 
@@ -91,7 +92,7 @@ debugging is via UART log analysis. Hardware can be bricked by
 careless flashing (gateware/loader flashes need JTAG to
 recover); always default to kernel-only (`-k`) flashes.
 
-**Run:** see [`../precursor/README.md`](../precursor/README.md).
+**Run:** see [`precursor/README.md`](precursor/README.md).
 **Read its "Brick prevention" section before running any flash
 command.**
 

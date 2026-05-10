@@ -5,7 +5,7 @@
 # Prerequisites:
 #   - Precursor in loader window connected via USB to THIS host
 #   - lsusb shows 1209:5bf0
-#   - bash precursor/build-and-bundle.sh has produced xous.img
+#   - bash tests/precursor/build-and-bundle.sh has produced xous.img
 #   - You have permission to talk to USB device 1209:5bf0
 #     (a udev rule is the right long-term answer; sudo is the
 #      short-term escape hatch)
@@ -13,7 +13,7 @@
 # SAFETY:
 #   - Kernel-only flash (-k). Recoverable via USB if anything goes wrong.
 #     Do not edit this script to add -l or --soc/--factory-reset
-#     without reading precursor/AGENT-USAGE.md "Brick prevention" first.
+#     without reading tests/precursor/README.md "Brick prevention" first.
 #   - This ties up your laptop for ~25 minutes. The Pi-rig variant
 #     (flash-via-pi.sh) frees the laptop during the flash.
 #
@@ -23,7 +23,7 @@
 #   FLASH_LOG=/tmp/flash-$(date +%s).log
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 XOUS_CORE_DIR="${XOUS_CORE_DIR:-$REPO_ROOT/../xous-core}"
 XOUS_TARGET="${XOUS_TARGET:-precursor-c809403e}"
 FLASH_LOG="${FLASH_LOG:-/tmp/flash-$(date +%s).log}"
@@ -32,7 +32,7 @@ XOUS_IMG="$XOUS_CORE_DIR/target/$XOUS_TARGET/release/xous.img"
 USB_UPDATE="$XOUS_CORE_DIR/tools/usb_update.py"
 
 if [[ ! -f "$XOUS_IMG" ]]; then
-    echo "ERROR: $XOUS_IMG not found. Run precursor/build-and-bundle.sh first." >&2
+    echo "ERROR: $XOUS_IMG not found. Run tests/precursor/build-and-bundle.sh first." >&2
     exit 1
 fi
 

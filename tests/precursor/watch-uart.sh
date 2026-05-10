@@ -35,7 +35,7 @@ fi
 if ! ssh "$PI_HOST" "test -f $PI_UART_LOG"; then
     echo "ERROR: $PI_UART_LOG does not exist on $PI_HOST." >&2
     echo "  The screen session is probably not writing to where this script expects." >&2
-    echo "  Override with:  PI_UART_LOG=/some/other/path bash precursor/watch-uart.sh" >&2
+    echo "  Override with:  PI_UART_LOG=/some/other/path bash tests/precursor/watch-uart.sh" >&2
     exit 1
 fi
 

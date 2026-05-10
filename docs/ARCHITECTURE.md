@@ -1,8 +1,8 @@
 # xas: Architecture
 
 This document explains how xas works to a Rust developer with
-passing knowledge of cryptography (knows what AEAD is, has heard
-of the Double Ratchet, can read async Rust). After reading it
+passing knowledge of cryptography (knows what [AEAD](https://en.wikipedia.org/wiki/Authenticated_encryption) is, has heard
+of the [Double Ratchet](https://en.wikipedia.org/wiki/Double_Ratchet_Algorithm), can read async Rust). After reading it
 once, you should be able to pick up any open chore and know
 which file to open first.
 

@@ -3,9 +3,9 @@
 #
 # Prerequisites:
 #   - PI_HOST set (e.g., pi@10.0.0.42)
-#   - usb_update.py already copied to $PI_FLASH_DIR on the Pi (see precursor/README.md "Setup once")
+#   - usb_update.py already copied to $PI_FLASH_DIR on the Pi (see tests/precursor/README.md "Setup once")
 #   - Precursor in loader window: lsusb on the Pi shows 1209:5bf0
-#   - bash precursor/build-and-bundle.sh has produced xous.img
+#   - bash tests/precursor/build-and-bundle.sh has produced xous.img
 #
 # This script:
 #   1. scp's xous.img to the Pi
@@ -17,7 +17,7 @@
 # SAFETY:
 #   - This script ONLY uses -k (kernel-only). Kernel-only is recoverable
 #     via USB. Never edit this script to add -l or --soc/--factory-reset
-#     without reading precursor/AGENT-USAGE.md "Brick prevention" first.
+#     without reading tests/precursor/README.md "Brick prevention" first.
 #   - The flash takes ~25 minutes. Don't unplug the Precursor.
 #
 # Env vars (defaults shown):
@@ -28,7 +28,7 @@
 #   FLASH_LOG=/tmp/flash-$(date +%s).log   (path on the Pi)
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 XOUS_CORE_DIR="${XOUS_CORE_DIR:-$REPO_ROOT/../xous-core}"
 XOUS_TARGET="${XOUS_TARGET:-precursor-c809403e}"
 PI_FLASH_DIR="${PI_FLASH_DIR:-~/xous-flash}"
@@ -42,7 +42,7 @@ fi
 
 XOUS_IMG="$XOUS_CORE_DIR/target/$XOUS_TARGET/release/xous.img"
 if [[ ! -f "$XOUS_IMG" ]]; then
-    echo "ERROR: $XOUS_IMG not found. Run precursor/build-and-bundle.sh first." >&2
+    echo "ERROR: $XOUS_IMG not found. Run tests/precursor/build-and-bundle.sh first." >&2
     exit 1
 fi
 
@@ -97,4 +97,4 @@ fi
 
 echo
 echo "==> Flash complete. Precursor should reboot into the new kernel."
-echo "    Watch UART:  bash precursor/watch-uart.sh"
+echo "    Watch UART:  bash tests/precursor/watch-uart.sh"

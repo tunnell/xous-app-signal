@@ -1,18 +1,20 @@
-# precursor/ — running a hardware test on a Precursor PVT2
+# tests/precursor — testing xas on real hardware
 
-This folder is the manual hardware-testing path: build a kernel
-image, flash it to a Precursor over USB (optionally via a
-Raspberry Pi rig), and watch UART for what the device does. For
-the faster hosted-mode emulator and unit tests, see
-[`../tests/README.md`](../tests/README.md). For everything-from-
-scratch toolchain setup, see [`../BUILDING.md`](../BUILDING.md).
+This is the **hardware test path**: build a kernel image, flash
+it to a Precursor PVT2 over USB (optionally via a Raspberry Pi
+rig), and watch UART for what the device does. It's the slowest
+of the four testing approaches in [`../README.md`](../README.md)
+(~30 min per cycle) but the only one that exercises the rv32 net
+stack, the WF200 Wi-Fi chip, the FPGA gateware, real PDDB
+encryption, and real RF timing — i.e., everything that doesn't
+get exercised on hosted-mode (Linux) or in unit tests.
 
-The instructions below are written so that a human or an
-automated coding session can follow them end-to-end. Read the
-**Brick prevention** section before running any flash command.
+The instructions below are written so a human or an automated
+coding session can follow them end-to-end. **Read the "Brick
+prevention" section before running any flash command.**
 
 ```
-precursor/
+tests/precursor/
 ├── README.md            ← this file
 ├── build-and-bundle.sh  ← rebuild xas + bundle a kernel image
 ├── flash-via-pi.sh      ← scp the image to a Pi and run usb_update.py
@@ -23,6 +25,12 @@ precursor/
 All scripts are environment-variable driven. Defaults are at the
 top of each script. None of them write outside their own target
 directory or the Pi's `~/xous-flash/` folder.
+
+For the faster testing approaches, see [`../hosted/`](../hosted/)
+(Xous emulator on Linux — seconds per cycle) and the unit test
+suite (`cargo test --features hosted -p xous-app-signal --bins` —
+seconds, no hardware). For everything-from-scratch toolchain
+setup, see [`../../BUILDING.md`](../../BUILDING.md).
 
 ---
 
@@ -57,10 +65,9 @@ multi-hour user-assisted operation. The rules:
 ## What you need
 
 **Always:**
-- A working `dev`-branch checkout of this repo
-  ([`../tests/README.md`](../tests/README.md) for branch
-  conventions; [`../BUILDING.md`](../BUILDING.md) for toolchain
-  setup)
+- A working `dev`-branch checkout of this repo (see
+  [`../README.md`](../README.md) for branch conventions and
+  [`../../BUILDING.md`](../../BUILDING.md) for toolchain setup)
 - A xous-core checkout adjacent to this repo (default
   `../xous-core`; override via `XOUS_CORE_DIR`)
 - A Precursor PVT2 in the loader window (hold power 5s during
@@ -121,62 +128,59 @@ script path, and an attached `uart` screen session.
 
 ## Running a hardware test (the dev cycle)
 
+Same pattern as the other test approaches in `tests/` — build,
+exercise, observe, iterate. Just slower because the "exercise"
+step requires a 25-minute flash:
+
 1. **Edit code** on the `dev` branch (see
-   [`../tests/README.md`](../tests/README.md) for the branch
-   convention).
+   [`../README.md`](../README.md) for the branch convention).
 
-2. **Run unit tests** (a few seconds — catches obvious breakage
-   before the 30-minute hardware loop):
+2. **Run the cheaper tests first** to fail fast on regressions
+   that don't need a flash cycle:
    ```sh
-   cargo test --features hosted -p xous-app-signal --bins
+   cargo test --features hosted -p xous-app-signal --bins   # seconds
+   bash tests/hosted/test_link_qr.sh                        # ~minutes
    ```
 
-3. **Optionally run the hosted-mode link smoke test** (a few
-   minutes — catches link-flow regressions without burning a
-   flash cycle):
+3. **Build and bundle a kernel image** (~3-5 minutes):
    ```sh
-   bash tests/hosted/test_link_qr.sh
-   ```
-
-4. **Build and bundle a kernel image** (~3-5 minutes):
-   ```sh
-   bash precursor/build-and-bundle.sh
+   bash tests/precursor/build-and-bundle.sh
    ```
    Output: `<xous-core>/target/precursor-c809403e/release/xous.img`.
    Override `XOUS_CORE_DIR` / `XOUS_TARGET` if your layout
    differs.
 
-5. **Flash** (~25 minutes; do not unplug the Precursor):
+4. **Flash** (~25 minutes; do not unplug the Precursor):
 
    With the Pi rig (laptop is free during the flash):
    ```sh
-   bash precursor/flash-via-pi.sh
+   bash tests/precursor/flash-via-pi.sh
    ```
 
    Direct from this host (ties up the laptop for the flash):
    ```sh
-   bash precursor/flash-direct.sh
+   bash tests/precursor/flash-direct.sh
    ```
 
    Both scripts only use `-k` (kernel-only, recoverable). Both
    confirm `1209:5bf0` is visible before doing anything. Both
    redirect output to a `/tmp/flash-*.log` file.
 
-6. **Watch UART** (in another terminal, during or after the
+5. **Watch UART** (in another terminal, during or after the
    flash):
    ```sh
-   bash precursor/watch-uart.sh
+   bash tests/precursor/watch-uart.sh
    ```
    The script tails `~/uart-logs/precursor-uart.log` on the Pi.
    Set `FOLLOW=0` for a one-shot last-200-lines snapshot.
 
-7. **On the device:** unlock PDDB → join Wi-Fi (`wlan setup` in
+6. **On the device:** unlock PDDB → join Wi-Fi (`wlan setup` in
    shellchat if needed) → open xas → exercise the feature you're
    testing.
 
-8. **Analyze.** If reproducing a bug, diff against a known-good
-   baseline (see "Capturing a baseline" below). If iterating,
-   loop back to step 1.
+7. **Analyze the UART log.** If reproducing a bug, diff against
+   a known-good baseline (see "Capturing a baseline" below). If
+   iterating, loop back to step 1.
 
 ---
 
@@ -186,8 +190,8 @@ Before debugging a broken case, capture a "boots cleanly, xas
 not opened" UART log. Future runs can diff against it:
 
 ```sh
-bash precursor/build-and-bundle.sh
-bash precursor/flash-via-pi.sh
+bash tests/precursor/build-and-bundle.sh
+bash tests/precursor/flash-via-pi.sh
 # Let Precursor boot to launcher; don't open xas. Wait ~10s.
 ssh "$PI_HOST" 'cp ~/uart-logs/precursor-uart.log ~/uart-logs/baseline.log'
 
@@ -198,6 +202,9 @@ ssh "$PI_HOST" 'diff ~/uart-logs/baseline.log ~/uart-logs/precursor-uart.log'
 ---
 
 ## What you can and can't see from UART
+
+This is a UART-based test rig, not a JTAG/GDB debugger. Plan
+your test design around what UART can show.
 
 **You CAN:**
 
@@ -217,14 +224,14 @@ ssh "$PI_HOST" 'diff ~/uart-logs/baseline.log ~/uart-logs/precursor-uart.log'
 - See output from before the kernel started running (loader
   output yes; pre-loader FPGA gateware no)
 - See WF200 SPI traffic or smoltcp internal queues without
-  explicit instrumentation
+  explicit instrumentation in the source
 
 ---
 
 ## Gotchas
 
 - **UART output stops if Precursor sleeps/suspends.** Disable
-  auto-suspend in shellchat before long debug sessions:
+  auto-suspend in shellchat before long test sessions:
   `susres autosuspend off`.
 
 - **The serial mux is exclusive:** `gdbserver` in shellchat
@@ -234,7 +241,8 @@ ssh "$PI_HOST" 'diff ~/uart-logs/baseline.log ~/uart-logs/precursor-uart.log'
 
 - **WF200 errors don't auto-log.** They surface as smoltcp /
   `std::io` errors in xas only if the code path explicitly
-  logs them.
+  logs them. If a Wi-Fi-related test isn't surfacing what you
+  expect, add `log::info!` calls and re-flash.
 
 - **Pi heat:** the Pi 4B under sustained load can throttle on
   long sessions — `ssh "$PI_HOST" 'vcgencmd measure_temp'` to
@@ -266,5 +274,5 @@ ssh "$PI_HOST" 'diff ~/uart-logs/baseline.log ~/uart-logs/precursor-uart.log'
 Override at the call site:
 
 ```sh
-PI_HOST=pi@192.168.1.50 bash precursor/flash-via-pi.sh
+PI_HOST=pi@192.168.1.50 bash tests/precursor/flash-via-pi.sh
 ```

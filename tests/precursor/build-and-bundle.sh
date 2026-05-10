@@ -11,7 +11,7 @@
 # Safe to re-run; cargo will skip unchanged crates.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 XOUS_CORE_DIR="${XOUS_CORE_DIR:-$REPO_ROOT/../xous-core}"
 XOUS_TARGET="${XOUS_TARGET:-precursor-c809403e}"
 BUILD_LOG="${BUILD_LOG:-/tmp/xous-build-$(date +%s).log}"
@@ -78,4 +78,4 @@ echo "    path:    $XOUS_IMG"
 echo "    size:    $SIZE"
 echo "    sha256:  ${SHA}…"
 echo
-echo "Next: bash precursor/flash-via-pi.sh   (or flash-direct.sh)"
+echo "Next: bash tests/precursor/flash-via-pi.sh   (or flash-direct.sh)"

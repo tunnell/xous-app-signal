@@ -248,7 +248,7 @@ is 1-2 days each.
 - `dist` — runs `build-rv32` then copies the ELF to a known location
 - `renode-test` — invokes renode-test against the renode harness
 
-The first two are now bypassed by `precursor/build-and-bundle.sh`
+The first two are now bypassed by `tests/precursor/build-and-bundle.sh`
 (which calls `cargo build` + xous-core's `cargo xtask app-image-xip`
 directly). The third is rarely used (Renode is not actively
 exercised per `tests/README.md`).
@@ -266,7 +266,7 @@ exercised per `tests/README.md`).
    xtask crate.
 
 I lean **option 2** — the local xtask was useful when it
-unified the build path; now that `precursor/*.sh` exists for the
+unified the build path; now that `tests/precursor/*.sh` exists for the
 hardware path, xtask is a fourth way to invoke the same cargo
 commands. Less is more.
 

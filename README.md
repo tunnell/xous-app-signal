@@ -124,10 +124,10 @@ UI).
 - [`tests/README.md`](tests/README.md) — overview of the four
   testing approaches (unit / hosted / Renode / Precursor),
   pros and cons, and the dev/main branch convention
-- [`precursor/README.md`](precursor/README.md) — hardware-test
-  workflow: build, flash, watch UART (read this BEFORE running
-  any flash command — its "Brick prevention" section is
-  non-negotiable)
+- [`tests/precursor/README.md`](tests/precursor/README.md) —
+  hardware-test workflow: build, flash, watch UART (read this
+  BEFORE running any flash command — its "Brick prevention"
+  section is non-negotiable)
 
 ---
 
@@ -144,8 +144,8 @@ compares the four available approaches (unit tests / hosted /
 Renode / Precursor) with a pros-cons table so you can pick the
 right one for the change at hand. Hardware-test scripts (build,
 flash, watch UART) and the brick-prevention rules live in
-[`precursor/README.md`](precursor/README.md) — read it before
-running any flash command.
+[`tests/precursor/README.md`](tests/precursor/README.md) — read
+it before running any flash command.
 
 ---
 
@@ -196,8 +196,7 @@ xous-app-signal/
 │   ├── xous-app-signal/        binary entry point (binary name: `xas`)
 │   └── xous-app-signal-ui/     stdin-driven UI fallback for standalone runs (no Xous server)
 ├── docs/                       ARCHITECTURE.md (reader's-eye-view of the codebase)
-├── precursor/                  scripts + notes for the hardware-test workflow
-├── tests/                      hosted-mode harnesses + Renode harnesses
+├── tests/                      hosted-mode + Renode + precursor (hardware) test harnesses
 └── vendor/                     vendored forks of presage / libsignal-service-rs / curve25519-dalek
 ```
 
