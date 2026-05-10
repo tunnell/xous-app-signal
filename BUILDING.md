@@ -126,8 +126,9 @@ rustup error there.
 
 xas depends on a forked `xous-core` because two upstream bugs
 need to be patched for the Wi-Fi + WebSocket path to work
-reliably. Use our forks (or apply the patches in
-the README's Upstream patches section to upstream).
+reliably. Both have PRs filed upstream and are in review (see
+the README's Upstream patches section for links and status); the
+forks below are the canonical source until those PRs merge.
 
 The forks below are the published source of truth — pull `main`
 for the latest released code; pull `dev` if you want the
@@ -147,10 +148,10 @@ mkdir -p ~/code/xas && cd ~/code/xas
 # xas itself (default branch is 'main' = released code)
 git clone https://github.com/tunnell/xous-app-signal.git
 
-# xous-core (kernel + services). The xas branch carries the
-# net-service encoding fix described in the README's Upstream
-# patches section.
-git clone --depth 1 -b xas https://github.com/tunnell/xous-core.git
+# xous-core (kernel + services). The xous-app-signal branch
+# carries the net-service encoding fix and DNS CNAME fix described
+# in the README's Upstream patches section.
+git clone --depth 1 -b xous-app-signal https://github.com/tunnell/xous-core.git
 
 # xous-app-signal's workspace Cargo.toml uses paths like
 # `../repos/xous-core/...`, i.e. relative to xous-app-signal's
@@ -183,6 +184,19 @@ Verify the layout:
 — that file must exist, otherwise the very first crate cargo tries
 to load (`crates/xous-modals-ipc`) will fail with `failed to read
 '.../repos/xous-core/services/trng/Cargo.toml'`.
+
+### What each clone contributes to the build
+
+The two clones above plus the in-tree vendored copy give you the
+effective fixes from all three filed upstream PRs. If you ever
+need to verify "am I actually building with the upstream PR
+content," this is the map:
+
+| Upstream PR | Where it lives in your build | How |
+|---|---|---|
+| [betrusted-io/xous-core#877](https://github.com/betrusted-io/xous-core/pull/877) (kernel byte-1 mirror) | `xous-core/services/net/src/std_glue.rs::respond_with_error` on the `xous-app-signal` branch | The `xous-app-signal` branch is `pr-net-encoding-fix` (= recent upstream main + PR #877's commit `cfcc12eee`) plus two cherry-picks: a CNAME-chain DNS fix (`43dcb4a59`) required for Signal connectivity but filed/tracked separately, and a small PDDB hosted-mode test convenience (`c22cfc678`). It contains the PR's commit verbatim — when PR #877 merges upstream, this branch becomes a clean fast-forward. Do not switch to the bare `pr-net-encoding-fix` branch for a working deploy — you'd lose the DNS fix. |
+| [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431) (keepalive tolerance) | `xous-app-signal/vendor/libsignal-service-rs/src/websocket/mod.rs` | The vendored copy uses a local `MAX_OUTSTANDING_KEEPALIVES = 3` constant. PR #431 reshapes this as an opt-in `with_max_outstanding_keepalives(...)` constructor (default = 1, preserves upstream behavior). The two are semantically equivalent for our use; the vendored copy will be re-aligned to the builder shape after PR #431 merges. No action needed — the vendored copy is part of the `xous-app-signal` clone above. |
+| [rust-lang/rust#156414](https://github.com/rust-lang/rust/pull/156414) (std recv byte-4 decode) | **Not in your build.** | PR #156414 fixes the bug at its actual source (the std-side recv decode reads byte 4 instead of byte 1). The build uses stock Rust whose std backend still has the byte-1 bug — and it doesn't matter, because PR #877's kernel-side mirror writes the code at byte 1 too. Once #156414 lands and propagates to a stable Rust release, the kernel-side mirror becomes belt-and-suspenders rather than load-bearing. No action needed for the current build. |
 
 ---
 
@@ -630,7 +644,7 @@ When the Precursor boots into Xous:
 | `usb_update.py` permission denied (Linux host) | udev rule missing | Add `tools/49-precursor.rules` to `/etc/udev/rules.d/` and `udevadm control --reload`, or run with sudo (not recommended) |
 | Hosted xas shows "OOM during link" | Default heap cap too low | Run with `RUST_LOG=info` to see allocator messages; rebuild with `--features pddb-real,hosted` (the dist build is otherwise too lean) |
 | Hardware link succeeds but no messages flow | Wi-Fi connected to 5 GHz, or DNS broken | Re-run the wlan recipe; verify `net ping chat.signal.org` works before opening xas |
-| Send fails with "WebSocket closing" within 30s | Older xous-core without the encoding fix | Confirm you cloned the `xas` branch of `tunnell/xous-core`, not upstream `betrusted-io/xous-core` (or apply patches in the README's Upstream patches section) |
+| Send fails with "WebSocket closing" within 30s | Older xous-core without the encoding fix | Confirm you cloned the `xous-app-signal` branch of `tunnell/xous-core`, not upstream `betrusted-io/xous-core`. Upstream PR is [betrusted-io/xous-core#877](https://github.com/betrusted-io/xous-core/pull/877); pull stock once it merges. |
 | Flash completes but device boots into the old image | Loader didn't validate the new signature | Re-flash; if it persists, check `tools/usb_update.py` log for verification errors |
 
 ---
@@ -645,9 +659,18 @@ git rev-parse HEAD   # should match origin/main (or origin/dev if developing)
 cargo --version      # should be 1.95.0 or newer
 ls vendor/presage/.git 2>&1   # should NOT exist (we vendor as plain dirs)
 
+# Confirm vendored libsignal carries the keepalive-tolerance fix
+# (effective equivalent of upstream PR whisperfish/libsignal-service-rs#431):
+grep -F 'MAX_OUTSTANDING_KEEPALIVES: usize = 3' \
+    vendor/libsignal-service-rs/src/websocket/mod.rs   # expect: 1 hit
+
 # In xous-core:
-git branch --show-current   # should be 'xas'
-git log --oneline -1 services/net/src/std_glue.rs   # should show the byte-1 fix
+git branch --show-current   # should be 'xous-app-signal'
+git log --oneline -1 services/net/src/std_glue.rs   # should show 'cfcc12eee fix(net): write NetError code at byte 1 too…'
+
+# Confirm the byte-1 mirror is actually in respond_with_error
+# (effective equivalent of upstream PR betrusted-io/xous-core#877):
+grep -F 'Mirror code at byte 1' services/net/src/std_glue.rs   # expect: 1 hit
 ```
 
 A successful hardware build produces an image of size
@@ -664,4 +687,5 @@ that.
 - This README's "Feature support" section tracks what works
   and what doesn't.
 - The README's "Upstream patches" section documents the patches
-  xas requires that aren't yet upstream.
+  xas carries while their upstream PRs are in review, with links
+  to each PR.

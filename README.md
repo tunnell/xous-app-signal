@@ -152,33 +152,49 @@ it before running any flash command.
 
 ## Upstream patches
 
-xas depends on patches that are not yet in the upstream
-repositories:
+xas depends on three upstream patches. All three have PRs filed
+upstream and are in review; until they merge, the
+`xous-app-signal` branch of [`tunnell/xous-core`](https://github.com/tunnell/xous-core)
+and the vendored copy of `libsignal-service-rs` carry the fixes.
 
-1. **`betrusted-io/xous-core` net-service encoding fix.** The
-   kernel writes `NetError` codes at byte 4 of the response
+1. **`betrusted-io/xous-core` net-service encoding fix** —
+   [betrusted-io/xous-core#877](https://github.com/betrusted-io/xous-core/pull/877).
+   The kernel writes `NetError` codes at byte 4 of the response
    buffer; the Rust stdlib's Xous backend reads from byte 1 in
    the recv path. The mismatch made `ErrorKind::TimedOut`
    unreachable from `TcpStream::recv` — fatal for any
    long-lived WS that uses `set_read_timeout` to interleave
-   reads and writes. We mirror the code at byte 1 too.
-   `BUILDING.md` instructs you to clone the `xas` branch of
-   [`tunnell/xous-core`](https://github.com/tunnell/xous-core)
-   which carries the fix.
-2. **`whisperfish/libsignal-service-rs` keepalive tolerance.**
+   reads and writes. The fix mirrors the code at byte 1 too.
+   `BUILDING.md` instructs you to clone the `xous-app-signal`
+   branch of `tunnell/xous-core` which carries this (the branch
+   is the upstream PR commit + the CNAME-chain DNS fix below + a
+   small hosted-mode PDDB tweak).
+2. **`whisperfish/libsignal-service-rs` keepalive tolerance** —
+   [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431) (draft).
    Upstream closes the WS the moment any keepalive is
    outstanding. Under any non-zero scheduling jitter (e.g.
-   rv32) this races and closes healthy connections. We tolerate
-   up to 3 outstanding before deciding the WS is dead. The fix
-   lives in `vendor/libsignal-service-rs/` in this repo.
-3. **`rust-lang/rust` Xous std-side recv encoding.** The
-   long-arc fix that makes #1 unnecessary upstream — change the
-   recv decode to read byte 4 (matching the send decode). Rust
-   toolchain `r?` cycles take weeks; the kernel-side mirror in
-   #1 is the immediately-shippable workaround.
+   rv32) this races and closes healthy connections. The PR adds
+   an opt-in `with_max_outstanding_keepalives(...)` constructor
+   so callers like xas can tolerate the race without changing
+   default behavior for other consumers. The patch lives in
+   `vendor/libsignal-service-rs/` in this repo as a constant
+   `MAX_OUTSTANDING_KEEPALIVES = 3` (semantically equivalent
+   for our use); the vendored copy will be re-aligned to the
+   builder shape after the upstream PR merges.
+3. **`rust-lang/rust` Xous std-side recv encoding** —
+   [rust-lang/rust#156414](https://github.com/rust-lang/rust/pull/156414) (draft).
+   The long-arc fix that makes #1 unnecessary at the std level —
+   change the recv decode to read byte 4 (matching the send
+   decode). Rust toolchain `r?` cycles take weeks; the
+   kernel-side mirror in #1 is the immediately-shippable
+   workaround. Once #3 lands and propagates to a stable Rust
+   release, the byte-1 mirror in #1 becomes belt-and-suspenders
+   rather than load-bearing.
 
-Once #1 lands upstream, BUILDING.md will be updated to point at
-stock `betrusted-io/xous-core`.
+Once #1 merges, BUILDING.md will be updated to point at stock
+`betrusted-io/xous-core`. PR #2's merge triggers a re-vendor of
+`libsignal-service-rs`. PR #3 is asynchronous and does not
+gate either of the above.
 
 ---
 
