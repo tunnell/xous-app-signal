@@ -90,7 +90,8 @@ Precursor sends the F-keys as `\u{11}`, `\u{12}`, `\u{13}`,
 | Settings | Enter / `∴` | Open selected sub-screen |
 | Settings | Esc | Back to Home |
 | About / Help / Profile | Enter / Esc | Back |
-| Linking | (no input — auto-transitions on worker events) | |
+| Linking | Esc / Backspace | Cancel the in-flight link, return to Menu |
+| Linking | (other keys — auto-transitions on worker events) | |
 | Linked | Enter | Continue (Home if Success, Menu if Failure) |
 
 The full table is the `match (&app.screen, k)` block in
@@ -156,7 +157,6 @@ UI items still on the roadmap:
   currently shows leaked shellchat predictor entries; a custom
   icontray plugin would put pencil/refresh/?/gear glyphs under
   F1-F4 instead.
-- **Cancel-link on backspace/Esc** during Linking.
 - **No-internet preflight on Home** when xas opens with no
   Wi-Fi joined.
 

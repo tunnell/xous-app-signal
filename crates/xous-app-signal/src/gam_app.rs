@@ -1001,6 +1001,20 @@ fn handle_keys(
                 }
                 app.last_status.clear();
             }
+            // Esc / Backspace on Screen::Linking — cancel the
+            // in-flight link. Worker drops the link future + emits
+            // a LinkError("Cancelled") which we ignore (because
+            // linking_in_progress is now false).
+            (Screen::Linking, '\u{1b}') | (Screen::Linking, '\u{8}') => {
+                log::info!("xas/gam_app: cancel link via Esc/backspace");
+                if let Err(e) = cmd_tx.send_blocking(Cmd::LinkCancel) {
+                    log::warn!("xas/gam_app: Cmd::LinkCancel send err: {:?}", e);
+                }
+                app.linking_in_progress = false;
+                app.screen = Screen::Menu;
+                app.selected = MenuItem::Link;
+                app.last_status.clear();
+            }
             (Screen::Home, '↑') => {
                 app.home_focus = app.home_focus.saturating_sub(1);
             }
@@ -1296,6 +1310,17 @@ fn handle_worker_event(
         }
         Event::LinkError(msg) => {
             log::warn!("xas/gam_app: LinkError: {}", msg);
+            // If the user already navigated away (e.g., cancelled via
+            // Esc on Screen::Linking), linking_in_progress is already
+            // false. Don't bounce them onto the failure screen — the
+            // late-arriving error is a confirmation that the cancel
+            // took effect, not a user-facing problem.
+            if !app.linking_in_progress {
+                log::info!(
+                    "xas/gam_app: ignoring late LinkError (link not in progress; user cancelled)"
+                );
+                return;
+            }
             app.linking_in_progress = false;
             app.screen = Screen::Linked { kind: LinkedKind::Failure };
             app.last_status = msg;

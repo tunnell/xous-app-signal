@@ -203,8 +203,84 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                     }
                 }
                 Ok(Cmd::LinkDevice { device_name }) => {
-                    let outcome =
-                        handle_link_device(store.clone(), event_tx.clone(), device_name).await;
+                    log::info!("worker: Cmd::LinkDevice received");
+                    use futures::FutureExt;
+                    use futures::future::{self, Either};
+                    use futures::pin_mut;
+
+                    // Cancel primitive: a 1-slot async-channel. The
+                    // outer "race" loop below sends () on cancel_tx
+                    // when Cmd::LinkCancel arrives; the link future
+                    // is wrapped to race against cancel_rx.recv().
+                    // Dropping cancel_tx (e.g., shutdown path) also
+                    // closes the channel, which the recv() sees as
+                    // RecvError — the race interprets either signal
+                    // as "cancel."
+                    let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
+
+                    let store_for_link = store.clone();
+                    let event_tx_for_link = event_tx.clone();
+                    let link_with_cancel = async move {
+                        let h = handle_link_device(
+                            store_for_link,
+                            event_tx_for_link.clone(),
+                            device_name,
+                        );
+                        pin_mut!(h);
+                        let cancel = cancel_rx.recv();
+                        pin_mut!(cancel);
+                        match future::select(h, cancel).await {
+                            Either::Left((result, _)) => result,
+                            Either::Right((_, _)) => {
+                                log::info!("worker/link: cancelled by user");
+                                let _ = event_tx_for_link
+                                    .send(Event::LinkError("Cancelled".to_string()))
+                                    .await;
+                                Err(())
+                            }
+                        }
+                    }
+                    .fuse();
+                    pin_mut!(link_with_cancel);
+
+                    // While link runs, also poll cmd_rx so a
+                    // Cmd::LinkCancel sent from the UI can reach us.
+                    // Other Cmds during in-flight link are silently
+                    // dropped — the UI is on Screen::Linking and only
+                    // LinkCancel makes sense there. Cmd::Shutdown
+                    // during link cancels link first, then exits.
+                    let outcome: Result<Manager<PddbStore, Registered>, ()> = 'race: loop {
+                        futures::select_biased! {
+                            result = link_with_cancel => break 'race result,
+                            cmd = cmd_rx.recv().fuse() => match cmd {
+                                Ok(Cmd::LinkCancel) => {
+                                    log::info!("worker: LinkCancel during in-flight link");
+                                    let _ = cancel_tx.try_send(());
+                                    // link_with_cancel resolves to
+                                    // Err(()) on its next poll; loop
+                                    // back to receive that and exit.
+                                }
+                                Ok(Cmd::Shutdown) => {
+                                    log::info!("worker: Shutdown during in-flight link");
+                                    let _ = cancel_tx.try_send(());
+                                    let _ = event_tx.send(Event::ShuttingDown).await;
+                                    return;
+                                }
+                                Ok(_other) => {
+                                    log::warn!(
+                                        "worker: cmd dropped during in-flight link (UI shouldn't send anything but LinkCancel here)"
+                                    );
+                                }
+                                Err(_) => {
+                                    log::info!("worker: cmd channel closed during in-flight link");
+                                    let _ = cancel_tx.try_send(());
+                                    return;
+                                }
+                            }
+                        }
+                    };
+                    drop(cancel_tx);
+
                     match outcome {
                         Ok(manager) => {
                             // We already sent Event::LinkComplete from
@@ -222,7 +298,8 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                             linked = Some(manager);
                         }
                         Err(()) => {
-                            // handle_link_device already sent
+                            // handle_link_device (or the cancel branch
+                            // above) already sent the appropriate
                             // Event::LinkError. Drop any half-linked
                             // state on the floor; retry by sending
                             // another Cmd::LinkDevice.
@@ -230,14 +307,10 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                     }
                 }
                 Ok(Cmd::LinkCancel) => {
-                    // No-op. presage's link_secondary_device
-                    // doesn't expose a cancel handle; the in-flight task
-                    // runs to completion or HTTP timeout. The UI side
-                    // already navigates away on Cancel; a stale
-                    // LinkComplete/LinkError eventually arriving is
-                    // ignored by the UI (it's no longer on a Link*
-                    // screen).
-                    tracing::debug!("LinkCancel received; in-flight link runs to completion");
+                    // Outside an in-flight link this is a no-op — the
+                    // UI shouldn't be sending it from non-Linking
+                    // screens, but defensively log and ignore.
+                    log::info!("worker: LinkCancel received outside in-flight link; no-op");
                 }
                 Ok(Cmd::GetAccountInfo) => {
                     log::info!("worker: Cmd::GetAccountInfo received");
