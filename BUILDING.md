@@ -303,14 +303,26 @@ contact-name resolution. Should all pass green.
 
 ### 3.1 Build the rv32 xas binary
 
+The fastest path is the precursor test script, which does the
+build + bundle + flash for you (see section 3.2):
+
 ```sh
 cd ~/code/xas/xous-app-signal
-cargo xtask dist
+bash tests/precursor/build-and-bundle.sh
 ```
 
-This cross-compiles xas to `riscv32imac-unknown-xous-elf` and
-copies the result to `dist/xas-rv32/xas` (~55 MB ELF). First
-build is ~10 min; incremental builds are ~1 min.
+If you only want the rv32 binary (no kernel image), the
+underlying `cargo build` is:
+
+```sh
+cd ~/code/xas/xous-app-signal
+cargo build --target riscv32imac-unknown-xous-elf --release \
+    -p xous-app-signal --features pddb-real,precursor
+```
+
+Output: `target/riscv32imac-unknown-xous-elf/release/xas`
+(~55 MB ELF). First build is ~10 min; incremental builds are
+~1 min.
 
 ### 3.2 Bundle a signed kernel image
 

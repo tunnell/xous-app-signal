@@ -39,10 +39,18 @@ if ! command -v "$renode_bin" >/dev/null 2>&1; then
     exit 2
 fi
 
-# 1. Cross-compile + dist.
+# 1. Cross-compile xas for rv32 + copy ELF to the dist dir the
+#    .resc script expects. (Previously this was `cargo xtask dist`;
+#    inlined here after xtask removal.)
 cd "$workspace_root"
-echo "==> cargo xtask dist"
-cargo xtask dist
+echo "==> building xas for riscv32imac-unknown-xous-elf"
+cargo build --target riscv32imac-unknown-xous-elf --release \
+    -p xous-app-signal --features pddb-real,precursor
+
+XAS_DIST_DIR="${XAS_DIST_DIR:-$workspace_root/dist/xas-rv32}"
+mkdir -p "$XAS_DIST_DIR"
+cp "$workspace_root/target/riscv32imac-unknown-xous-elf/release/xas" "$XAS_DIST_DIR/xas"
+echo "==> ELF: $XAS_DIST_DIR/xas ($(du -h "$XAS_DIST_DIR/xas" | cut -f1))"
 
 # 2. Run the Robot test. renode-test's working directory matters
 #    for the .resc include resolution, so we cd into the renode dir.

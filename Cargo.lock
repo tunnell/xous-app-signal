@@ -5308,10 +5308,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "xtask"
-version = "0.0.1"
-
-[[package]]
 name = "yoke"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
