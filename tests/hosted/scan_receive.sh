@@ -2,7 +2,7 @@
 # tests/hosted/scan_receive.sh
 #
 # Hosted-mode receive test. signal-cli sends a uniquely-marked
-# message; xas's bridge should pull it off the WS, decrypt, and
+# message; xas's worker should pull it off the WS, decrypt, and
 # emit `Event::Message` (logged as "xas/gam_app: inbound message
 # from <uuid>").
 #
@@ -81,7 +81,7 @@ while (( WAIT < 60 )); do
     WAIT=$((WAIT + 2))
 done
 if ! grep -q "manager_task — receive_messages OK" "$KERNEL_LOG" 2>/dev/null; then
-    echo "ERROR: bridge never reached receive_messages OK." >&2
+    echo "ERROR: worker never reached receive_messages OK." >&2
     echo "  Did you link xas yet? Hosted mode currently doesn't" >&2
     echo "  persist link state across boots — re-link via the GAM" >&2
     echo "  menu in this same kernel before running this script." >&2
@@ -131,8 +131,8 @@ done
 if [[ -z "$FOUND" ]]; then
     echo "RESULT: FAIL (no inbound message log line in 90s)"
     echo ""
-    echo "Last 10 bridge/manager_task lines:"
-    grep -E "bridge:|manager_task" "$KERNEL_LOG" | tail -10
+    echo "Last 10 worker/manager_task lines:"
+    grep -E "worker:|manager_task" "$KERNEL_LOG" | tail -10
     exit 1
 fi
 

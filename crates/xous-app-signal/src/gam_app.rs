@@ -29,7 +29,7 @@
 //!   their roles are folded into Home + Thread.)
 //!   round-trip. Enter returns to Menu.
 //!
-//! Worker integration: events from the bridge worker (`event_rx`)
+//! Worker integration: events from the signal worker (`event_rx`)
 //! reach the GAM main loop via a forwarder thread that pushes
 //! into a shared `Mutex<VecDeque<Event>>` and wakes us via a
 //! `XasOp::WorkerEvent` scalar IPC to our own SID.
@@ -974,7 +974,7 @@ fn handle_keys(
             (Screen::Home, '\u{11}') => {
                 drive_new_chat(app, modals_xns);
             }
-            // F2 (0x12): Sync — placeholder. Needs a bridge-side
+            // F2 (0x12): Sync — placeholder. Needs a worker-side
             // Cmd::SyncContacts plus a manager_task handler.
             // Tier-2 chore. For now show a notification.
             (Screen::Home, '\u{12}') => {
@@ -1117,7 +1117,7 @@ fn handle_keys(
                         // If Profile fields aren't loaded yet (cold
                         // start with linked-from-PDDB but no fresh
                         // LinkComplete), fire Cmd::GetAccountInfo
-                        // so the bridge can read registration_data
+                        // so the worker can read registration_data
                         // and emit Event::AccountInfo. UI updates
                         // when Event arrives.
                         if app.account_aci.is_none() {

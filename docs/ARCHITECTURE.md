@@ -374,7 +374,7 @@ wrong.
 | Linking hangs after QR scan | `vendor/presage/presage/src/manager/linking.rs`; check ProvisionEnvelope decrypt + prekey gen + `POST /v1/devices/link` |
 | LCD doesn't repaint after an event | `gam_app.rs::handle_worker_event` — confirm the event arm calls `app.render()` |
 | New `Cmd` variant doesn't reach the worker | Check the dispatcher in `xous-signal-worker/src/lib.rs::worker_main`'s `match cmd_rx.recv()` |
-| Profile screen says "(not loaded)" after restart | `xous-signal-worker/src/lib.rs::cached_account_info` + `Cmd::GetAccountInfo` handler — see if the bridge cached it |
+| Profile screen says "(not loaded)" after restart | `xous-signal-worker/src/lib.rs::cached_account_info` + `Cmd::GetAccountInfo` handler — see if the worker cached it |
 
 ## 10. What this doc deliberately does not cover
 

@@ -740,7 +740,7 @@ What we **don't** adopt:
   vertical menu list; icontray's three-icon row optimises for
   Precursor's older soft-key bar which `xas` doesn't bind).
 
-## 10. Data flow: bridge → UI
+## 10. Data flow: worker → UI
 
 Every screen reads from the manager state machine and writes by
 emitting commands. The existing `xous-signal-worker` `Cmd`/`Event`

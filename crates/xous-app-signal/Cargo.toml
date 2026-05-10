@@ -82,7 +82,7 @@ precursor = [
 [dependencies]
 # Spawn the manager worker thread + drive Hello/GetWhoami
 # round-trips. The presage-store-pddb dep is direct (not just
-# transitive through the bridge) because the binary owns the store
+# transitive through the worker) because the binary owns the store
 # and hands a clone to the worker.
 xous-signal-worker = { path = "../xous-signal-worker" }
 presage-store-pddb = { path = "../presage-store-pddb" }

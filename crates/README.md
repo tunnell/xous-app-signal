@@ -50,12 +50,14 @@ crates for three concrete reasons:
 runtime architecture (worker thread, async channel bridge,
 GAM UI loop). The crates here map to its sections roughly as:
 
-- **Section "Worker + bridge"** → `xous-signal-worker`
-- **Section "Storage"** → `presage-store-pddb` + `xous-pddb-ipc`
-- **Section "Transport (ws_pump)"** → `xous-net-bridge`
-- **Section "UI"** → `xous-app-signal/src/gam_app.rs`
-  + `xous-modals-ipc` (for QR-code modal) + `xous-app-signal-ui`
-  (fallback)
+- **§2 The big picture** + **§4/§5 inbound/outbound walkthroughs**
+  → `xous-signal-worker` (the worker thread + Cmd/Event surface
+  the walkthroughs trace through)
+- **§6 Where state lives** → `presage-store-pddb` + `xous-pddb-ipc`
+- **§8 ws_pump in detail** → `xous-net-bridge`
+- The GAM render path the walkthroughs end at →
+  `xous-app-signal/src/gam_app.rs` + `xous-modals-ipc` (QR
+  modal) + `xous-app-signal-ui` (stdin fallback)
 
 If a crate's purpose feels unclear after reading this table,
 that's a signal worth recording — the architecture-review chore

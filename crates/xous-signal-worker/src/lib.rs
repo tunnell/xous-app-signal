@@ -123,7 +123,7 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
         // `None` means we haven't linked (or failed to).
         let mut linked: Option<Manager<PddbStore, Registered>> = None;
 
-        // Cached identity fields. Populated whenever the bridge sees
+        // Cached identity fields. Populated whenever the worker sees
         // a successful Manager (load_registered or link_secondary_device);
         // served back via Cmd::GetAccountInfo for the UI Profile screen
         // on cold-start where Event::LinkComplete may have fired before
@@ -136,7 +136,7 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
         // (mount fires lazily on first IPC, racing with us); retry on
         // transient errors until the store either returns a Manager or
         // a definitive NotYetRegistered.
-        log::info!("bridge: attempting load_registered from PDDB");
+        log::info!("worker: attempting load_registered from PDDB");
         let mut linked_attempts = 0;
         loop {
             match Manager::load_registered(store.clone()).await {
@@ -146,7 +146,7 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                     let aci = data.service_ids.aci.to_string();
                     let phone = data.phone_number.to_string();
                     log::info!(
-                        "bridge: load_registered OK — device={} aci={} phone={}",
+                        "worker: load_registered OK — device={} aci={} phone={}",
                         device_name, aci, phone
                     );
                     cached_account_info = Some(crate::cmd::AccountInfoData {
@@ -163,16 +163,16 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                 Err(e) => {
                     let msg = format!("{}", e);
                     if msg.contains("not yet registered") || msg.contains("NotYetRegistered") {
-                        log::info!("bridge: load_registered: not registered yet (first boot)");
+                        log::info!("worker: load_registered: not registered yet (first boot)");
                         break;
                     }
                     linked_attempts += 1;
                     if linked_attempts >= 10 {
-                        log::warn!("bridge: load_registered gave up after 10 retries: {}", e);
+                        log::warn!("worker: load_registered gave up after 10 retries: {}", e);
                         break;
                     }
                     log::info!(
-                        "bridge: load_registered transient err (attempt {}/10): {}",
+                        "worker: load_registered transient err (attempt {}/10): {}",
                         linked_attempts, e
                     );
                     futures_lite::future::yield_now().await;
@@ -240,18 +240,18 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                     tracing::debug!("LinkCancel received; in-flight link runs to completion");
                 }
                 Ok(Cmd::GetAccountInfo) => {
-                    log::info!("bridge: Cmd::GetAccountInfo received");
+                    log::info!("worker: Cmd::GetAccountInfo received");
                     // Try the cache first (fastest path: this is
                     // populated after any successful load_registered
                     // or link_secondary_device).
                     let outcome = if let Some(info) = cached_account_info.as_ref() {
-                        log::info!("bridge: GetAccountInfo — serving from cache");
+                        log::info!("worker: GetAccountInfo — serving from cache");
                         Ok(info.clone())
                     } else {
                         // No cache. Try a fresh load_registered —
                         // PDDB may have unlocked since the worker's
                         // startup retry budget expired.
-                        log::info!("bridge: GetAccountInfo — cache miss, retrying load_registered");
+                        log::info!("worker: GetAccountInfo — cache miss, retrying load_registered");
                         match Manager::load_registered(store.clone()).await {
                             Ok(manager) => {
                                 let data = manager.registration_data();
@@ -271,7 +271,7 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                             }
                             Err(e) => {
                                 let msg = format!("{}", e);
-                                log::warn!("bridge: GetAccountInfo — load_registered err: {}", msg);
+                                log::warn!("worker: GetAccountInfo — load_registered err: {}", msg);
                                 Err(msg)
                             }
                         }
@@ -282,13 +282,13 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                     }
                 }
                 Ok(Cmd::StartReceive) => {
-                    log::info!("bridge: Cmd::StartReceive received");
+                    log::info!("worker: Cmd::StartReceive received");
                     if send_to_manager.is_some() {
-                        log::info!("bridge: StartReceive — already running, idempotent drop");
+                        log::info!("worker: StartReceive — already running, idempotent drop");
                         continue;
                     }
                     let Some(manager) = linked.take() else {
-                        log::warn!("bridge: StartReceive — not linked");
+                        log::warn!("worker: StartReceive — not linked");
                         let _ = event_tx
                             .send(Event::ReceiveError(
                                 "not linked yet — send Cmd::LinkDevice first".to_string(),
@@ -296,7 +296,7 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                             .await;
                         continue;
                     };
-                    log::info!("bridge: StartReceive — spawning manager_task");
+                    log::info!("worker: StartReceive — spawning manager_task");
                     // Spawn a single "manager task" that owns the
                     // Manager for life and multiplexes receive-stream
                     // items with inbound send requests via an internal
@@ -379,7 +379,7 @@ async fn handle_link_device(
     use futures::channel::oneshot;
     use futures::future;
 
-    log::info!("bridge/link: begin (device_name={:?})", device_name);
+    log::info!("worker/link: begin (device_name={:?})", device_name);
 
     let (url_tx, url_rx) = oneshot::channel::<url::Url>();
     let event_tx_for_url = event_tx.clone();
@@ -387,24 +387,24 @@ async fn handle_link_device(
     let forwarder = async move {
         match url_rx.await {
             Ok(url) => {
-                log::info!("bridge/link: URL received from libsignal: {}", url);
+                log::info!("worker/link: URL received from libsignal: {}", url);
                 if let Err(e) = event_tx_for_url.send(Event::LinkUrl(url.to_string())).await {
-                    log::warn!("bridge/link: event_tx send LinkUrl failed: {:?}", e);
+                    log::warn!("worker/link: event_tx send LinkUrl failed: {:?}", e);
                 }
             }
             Err(e) => {
-                log::warn!("bridge/link: url_rx closed before URL: {:?}", e);
+                log::warn!("worker/link: url_rx closed before URL: {:?}", e);
             }
         }
     };
 
-    log::info!("bridge/link: calling Manager::link_secondary_device");
+    log::info!("worker/link: calling Manager::link_secondary_device");
     let (link_result, _) = future::join(
         Manager::link_secondary_device(store, SignalServers::Production, device_name, url_tx),
         forwarder,
     )
     .await;
-    log::info!("bridge/link: link_secondary_device returned");
+    log::info!("worker/link: link_secondary_device returned");
 
     match link_result {
         Ok(mut manager) => {
@@ -439,7 +439,7 @@ async fn handle_link_device(
             // Phone-number recipient resolution stays broken until
             // that lands — an acceptable trade for unblocking
             // send entirely.
-            log::info!("bridge/link: skipping request_contacts (deferred to user-triggered Sync)");
+            log::info!("worker/link: skipping request_contacts (deferred to user-triggered Sync)");
             Ok(manager)
         }
         Err(e) => {
@@ -519,7 +519,7 @@ async fn manager_task(
     // can't paper over.
     const MAX_CONSECUTIVE_FAILURES: u32 = 20;
 
-    log::info!("bridge: manager_task entered");
+    log::info!("worker: manager_task entered");
 
     'outer: loop {
         // Backoff before reopening if this isn't the first attempt.
@@ -532,13 +532,13 @@ async fn manager_task(
             let backoff_ms =
                 (1000.0 * 1.5_f64.powi(consecutive_failures as i32 - 1)).min(30_000.0) as u64;
             log::info!(
-                "bridge: manager_task — backoff {}ms before re-open (consecutive_failures={})",
+                "worker: manager_task — backoff {}ms before re-open (consecutive_failures={})",
                 backoff_ms, consecutive_failures,
             );
             futures_timer::Delay::new(std::time::Duration::from_millis(backoff_ms)).await;
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
                 log::error!(
-                    "bridge: manager_task — gave up after {} consecutive failures",
+                    "worker: manager_task — gave up after {} consecutive failures",
                     consecutive_failures,
                 );
                 let _ = event_tx
@@ -552,16 +552,16 @@ async fn manager_task(
         }
 
         // Open the stream for this iteration.
-        log::info!("bridge: manager_task — opening receive_messages stream");
+        log::info!("worker: manager_task — opening receive_messages stream");
         let mut stream = match manager.receive_messages().await {
             Ok(s) => {
-                log::info!("bridge: manager_task — receive_messages OK");
+                log::info!("worker: manager_task — receive_messages OK");
                 Box::pin(s)
             }
             Err(e) => {
                 consecutive_failures = consecutive_failures.saturating_add(1);
                 log::warn!(
-                    "bridge: manager_task — receive_messages err (failure #{}): {}",
+                    "worker: manager_task — receive_messages err (failure #{}): {}",
                     consecutive_failures, e,
                 );
                 // Surface only the first error in a streak so the UI
@@ -576,7 +576,7 @@ async fn manager_task(
         };
 
         if !announced {
-            log::info!("bridge: manager_task — sending ReceiveStarted");
+            log::info!("worker: manager_task — sending ReceiveStarted");
             if event_tx.send(Event::ReceiveStarted).await.is_err() {
                 return;
             }
@@ -589,7 +589,7 @@ async fn manager_task(
                 item = stream.next().fuse() => {
                     match item {
                         Some(item) => {
-                            log::info!("bridge: stream item received");
+                            log::info!("worker: stream item received");
                             // Real progress on this stream — clear
                             // the failure counter so the next reopen
                             // (when handle_send forces one) doesn't
@@ -627,14 +627,14 @@ async fn manager_task(
 
         // Drop the stream so the &mut borrow on `manager` is
         // released before we call anything else on `manager`.
-        log::info!("bridge: manager_task — dropping receive stream to free &mut manager borrow");
+        log::info!("worker: manager_task — dropping receive stream to free &mut manager borrow");
         drop(stream);
 
         match exit {
             InnerExit::Send(send) => {
-                log::info!("bridge: manager_task — invoking handle_send");
+                log::info!("worker: manager_task — invoking handle_send");
                 handle_send(&mut manager, send, &event_tx).await;
-                log::info!("bridge: manager_task — handle_send returned, re-opening stream");
+                log::info!("worker: manager_task — handle_send returned, re-opening stream");
                 // Keep consecutive_failures as is. If handle_send
                 // failed because the WS was already dying, the
                 // upcoming receive_messages() call may also fail —
@@ -643,7 +643,7 @@ async fn manager_task(
             InnerExit::Reopen { reason } => {
                 consecutive_failures = consecutive_failures.saturating_add(1);
                 log::warn!(
-                    "bridge: manager_task — stream closed (failure #{}, reason={}), re-opening with backoff",
+                    "worker: manager_task — stream closed (failure #{}, reason={}), re-opening with backoff",
                     consecutive_failures, reason,
                 );
                 if consecutive_failures == 1 {
@@ -659,7 +659,7 @@ async fn manager_task(
         }
         // Loop back: re-open the stream and continue.
     }
-    log::info!("bridge: manager_task exiting (outer break)");
+    log::info!("worker: manager_task exiting (outer break)");
 }
 
 /// Process one item from `Manager::receive_messages`. Returns
@@ -673,7 +673,7 @@ async fn process_received(
     use presage::libsignal_service::content::ContentBody;
     use presage::model::messages::Received;
 
-    log::info!("bridge: process_received variant={}", match &item {
+    log::info!("worker: process_received variant={}", match &item {
         Received::Content(_) => "Content",
         Received::QueueEmpty => "QueueEmpty",
         Received::Contacts => "Contacts",
@@ -681,7 +681,7 @@ async fn process_received(
     match item {
         Received::Content(content) => {
             log::info!(
-                "bridge: process_received Content body_kind={}",
+                "worker: process_received Content body_kind={}",
                 match &content.body {
                     presage::libsignal_service::content::ContentBody::NullMessage(_) => "NullMessage",
                     presage::libsignal_service::content::ContentBody::DataMessage(_) => "DataMessage",
@@ -779,7 +779,7 @@ async fn handle_send(
 
     let timestamp = send.timestamp;
     log::info!(
-        "bridge/send: handle_send entered; recipient_raw={:?} body_len={} ts={}",
+        "worker/send: handle_send entered; recipient_raw={:?} body_len={} ts={}",
         send.recipient,
         send.body.len(),
         timestamp,
@@ -791,13 +791,13 @@ async fn handle_send(
     // populated by phone-sourced sync messages (and `presage` auto-
     // saves contacts on first received message).
     let recipient = if let Ok(uuid) = Uuid::parse_str(send.recipient.trim()) {
-        log::info!("bridge/send: recipient parsed as UUID={}", uuid);
+        log::info!("worker/send: recipient parsed as UUID={}", uuid);
         ServiceId::Aci(Aci::from_uuid_bytes(uuid.into_bytes()))
     } else if send.recipient.trim().starts_with('+') {
-        log::info!("bridge/send: recipient is e164; consulting contacts");
+        log::info!("worker/send: recipient is e164; consulting contacts");
         let target = send.recipient.trim();
         let Ok(contacts_iter) = manager.store().contacts().await else {
-            log::warn!("bridge/send: contacts() returned Err");
+            log::warn!("worker/send: contacts() returned Err");
             let _ = event_tx
                 .send(Event::SendError {
                     reason: "couldn't read contacts store".to_string(),
@@ -818,7 +818,7 @@ async fn handle_send(
             }
         }
         let Some(uuid) = matched else {
-            log::warn!("bridge/send: no contact matched e164={}", target);
+            log::warn!("worker/send: no contact matched e164={}", target);
             let _ = event_tx
                 .send(Event::SendError {
                     reason: format!(
@@ -830,10 +830,10 @@ async fn handle_send(
                 .await;
             return;
         };
-        log::info!("bridge/send: e164 resolved -> uuid={}", uuid);
+        log::info!("worker/send: e164 resolved -> uuid={}", uuid);
         ServiceId::Aci(Aci::from_uuid_bytes(uuid.into_bytes()))
     } else {
-        log::warn!("bridge/send: recipient parse failed: {:?}", send.recipient);
+        log::warn!("worker/send: recipient parse failed: {:?}", send.recipient);
         let _ = event_tx
             .send(Event::SendError {
                 reason: format!(
@@ -853,7 +853,7 @@ async fn handle_send(
     });
 
     log::info!(
-        "bridge/send: calling manager.send_message ts={} (heavy path on first-send: prekey bundle fetch + PQXDH + double-ratchet init + PDDB write)",
+        "worker/send: calling manager.send_message ts={} (heavy path on first-send: prekey bundle fetch + PQXDH + double-ratchet init + PDDB write)",
         timestamp
     );
 
@@ -892,7 +892,7 @@ async fn handle_send(
     let mut last_err: Option<String> = None;
     for attempt in 1..=SEND_MAX_ATTEMPTS {
         log::info!(
-            "bridge/send: attempt {}/{} ts={}",
+            "worker/send: attempt {}/{} ts={}",
             attempt, SEND_MAX_ATTEMPTS, timestamp,
         );
 
@@ -907,22 +907,22 @@ async fn handle_send(
             manager.send_message(recipient.clone(), content_body.clone(), timestamp),
         );
         let outcome = send_fut.catch_unwind().await;
-        log::info!("bridge/send: attempt {} returned", attempt);
+        log::info!("worker/send: attempt {} returned", attempt);
 
         match outcome {
             Ok(Ok(())) => {
-                log::info!("bridge/send: SendComplete ts={} (attempt {})", timestamp, attempt);
+                log::info!("worker/send: SendComplete ts={} (attempt {})", timestamp, attempt);
                 let _ = event_tx.send(Event::SendComplete { timestamp }).await;
                 return;
             }
             Ok(Err(e)) => {
                 let msg = format!("{e}");
-                log::warn!("bridge/send: attempt {} Err: {}", attempt, msg);
+                log::warn!("worker/send: attempt {} Err: {}", attempt, msg);
                 let retryable = msg.to_lowercase().contains("websocket closing");
                 if retryable && attempt < SEND_MAX_ATTEMPTS {
                     let delay = backoff_for(attempt);
                     log::info!(
-                        "bridge/send: WsClosing-shaped error; sleeping {:?} then retrying (attempt {}->{} of {})",
+                        "worker/send: WsClosing-shaped error; sleeping {:?} then retrying (attempt {}->{} of {})",
                         delay, attempt, attempt + 1, SEND_MAX_ATTEMPTS,
                     );
                     futures_timer::Delay::new(delay).await;
@@ -946,7 +946,7 @@ async fn handle_send(
                     "unknown panic payload".to_string()
                 };
                 log::error!(
-                    "bridge/send: PANIC inside manager.send_message attempt {}: {}",
+                    "worker/send: PANIC inside manager.send_message attempt {}: {}",
                     attempt, msg,
                 );
                 let _ = event_tx
@@ -962,7 +962,7 @@ async fn handle_send(
 
     // Loop ran out of attempts without an early return.
     let reason = last_err.unwrap_or_else(|| "send retry loop exhausted".to_string());
-    log::warn!("bridge/send: all {} attempts failed; last={}", SEND_MAX_ATTEMPTS, reason);
+    log::warn!("worker/send: all {} attempts failed; last={}", SEND_MAX_ATTEMPTS, reason);
     let _ = event_tx
         .send(Event::SendError {
             reason: format!("retried {} times: {}", SEND_MAX_ATTEMPTS, reason),

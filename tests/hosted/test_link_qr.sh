@@ -3,7 +3,7 @@
 # flow until either Event::LinkUrl is emitted (PASS) or a timeout
 # fires (FAIL).
 #
-# Pass criterion: the worker logs `bridge/link: URL received from
+# Pass criterion: the worker logs `worker/link: URL received from
 # libsignal: sgnl://linkdevice?...` AND gam_app logs
 # `xas/gam_app: link URL = sgnl://linkdevice?...`. Both lines mean
 # the URL was generated and routed all the way to the UI's modal-
@@ -145,19 +145,19 @@ if [ $DRIVE_EC -ne 0 ]; then
 fi
 
 # Step 5: poll the kernel log for the URL emission. PASS as soon
-# as both bridge and gam_app log it; FAIL on timeout.
+# as both worker and gam_app log it; FAIL on timeout.
 echo "==> waiting up to ${LINK_TIMEOUT}s for link URL emission"
 WAIT=0
-SAW_BRIDGE=0
+SAW_WORKER=0
 SAW_GAMAPP=0
 while [ $WAIT -lt $LINK_TIMEOUT ]; do
-    if grep -q "bridge/link: URL received from libsignal:" "$KERNEL_LOG" 2>/dev/null; then
-        SAW_BRIDGE=1
+    if grep -q "worker/link: URL received from libsignal:" "$KERNEL_LOG" 2>/dev/null; then
+        SAW_WORKER=1
     fi
     if grep -q "xas/gam_app: link URL = sgnl://linkdevice" "$KERNEL_LOG" 2>/dev/null; then
         SAW_GAMAPP=1
     fi
-    if [ $SAW_BRIDGE -eq 1 ] && [ $SAW_GAMAPP -eq 1 ]; then
+    if [ $SAW_WORKER -eq 1 ] && [ $SAW_GAMAPP -eq 1 ]; then
         break
     fi
     sleep 1
@@ -166,14 +166,14 @@ done
 
 echo
 echo "==> result"
-echo "    bridge URL log: $SAW_BRIDGE (expect 1)"
+echo "    worker URL log: $SAW_WORKER (expect 1)"
 echo "    gam_app URL log: $SAW_GAMAPP (expect 1)"
 echo
 echo "==> link-related lines in kernel log:"
-grep -E "bridge/link|gam_app: link URL|gam_app: starting|generating qrcode|provisioning|LinkUrl|LinkComplete|LinkError|Sink closed" "$KERNEL_LOG" || echo "(no link lines found)"
+grep -E "worker/link|gam_app: link URL|gam_app: starting|generating qrcode|provisioning|LinkUrl|LinkComplete|LinkError|Sink closed" "$KERNEL_LOG" || echo "(no link lines found)"
 
 RESULT_RC=4
-if [ $SAW_BRIDGE -eq 1 ] && [ $SAW_GAMAPP -eq 1 ]; then
+if [ $SAW_WORKER -eq 1 ] && [ $SAW_GAMAPP -eq 1 ]; then
     echo
     echo "PASS: link URL reached the UI."
     RESULT_RC=0
