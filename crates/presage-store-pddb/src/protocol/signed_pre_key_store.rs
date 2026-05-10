@@ -11,6 +11,8 @@ use presage::libsignal_service::protocol::{
     GenericSignedPreKey, SignalProtocolError, SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
 };
 
+use crate::list_keys_as_u32s;
+
 use super::{PddbProtocolStore, dict_signed_prekey, protocol_backend_err};
 
 #[async_trait(?Send)]
@@ -61,6 +63,6 @@ pub(super) fn max_signed_pre_key_id(
     store: &PddbProtocolStore,
 ) -> Result<Option<u32>, SignalProtocolError> {
     let dict = dict_signed_prekey(store.identity);
-    let keys = store.store.backend.list_keys(&dict).map_err(protocol_backend_err)?;
-    Ok(keys.iter().filter_map(|k| k.parse::<u32>().ok()).max())
+    let ids = list_keys_as_u32s(&*store.store.backend, &dict).map_err(protocol_backend_err)?;
+    Ok(ids.into_iter().max())
 }

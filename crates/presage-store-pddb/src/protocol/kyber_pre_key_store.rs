@@ -19,6 +19,8 @@ use presage::libsignal_service::protocol::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::list_keys_as_u32s;
+
 use super::{PddbProtocolStore, dict_kyber_meta, dict_kyber_prekey, protocol_backend_err};
 
 /// Wire envelope for a stored Kyber pre-key. JSON-encoded. The
@@ -137,17 +139,15 @@ pub(super) fn count_kyber_pre_keys(
     last_resort_only: bool,
 ) -> Result<usize, SignalProtocolError> {
     let dict = dict_kyber_prekey(store.identity);
-    let keys = store.store.backend.list_keys(&dict).map_err(protocol_backend_err)?;
+    let ids = list_keys_as_u32s(&*store.store.backend, &dict).map_err(protocol_backend_err)?;
     if !last_resort_only {
-        return Ok(keys.len());
+        return Ok(ids.len());
     }
     let mut count = 0_usize;
-    for k in &keys {
-        if let Ok(id) = k.parse::<u32>() {
-            if let Some(env) = load_envelope(store, KyberPreKeyId::from(id))? {
-                if env.is_last_resort {
-                    count += 1;
-                }
+    for id in ids {
+        if let Some(env) = load_envelope(store, KyberPreKeyId::from(id))? {
+            if env.is_last_resort {
+                count += 1;
             }
         }
     }
@@ -158,18 +158,17 @@ pub(super) fn max_kyber_pre_key_id(
     store: &PddbProtocolStore,
 ) -> Result<Option<u32>, SignalProtocolError> {
     let dict = dict_kyber_prekey(store.identity);
-    let keys = store.store.backend.list_keys(&dict).map_err(protocol_backend_err)?;
-    Ok(keys.iter().filter_map(|k| k.parse::<u32>().ok()).max())
+    let ids = list_keys_as_u32s(&*store.store.backend, &dict).map_err(protocol_backend_err)?;
+    Ok(ids.into_iter().max())
 }
 
 pub(super) fn max_last_resort_kyber_pre_key_id(
     store: &PddbProtocolStore,
 ) -> Result<Option<u32>, SignalProtocolError> {
     let dict = dict_kyber_prekey(store.identity);
-    let keys = store.store.backend.list_keys(&dict).map_err(protocol_backend_err)?;
+    let ids = list_keys_as_u32s(&*store.store.backend, &dict).map_err(protocol_backend_err)?;
     let mut best: Option<u32> = None;
-    for k in keys {
-        let Ok(id) = k.parse::<u32>() else { continue };
+    for id in ids {
         if let Some(env) = load_envelope(store, KyberPreKeyId::from(id))? {
             if env.is_last_resort {
                 best = Some(best.map_or(id, |b| b.max(id)));

@@ -16,6 +16,8 @@ use presage::libsignal_service::protocol::{
     GenericSignedPreKey, KyberPreKeyId, KyberPreKeyRecord, SignalProtocolError,
 };
 
+use crate::list_keys_as_u32s;
+
 use super::{
     PddbProtocolStore, dict_kyber_prekey, protocol_backend_err,
     kyber_pre_key_store::{KyberStored, load_envelope, store_envelope},
@@ -40,10 +42,9 @@ impl KyberPreKeyStoreExt for PddbProtocolStore {
         &self,
     ) -> Result<Vec<KyberPreKeyRecord>, SignalProtocolError> {
         let dict = dict_kyber_prekey(self.identity);
-        let keys = self.store.backend.list_keys(&dict).map_err(protocol_backend_err)?;
+        let ids = list_keys_as_u32s(&*self.store.backend, &dict).map_err(protocol_backend_err)?;
         let mut out = Vec::new();
-        for k in keys {
-            let Ok(id) = k.parse::<u32>() else { continue };
+        for id in ids {
             if let Some(KyberStored {
                 record,
                 is_last_resort: true,
