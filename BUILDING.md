@@ -87,6 +87,13 @@ for the latest released code; pull `dev` if you want the
 in-progress branch. (See `tests/README.md` for the
 `main` vs `dev` convention.)
 
+`~/code/xas/` below is just an example — any parent directory
+works. What matters is the *layout*: `xous-app-signal/` and
+`xous-core/` as siblings, plus a `repos/xous-core` symlink at the
+same level. The Cargo manifests follow the relative path
+`../repos/xous-core/...`; they do not care what the parent
+directory is named.
+
 ```sh
 mkdir -p ~/code/xas && cd ~/code/xas
 
@@ -338,7 +345,13 @@ and `xas/gam_app: link URL = sgnl://linkdevice?...`.
 
 The script still needs an X server (it greps for the "Precursor"
 window with `xdotool` and injects keystrokes via `libX11.so.6`),
-but a real display is not required — `xvfb-run` works:
+but a real display is not required — `xvfb-run` works.
+
+This step depends on `xdotool` and `xvfb` (Debian/Ubuntu:
+`apt install xdotool xvfb`). They're listed in §0's hosted-path
+prereqs, but flagging here too — a reader who skipped §0 because
+they have a real `$DISPLAY` may not realize the script itself
+needs `xdotool` regardless.
 
 ```sh
 cd ~/code/xas/xous-app-signal
@@ -438,8 +451,11 @@ Notes on the flags:
   the gateware build hash. If unsure, use the values shown above
   (the most-recent stable PVT2 SoC).
 
-Output: `target/riscv32imac-unknown-xous-elf/release/xous.img`
-(~13 MB signed kernel image). Bundling step is 1–2 min.
+Output: `xous-core/target/riscv32imac-unknown-xous-elf/release/xous.img`
+(~12.89 MB signed kernel image). Note this is *xous-core's*
+target dir, not `xous-app-signal/target/...` — the preceding
+`cd` is into `xous-core`, so cargo writes there. Bundling step is
+1–2 min.
 
 ### 3.3 Flash via USB
 
@@ -552,8 +568,10 @@ git log --oneline -1 services/net/src/std_glue.rs   # should show the byte-1 fix
 ```
 
 A successful hardware build produces an image of size
-~12.86 MB. md5sum is non-deterministic (timestamp embedded in
-the build) but the size should be within 1 KB of that.
+~12.89 MB (12,886,056 bytes give or take a few KB across
+toolchain bumps). md5sum is non-deterministic (timestamp
+embedded in the build) but the size should be within ~50 KB of
+that.
 
 ---
 
