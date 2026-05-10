@@ -29,8 +29,7 @@ timeouts, keepalive races, stream rotation). Isolating it lets
 us:
 
 - Test the transport in isolation with mocked streams.
-- Swap implementations without touching the worker (e.g., a
-  per-send-fresh-WS variant proposed in CHORES.md).
+- Swap implementations without touching the worker (e.g., a per-send-fresh-WS variant on the roadmap).
 - Audit the audit-critical part of the stack (everything
   Signal-server-facing) without wading through unrelated UI or
   storage code.

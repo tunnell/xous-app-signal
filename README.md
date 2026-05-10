@@ -176,9 +176,8 @@ repositories:
    toolchain `r?` cycles take weeks; the kernel-side mirror in
    #1 is the immediately-shippable workaround.
 
-PR drafts for all three are kept in the maintainer's working
-directory (out-of-tree). Once #1 lands upstream, BUILDING.md
-will be updated to point at stock `betrusted-io/xous-core`.
+Once #1 lands upstream, BUILDING.md will be updated to point at
+stock `betrusted-io/xous-core`.
 
 ---
 

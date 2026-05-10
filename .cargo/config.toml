@@ -17,7 +17,7 @@
 # Long-term resolution: either a 0.3-line xous fork upstreamed
 # into xous-core (so it ships with the toolchain), or a native
 # Xous backend embedded in upstream getrandom alongside the
-# `linux_android`/`apple` ones. Tracked in CHORES.md.
+# `linux_android`/`apple` ones. Tracked as a roadmap item.
 [target.riscv32imac-unknown-xous-elf]
 rustflags = [
     "--cfg", "getrandom_backend=\"custom\"",

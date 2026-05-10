@@ -148,7 +148,7 @@ presage = { path = "vendor/presage/presage" }
 # (only works on machines where xous-core is at this path). Long-term
 # resolution: either merge our workspace into xous-core's tree, or
 # fork the getrandom patch into a separate publishable repo. See
-# CHORES.md (out-of-tree) "getrandom 0.3/0.4 audit" entry.
+# the getrandom 0.3/0.4 audit roadmap item.
 [patch.crates-io.getrandom]
 path = "../repos/xous-core/imports/getrandom"
 

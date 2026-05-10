@@ -138,7 +138,7 @@ PR at <https://github.com/tunnell/xous-app-signal>.
 
 ### "What do F1–F4 do?"
 - **F1**: New chat (prompts for a UUID; phone-number and Signal
-  username lookup are TBD — see Tier-2 in CHORES.md).
+  username lookup are TBD — see the Tier-2 roadmap items).
 - **F2**: Sync — placeholder; not yet implemented.
 - **F3**: Help — opens this FAQ summary in-app.
 - **F4**: Settings — Profile / Help / About / Logout / Quit.

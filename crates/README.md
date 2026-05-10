@@ -60,6 +60,4 @@ GAM UI loop). The crates here map to its sections roughly as:
   Xous server reachable)
 
 If a crate's purpose feels unclear after reading this table,
-that's a signal worth recording — the architecture-review chore
-in `~/code/xas/CHORES.md` ("Architecture review: revisit code
-layout post-MVP") is the right place to surface it.
+that's a signal worth recording in the project's roadmap.

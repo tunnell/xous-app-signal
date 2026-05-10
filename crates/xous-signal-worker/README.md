@@ -47,7 +47,7 @@ from main.
 
 ## Naming history
 
-Was `xous-signal-bridge` until P1 in `~/code/xas/REFACTOR_PROPOSAL.md`.
+Was `xous-signal-bridge` until a 2026-05 rename pass.
 "Bridge" was misleading — there's a real transport bridge
 (`xous-net-bridge`, sync↔async) in this workspace, and this
 worker isn't a bridge in that sense, it's a runtime that owns

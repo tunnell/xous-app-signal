@@ -139,7 +139,7 @@ from key-press to TLS bytes, see
 
 ## What's deferred
 
-The CHORES.md (out-of-tree) entries for UI work:
+UI items still on the roadmap:
 
 - **F1 New chat — Username + E.164 lookup.** Today only UUIDs
   work; the modal rejects username/E.164 with "lookup not yet
@@ -170,6 +170,6 @@ comfortably — `messages: Vec<ThreadMessage>` is capped at
 + TLS state.
 
 Persistence of message history across sessions is
-queued in CHORES.md ("Persistence: store message history in
+queued for a future release ("Persistence: store message history in
 PDDB"); today, on app restart, `messages` is empty until new
 messages arrive.

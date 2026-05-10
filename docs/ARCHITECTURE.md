@@ -146,7 +146,7 @@ can jump straight to the code.
    *Code:* `vendor/libsignal-service-rs/src/websocket/mod.rs`
    `SignalWebSocketProcess::run` (upstream — we maintain a
    vendored copy with a couple of patches we'd like to upstream;
-   see [upstream-patches.md](../../upstream-patches.md)).
+   see the README's Upstream patches section).
 4. **presage's `receive_messages` stream**
    (`vendor/presage/presage/src/manager/registered.rs:572`,
    upstream) takes the inbound `Envelope`, runs it through
@@ -211,7 +211,7 @@ Timeout"), and on rv32 a single send pipeline often takes
 longer than a WS lifetime. Retrying gives subsequent attempts a
 chance to land on a fresh WS. It's a workaround, not the right
 fix; the real fix (per-send fresh WS or proactive rotation
-detection) is queued in CHORES.md.
+detection) is queued for a future release.
 
 ## 6. Where state lives
 
@@ -360,7 +360,7 @@ on the kernel side, which used to surface in std as a generic
 `recv_slice failure` IO error rather than `ErrorKind::TimedOut`.
 Without the encoding fix in
 `xous-core/services/net/src/std_glue.rs::respond_with_error`
-(see [upstream-patches.md](../../upstream-patches.md)), every
+(see the README's Upstream patches section), every
 WS dies within seconds. With the fix, ws_pump silently absorbs
 the timeout and the WS lives until something actually goes
 wrong.
@@ -476,6 +476,5 @@ layer.
 - **Xous kernel internals** (memory, scheduling, syscall ABI)
   → [Xous Book](https://betrusted.io/xous-book/), chapters 3
   and 4.
-- **Long bug-history narrative** → git log + CHORES.md.
-- **What's broken or planned** → STATE.md (in the project's
-  parent directory) + CHORES.md.
+- **Long bug-history narrative** → `git log`.
+- **What's broken or planned** → the README's "Feature support" matrix; deeper roadmap items live with the maintainer.

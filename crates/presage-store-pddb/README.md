@@ -51,8 +51,7 @@ Two reasons:
 
 At ~3 kLoC this is the largest first-party crate. The size is
 mostly justified by the 11-trait surface (many small impl
-blocks) but there's some duplication — see `~/code/xas/REFACTOR_PROPOSAL.md`
-P8 for three concrete dedup candidates (centralize `backend_err`
+blocks) but there's some duplication — the dedup helpers in lib.rs and protocol/mod.rs were extracted from three duplication patterns (centralize `backend_err`
 helpers, add `backend_get_json` / `backend_put_json` helpers,
 consolidate `list_keys → parse u32 → max/filter` patterns).
 ~100-120 LoC achievable but not transformative.

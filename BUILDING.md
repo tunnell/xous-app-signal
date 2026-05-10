@@ -74,7 +74,7 @@ wrong — please open an issue.
 xas depends on a forked `xous-core` because two upstream bugs
 need to be patched for the Wi-Fi + WebSocket path to work
 reliably. Use our forks (or apply the patches in
-`upstream-patches.md` to upstream).
+the README's Upstream patches section to upstream).
 
 The forks below are the published source of truth — pull `main`
 for the latest released code; pull `dev` if you want the
@@ -88,7 +88,8 @@ mkdir -p ~/code/xas && cd ~/code/xas
 git clone https://github.com/tunnell/xous-app-signal.git
 
 # xous-core (kernel + services). The xas branch carries the
-# net-service encoding fix described in upstream-patches.md.
+# net-service encoding fix described in the README's Upstream
+# patches section.
 git clone --depth 1 -b xas https://github.com/tunnell/xous-core.git
 
 # xous-core sub-crates expect a sibling 'repos/xous-core'
@@ -432,7 +433,7 @@ When the Precursor boots into Xous:
    account to your linked phone. xas should show it in seconds.
    Send a reply — first send takes 1–4 minutes due to a known
    Signal-server WebSocket-rotation issue (see
-   `STATE.md`/`CHORES.md` "Transport refactor" entry).
+   the transport-refactor roadmap item).
 
 ---
 
@@ -446,7 +447,7 @@ When the Precursor boots into Xous:
 | `usb_update.py` permission denied (Linux host) | udev rule missing | Add `tools/49-precursor.rules` to `/etc/udev/rules.d/` and `udevadm control --reload`, or run with sudo (not recommended) |
 | Hosted xas shows "OOM during link" | Default heap cap too low | Run with `RUST_LOG=info` to see allocator messages; rebuild with `--features pddb-real,hosted` (the dist build is otherwise too lean) |
 | Hardware link succeeds but no messages flow | Wi-Fi connected to 5 GHz, or DNS broken | Re-run the wlan recipe; verify `net ping chat.signal.org` works before opening xas |
-| Send fails with "WebSocket closing" within 30s | Older xous-core without the encoding fix | Confirm you cloned the `xas` branch of `tunnell/xous-core`, not upstream `betrusted-io/xous-core` (or apply patches in `upstream-patches.md`) |
+| Send fails with "WebSocket closing" within 30s | Older xous-core without the encoding fix | Confirm you cloned the `xas` branch of `tunnell/xous-core`, not upstream `betrusted-io/xous-core` (or apply patches in the README's Upstream patches section) |
 | Flash completes but device boots into the old image | Loader didn't validate the new signature | Re-flash; if it persists, check `tools/usb_update.py` log for verification errors |
 
 ---
@@ -475,9 +476,7 @@ the build) but the size should be within 1 KB of that.
 ## 6. Getting help
 
 - File issues at <https://github.com/tunnell/xous-app-signal/issues>.
-- The companion `STATE.md` (out-of-tree, in this project's parent
-  directory if you cloned per section 1) tracks the current
-  known-broken / known-working state across hosted and hardware.
-- The `CHORES.md` tracks deferred work.
-- `upstream-patches.md` documents the two upstream bugs xas works
-  around plus how to apply them yourself.
+- This README's "Feature support" section tracks what works
+  and what doesn't.
+- The README's "Upstream patches" section documents the patches
+  xas requires that aren't yet upstream.
