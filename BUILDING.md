@@ -71,26 +71,20 @@ wrong — please open an issue.
 
 ## 1. Clone the source
 
-> **Reproducibility note (2026-05-09)**: at time of writing, the
-> two GitHub forks referenced below carry the work-in-progress
-> commits behind the alpha released by tunnell. If you cloned
-> moments after they were last pushed, you should be in sync. If
-> they haven't been pushed at all (check the `Updated` timestamp
-> on each repo), the most reliable path is to `cargo clone` from
-> someone who has the local checkout, OR apply the patches in
-> `upstream-patches.md` against the canonical upstream
-> repositories listed there. We're working on getting these
-> properly published.
-
 xas depends on a forked `xous-core` because two upstream bugs
 need to be patched for the Wi-Fi + WebSocket path to work
 reliably. Use our forks (or apply the patches in
 `upstream-patches.md` to upstream).
 
+The forks below are the published source of truth — pull `main`
+for the latest released code; pull `dev` if you want the
+in-progress branch. (See `tests/README.md` for the
+`main` vs `dev` convention.)
+
 ```sh
 mkdir -p ~/code/xas && cd ~/code/xas
 
-# xas itself
+# xas itself (default branch is 'main' = released code)
 git clone https://github.com/tunnell/xous-app-signal.git
 
 # xous-core (kernel + services). The xas branch carries the
@@ -451,7 +445,7 @@ Quick checks before reporting issues:
 
 ```sh
 # In xous-app-signal:
-git rev-parse HEAD   # should be on main/master, ahead of origin
+git rev-parse HEAD   # should match origin/main (or origin/dev if developing)
 cargo --version      # should be 1.95.0 or newer
 ls vendor/presage/.git 2>&1   # should NOT exist (we vendor as plain dirs)
 
