@@ -21,7 +21,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::list_keys_as_u32s;
 
-use super::{PddbProtocolStore, dict_kyber_meta, dict_kyber_prekey, protocol_backend_err};
+use super::{
+    PddbProtocolStore, backend_get_json_protocol, backend_put_json_protocol, dict_kyber_meta,
+    dict_kyber_prekey, protocol_backend_err,
+};
 
 /// Wire envelope for a stored Kyber pre-key. JSON-encoded. The
 /// `record` bytes are libsignal's binary `KyberPreKeyRecord::serialize`
@@ -44,13 +47,13 @@ pub(super) fn store_envelope(
         record: record.serialize()?,
         is_last_resort,
     };
-    let bytes = serde_json::to_vec(&envelope)
-        .map_err(|e| SignalProtocolError::InvalidState("encode kyber envelope", e.to_string()))?;
-    proto
-        .store
-        .backend
-        .put(&dict, &key, &bytes)
-        .map_err(protocol_backend_err)
+    backend_put_json_protocol(
+        &*proto.store.backend,
+        &dict,
+        &key,
+        &envelope,
+        "encode kyber envelope",
+    )
 }
 
 pub(super) fn load_envelope(
@@ -59,12 +62,7 @@ pub(super) fn load_envelope(
 ) -> Result<Option<KyberStored>, SignalProtocolError> {
     let dict = dict_kyber_prekey(proto.identity);
     let key = u32::from(id).to_string();
-    match proto.store.backend.get(&dict, &key).map_err(protocol_backend_err)? {
-        Some(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|e| SignalProtocolError::InvalidState("decode kyber envelope", e.to_string())),
-        None => Ok(None),
-    }
+    backend_get_json_protocol(&*proto.store.backend, &dict, &key, "decode kyber envelope")
 }
 
 #[async_trait(?Send)]

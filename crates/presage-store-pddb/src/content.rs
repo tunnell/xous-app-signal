@@ -45,7 +45,7 @@ use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{Error, PddbStore, backend_get_json, backend_put_json};
+use crate::{Error, PddbStore, backend_get_json, backend_get_json_required, backend_put_json};
 
 // --- Dictionary names ---
 
@@ -284,9 +284,10 @@ impl ContentsStore for PddbStore {
         let backend = self.backend.clone();
         let items: Vec<Result<Contact, Error>> = keys
             .into_iter()
-            .map(move |k| match backend.get(DICT_CONTACTS, &k)? {
-                Some(bytes) => Ok(serde_json::from_slice::<Contact>(&bytes)?),
-                None => Err(Error::Backend(format!("contact disappeared: {k}"))),
+            .map(move |k| {
+                backend_get_json_required(&*backend, DICT_CONTACTS, &k, || {
+                    format!("contact disappeared: {k}")
+                })
             })
             .collect();
         Ok(items.into_iter())
@@ -320,10 +321,9 @@ impl ContentsStore for PddbStore {
         let items: Vec<Result<(GroupMasterKeyBytes, Group), Error>> = keys
             .into_iter()
             .map(move |k| {
-                let bytes = backend
-                    .get(DICT_GROUPS, &k)?
-                    .ok_or_else(|| Error::Backend(format!("group disappeared: {k}")))?;
-                let group: Group = serde_json::from_slice(&bytes)?;
+                let group: Group = backend_get_json_required(&*backend, DICT_GROUPS, &k, || {
+                    format!("group disappeared: {k}")
+                })?;
                 let master_key_bytes = parse_hex_master_key(&k)?;
                 Ok((master_key_bytes, group))
             })
@@ -384,9 +384,10 @@ impl ContentsStore for PddbStore {
         let backend = self.backend.clone();
         let items: Vec<Result<StickerPack, Error>> = keys
             .into_iter()
-            .map(move |k| match backend.get(DICT_STICKER_PACKS, &k)? {
-                Some(bytes) => Ok(serde_json::from_slice::<StickerPack>(&bytes)?),
-                None => Err(Error::Backend(format!("sticker pack disappeared: {k}"))),
+            .map(move |k| {
+                backend_get_json_required(&*backend, DICT_STICKER_PACKS, &k, || {
+                    format!("sticker pack disappeared: {k}")
+                })
             })
             .collect();
         Ok(items.into_iter())
@@ -442,10 +443,10 @@ impl ContentsStore for PddbStore {
             .into_iter()
             .map(move |ts| {
                 let key = message_key(ts);
-                let bytes = backend
-                    .get(&dict_owned, &key)?
-                    .ok_or_else(|| Error::Backend(format!("message disappeared: {key}")))?;
-                let stored: StoredMessage = serde_json::from_slice(&bytes)?;
+                let stored: StoredMessage =
+                    backend_get_json_required(&*backend, &dict_owned, &key, || {
+                        format!("message disappeared: {key}")
+                    })?;
                 stored.into_content()
             })
             .collect();

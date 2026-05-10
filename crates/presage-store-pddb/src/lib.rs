@@ -162,7 +162,7 @@ impl PddbStore {
     /// calling twice in a row is cheap (second call sees an empty
     /// dirty set).
     pub fn flush_sessions(&self) -> Result<usize, Error> {
-        use protocol::session_store::{SessionBundle, deserialize_bundle, serialize_bundle};
+        use protocol::session_store::SessionBundle;
 
         let mut dirty = self
             .session_dirty
@@ -201,16 +201,13 @@ impl PddbStore {
             // Read-modify-write: existing PDDB bundle (if any) plus
             // the dirty changes. Devices not touched in this flush
             // pass their bytes through unchanged.
-            let mut bundle: SessionBundle = match self.backend.get(&dict, &name)? {
-                Some(bytes) => deserialize_bundle(&bytes)?,
-                None => SessionBundle::new(),
-            };
+            let mut bundle: SessionBundle =
+                backend_get_json(&*self.backend, &dict, &name)?.unwrap_or_default();
             for (device_id, ser) in entries {
                 bundle.insert(device_id, ser);
                 written += 1;
             }
-            let value = serialize_bundle(&bundle)?;
-            self.backend.put(&dict, &name, &value)?;
+            backend_put_json(&*self.backend, &dict, &name, &bundle)?;
         }
         dirty.clear();
         Ok(written)
@@ -251,7 +248,7 @@ pub(crate) fn backend_get_json<T: for<'de> serde::Deserialize<'de>>(
 /// Serialize a value as JSON and write to the backend. Inverse of
 /// `backend_get_json`. `serde_json::to_vec` failure is wrapped
 /// explicitly as `Error::Encode` (the From impl picks `Decode`).
-pub(crate) fn backend_put_json<T: serde::Serialize>(
+pub(crate) fn backend_put_json<T: serde::Serialize + ?Sized>(
     backend: &dyn KvBackend,
     dict: &str,
     key: &str,
@@ -274,6 +271,24 @@ pub(crate) fn list_keys_as_u32s(
         .into_iter()
         .filter_map(|k| k.parse::<u32>().ok())
         .collect())
+}
+
+/// Like `backend_get_json` but errors on missing key. Used by
+/// iterator closures over `list_keys` that have established the
+/// key's presence and treat its disappearance as a backend
+/// inconsistency rather than a normal absence. The closure is only
+/// evaluated on the missing branch (avoids constructing the message
+/// string on the hot path).
+pub(crate) fn backend_get_json_required<T: for<'de> serde::Deserialize<'de>>(
+    backend: &dyn KvBackend,
+    dict: &str,
+    key: &str,
+    missing_msg: impl FnOnce() -> String,
+) -> Result<T, Error> {
+    match backend.get(dict, key)? {
+        Some(bytes) => Ok(serde_json::from_slice(&bytes)?),
+        None => Err(Error::Backend(missing_msg())),
+    }
 }
 
 #[cfg(test)]

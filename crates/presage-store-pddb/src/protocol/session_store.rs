@@ -26,7 +26,9 @@ use presage::libsignal_service::protocol::{
     ProtocolAddress, SessionRecord, SessionStore, SignalProtocolError,
 };
 
-use super::{IdentityType, PddbProtocolStore, dict_session, protocol_backend_err};
+use super::{
+    IdentityType, PddbProtocolStore, backend_get_json_protocol, dict_session, protocol_backend_err,
+};
 
 /// Cache key — `(identity, address.name(), device_id)`. The address
 /// part is split from the device id so `flush_sessions` can group
@@ -46,14 +48,6 @@ pub(crate) fn session_key(identity: IdentityType, address: &ProtocolAddress) -> 
 /// SessionRecord::serialize() bytes`. JSON for debuggability —
 /// matches the choice in `pre_key_store::save_bundle`.
 pub(crate) type SessionBundle = HashMap<u32, Vec<u8>>;
-
-pub(crate) fn deserialize_bundle(bytes: &[u8]) -> Result<SessionBundle, crate::Error> {
-    serde_json::from_slice(bytes).map_err(|e| crate::Error::Decode(e.to_string()))
-}
-
-pub(crate) fn serialize_bundle(bundle: &SessionBundle) -> Result<Vec<u8>, crate::Error> {
-    serde_json::to_vec(bundle).map_err(|e| crate::Error::Encode(e.to_string()))
-}
 
 #[async_trait(?Send)]
 impl SessionStore for PddbProtocolStore {
@@ -76,10 +70,15 @@ impl SessionStore for PddbProtocolStore {
         // 2. Fall through to PDDB. One key per address; the value is a
         //    `SessionBundle` (device_id → serialized SessionRecord).
         let dict = dict_session(self.identity);
-        let Some(bytes) = self.store.backend.get(&dict, &key.1).map_err(protocol_backend_err)? else {
+        let Some(bundle) = backend_get_json_protocol::<SessionBundle>(
+            &*self.store.backend,
+            &dict,
+            &key.1,
+            "decode session bundle",
+        )?
+        else {
             return Ok(None);
         };
-        let bundle = deserialize_bundle(&bytes).map_err(protocol_backend_err)?;
 
         // Populate the cache with every device's record so a follow-up
         // `load_session` for a sibling device skips PDDB.

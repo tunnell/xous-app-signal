@@ -18,21 +18,21 @@ use presage::libsignal_service::protocol::{
     PreKeyId, PreKeyRecord, PreKeyStore, SignalProtocolError,
 };
 
-use super::{PREKEY_BUNDLE_KEY, PddbProtocolStore, dict_prekey_bundle, protocol_backend_err};
+use super::{
+    PREKEY_BUNDLE_KEY, PddbProtocolStore, backend_get_json_protocol, backend_put_json_protocol,
+    dict_prekey_bundle,
+};
 
 /// Load the packed bundle, or an empty vec if the key doesn't exist.
 fn load_bundle(store: &PddbProtocolStore) -> Result<Vec<(u32, Vec<u8>)>, SignalProtocolError> {
     let dict = dict_prekey_bundle(store.identity);
-    match store
-        .store
-        .backend
-        .get(&dict, PREKEY_BUNDLE_KEY)
-        .map_err(protocol_backend_err)?
-    {
-        Some(bytes) => serde_json::from_slice(&bytes)
-            .map_err(|e| SignalProtocolError::InvalidState("decode prekey bundle", e.to_string())),
-        None => Ok(Vec::new()),
-    }
+    Ok(backend_get_json_protocol::<Vec<(u32, Vec<u8>)>>(
+        &*store.store.backend,
+        &dict,
+        PREKEY_BUNDLE_KEY,
+        "decode prekey bundle",
+    )?
+    .unwrap_or_default())
 }
 
 fn save_bundle(
@@ -40,13 +40,13 @@ fn save_bundle(
     bundle: &[(u32, Vec<u8>)],
 ) -> Result<(), SignalProtocolError> {
     let dict = dict_prekey_bundle(store.identity);
-    let bytes = serde_json::to_vec(bundle)
-        .map_err(|e| SignalProtocolError::InvalidState("encode prekey bundle", e.to_string()))?;
-    store
-        .store
-        .backend
-        .put(&dict, PREKEY_BUNDLE_KEY, &bytes)
-        .map_err(protocol_backend_err)
+    backend_put_json_protocol(
+        &*store.store.backend,
+        &dict,
+        PREKEY_BUNDLE_KEY,
+        bundle,
+        "encode prekey bundle",
+    )
 }
 
 #[async_trait(?Send)]

@@ -140,3 +140,40 @@ pub(crate) fn protocol_backend_err(
         e.to_string(),
     )
 }
+
+/// Protocol-flavored `backend_get_json`: takes a `&'static str` decode
+/// context and returns `Result<Option<T>, SignalProtocolError>`. Lets
+/// protocol-store impls share the `backend.get + serde_json::from_slice`
+/// pattern while keeping their per-callsite error context (e.g.
+/// "decode prekey bundle" vs "decode kyber envelope") that the
+/// generic `backend_get_json` would replace with the less informative
+/// "kv backend: ..." form.
+pub(crate) fn backend_get_json_protocol<T: for<'de> serde::Deserialize<'de>>(
+    backend: &dyn crate::KvBackend,
+    dict: &str,
+    key: &str,
+    decode_context: &'static str,
+) -> Result<Option<T>, presage::libsignal_service::protocol::SignalProtocolError> {
+    use presage::libsignal_service::protocol::SignalProtocolError;
+    match backend.get(dict, key).map_err(protocol_backend_err)? {
+        Some(bytes) => serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|e| SignalProtocolError::InvalidState(decode_context, e.to_string())),
+        None => Ok(None),
+    }
+}
+
+/// Protocol-flavored `backend_put_json`: takes a `&'static str` encode
+/// context. Inverse of `backend_get_json_protocol`.
+pub(crate) fn backend_put_json_protocol<T: serde::Serialize + ?Sized>(
+    backend: &dyn crate::KvBackend,
+    dict: &str,
+    key: &str,
+    value: &T,
+    encode_context: &'static str,
+) -> Result<(), presage::libsignal_service::protocol::SignalProtocolError> {
+    use presage::libsignal_service::protocol::SignalProtocolError;
+    let bytes = serde_json::to_vec(value)
+        .map_err(|e| SignalProtocolError::InvalidState(encode_context, e.to_string()))?;
+    backend.put(dict, key, &bytes).map_err(protocol_backend_err)
+}
