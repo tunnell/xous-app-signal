@@ -325,7 +325,7 @@ impl App {
     ///
     /// Layout per row (single-TextView text mode for Phase A):
     /// ```
-    ///   Bob Kowalski                    12m
+    ///   Bob                    12m
     /// * did you get the file?           (1)
     /// ───────────────────────────────────────
     /// > Carol                            1h
@@ -409,7 +409,7 @@ impl App {
     ///
     /// Layout:
     /// ```
-    /// Bob Kowalski
+    /// Bob
     /// -------------------------------------
     /// Bob 12m
     ///   did you get the file?
@@ -601,12 +601,12 @@ fn seed_mock_messages_if_requested(app: &mut App) {
     let unknown = Uuid::from_u128(0x9999_dddddd_eeeeee_ffffff_111111_004);
 
     let mocks: &[(Uuid, &str, &str, u64, bool, SendStatus)] = &[
-        (alice, "Alice Nguyen", "sure, meet at 6", 2 * 60_000, false, SendStatus::Sent),
-        (alice, "Alice Nguyen", "I'll bring drinks", 1 * 60_000, false, SendStatus::Sent),
-        (alice, "Alice Nguyen", "actually make it 6:30", 30_000, false, SendStatus::Sent),
-        (bob, "Bob Kowalski", "did you get the file?", 12 * 60_000, false, SendStatus::Sent),
+        (alice, "Alice", "sure, meet at 6", 2 * 60_000, false, SendStatus::Sent),
+        (alice, "Alice", "I'll bring drinks", 1 * 60_000, false, SendStatus::Sent),
+        (alice, "Alice", "actually make it 6:30", 30_000, false, SendStatus::Sent),
+        (bob, "Bob", "did you get the file?", 12 * 60_000, false, SendStatus::Sent),
         (bob, "You", "yes, on my way", 11 * 60_000, true, SendStatus::Delivered),
-        (bob, "Bob Kowalski", "thanks!", 5 * 60_000, false, SendStatus::Sent),
+        (bob, "Bob", "thanks!", 5 * 60_000, false, SendStatus::Sent),
         (dad, "Dad", "lunch sunday?", 25 * 60 * 60_000, false, SendStatus::Sent),
         (dad, "You", "On my way", 24 * 60 * 60_000, true, SendStatus::Delivered),
         (
