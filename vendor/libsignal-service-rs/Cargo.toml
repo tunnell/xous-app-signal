@@ -88,10 +88,7 @@ default = []
 phonenumber = ["dep:phonenumber"]
 cdsi = ["dep:libsignal-net", "dep:libsignal-net-infra"]
 
-[patch.crates-io]
-# Stage 6: removed the upstream `curve25519-dalek` patch. Workspace-level
-# patch in xous-app-signal/Cargo.toml redirects to vendor/curve25519-dalek/
-# (betrusted-io fork + lizard port + version bump). When this fork is
-# consumed via the workspace's `[patch."...whisperfish/libsignal-service-rs"]`,
-# the workspace patches take effect; this section is left empty so we don't
-# fight ourselves.
+# (Originally a `[patch.crates-io]` block redirecting curve25519-dalek lived
+# here. The redirect is done at the workspace root in xous-app-signal/Cargo.toml
+# so this vendored copy doesn't need its own. Removed entirely because cargo
+# warns on a non-root [patch] section even when it's empty.)
