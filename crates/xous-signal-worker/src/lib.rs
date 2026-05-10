@@ -510,6 +510,18 @@ async fn manager_task(
     // an actual stream item — opening Ok then immediately seeing
     // None counts as a failure (we made no real progress).
     let mut consecutive_failures: u32 = 0;
+
+    // First-touch profile-fetch queue. process_received pushes
+    // (aci_uuid, profile_key_bytes) for any inbound message whose
+    // sender wasn't in the contacts store but whose DataMessage
+    // carried a profile_key. We drain this between receive-stream
+    // iterations (when the &mut manager borrow is released) and
+    // emit Event::ContactResolved on success. fetched_or_failed
+    // tracks ACIs we've already attempted in this worker run, so
+    // a 404 doesn't get retried on every cycle.
+    let mut pending_profile_fetches: Vec<(presage::libsignal_service::prelude::Uuid, [u8; 32])> = Vec::new();
+    let mut fetched_or_failed: std::collections::HashSet<presage::libsignal_service::prelude::Uuid> =
+        std::collections::HashSet::new();
     // Cap on how many consecutive failures we tolerate before giving
     // up entirely. With backoff capped at 30s, this is roughly an
     // 8-minute window of constant retries before we surface a fatal
@@ -595,7 +607,7 @@ async fn manager_task(
                             // (when handle_send forces one) doesn't
                             // sleep at all.
                             consecutive_failures = 0;
-                            if !process_received(item, &store, &event_tx).await {
+                            if !process_received(item, &store, &event_tx, &mut pending_profile_fetches).await {
                                 // event_tx closed — bail.
                                 return;
                             }
@@ -629,6 +641,68 @@ async fn manager_task(
         // released before we call anything else on `manager`.
         log::info!("worker: manager_task — dropping receive stream to free &mut manager borrow");
         drop(stream);
+
+        // Drain pending first-touch profile fetches now that the
+        // manager borrow is released. Each fetch is one HTTP round-
+        // trip via the identified websocket; on success we cache the
+        // ACI in `fetched_or_failed` (so a churn of messages from the
+        // same sender doesn't re-fetch) and emit ContactResolved so
+        // the UI can swap the UUID for the name in any rendered rows.
+        // On failure we still mark the ACI as attempted — a 404 means
+        // the sender opted out of profile lookups and won't change.
+        if !pending_profile_fetches.is_empty() {
+            use presage::libsignal_service::protocol::Aci;
+            use presage::libsignal_service::zkgroup::profiles::ProfileKey;
+            let drained: Vec<_> = pending_profile_fetches.drain(..).collect();
+            for (aci_uuid, key_bytes) in drained {
+                if !fetched_or_failed.insert(aci_uuid) {
+                    continue; // already tried this run
+                }
+                let key = ProfileKey::create(key_bytes);
+                let aci = Aci::from(aci_uuid);
+                log::info!("worker/profile: fetching profile for {}", aci_uuid);
+                match manager.retrieve_profile_by_uuid(aci, key).await {
+                    Ok(profile) => {
+                        let name_str = profile
+                            .name
+                            .as_ref()
+                            .map(|n| {
+                                let g = n.given_name.trim();
+                                let f = n.family_name.as_deref().unwrap_or("").trim();
+                                if f.is_empty() {
+                                    g.to_string()
+                                } else {
+                                    format!("{} {}", g, f)
+                                }
+                            })
+                            .unwrap_or_default();
+                        if name_str.is_empty() {
+                            log::info!(
+                                "worker/profile: {} resolved with empty name; skipping event",
+                                aci_uuid
+                            );
+                            continue;
+                        }
+                        log::info!(
+                            "worker/profile: {} resolved → {:?}",
+                            aci_uuid, name_str
+                        );
+                        let _ = event_tx
+                            .send(Event::ContactResolved {
+                                aci_uuid,
+                                name: name_str,
+                            })
+                            .await;
+                    }
+                    Err(e) => {
+                        log::info!(
+                            "worker/profile: {} fetch failed (will not retry this run): {}",
+                            aci_uuid, e
+                        );
+                    }
+                }
+            }
+        }
 
         match exit {
             InnerExit::Send(send) => {
@@ -669,6 +743,7 @@ async fn process_received(
     item: presage::model::messages::Received,
     store: &PddbStore,
     event_tx: &Sender<Event>,
+    pending_profile_fetches: &mut Vec<(presage::libsignal_service::prelude::Uuid, [u8; 32])>,
 ) -> bool {
     use presage::libsignal_service::content::ContentBody;
     use presage::model::messages::Received;
@@ -732,6 +807,29 @@ async fn process_received(
                 }
                 _ => (None, None),
             };
+
+            // First-touch profile fetch: if contact is unknown and the
+            // DataMessage carried a profile_key, queue a profile lookup
+            // for manager_task to drain between stream iterations.
+            // Mobile clients (Android/iOS/Desktop) all do this on every
+            // unsealed envelope; we batch it so we don't fight the
+            // &mut manager borrow held by the receive stream. See
+            // research notes summary in CONTACT-RESOLUTION docs (and
+            // commit history) for the cross-client survey.
+            if sender_name.is_none() {
+                if let ContentBody::DataMessage(dm) = &content.body {
+                    if let Some(key_bytes) = dm.profile_key.as_ref() {
+                        if key_bytes.len() == 32 {
+                            if let presage::libsignal_service::protocol::ServiceId::Aci(aci) = sender_sid {
+                                let aci_uuid: presage::libsignal_service::prelude::Uuid = aci.into();
+                                let mut bytes = [0u8; 32];
+                                bytes.copy_from_slice(key_bytes);
+                                pending_profile_fetches.push((aci_uuid, bytes));
+                            }
+                        }
+                    }
+                }
+            }
 
             event_tx
                 .send(Event::Message {

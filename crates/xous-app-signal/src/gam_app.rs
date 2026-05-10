@@ -1344,6 +1344,29 @@ fn handle_worker_event(
             // continue to show "(not loaded)" placeholders. Not
             // worth showing a popup since this is a passive lookup.
         }
+        Event::ContactResolved { aci_uuid, name } => {
+            log::info!(
+                "xas/gam_app: ContactResolved {} → {:?}",
+                aci_uuid, name
+            );
+            // Walk in-RAM messages and replace any UUID-shaped
+            // author_label whose uuid matches with the resolved name.
+            // Outgoing messages (author_label == "You") are untouched
+            // by virtue of "You" not looking like a raw UUID.
+            let mut touched = false;
+            for m in app.messages.iter_mut() {
+                if m.uuid == aci_uuid && crate::dialogue::looks_like_raw_uuid(&m.author_label) {
+                    m.author_label = name.clone();
+                    touched = true;
+                }
+            }
+            if touched {
+                app.dialogues = crate::dialogue::rebuild_summaries(&app.messages);
+                if matches!(app.screen, Screen::Home | Screen::Thread { .. }) {
+                    let _ = app.render();
+                }
+            }
+        }
         Event::Pong | Event::Whoami(_) => {}
     }
 }

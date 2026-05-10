@@ -189,7 +189,7 @@ fn short_uuid_label(uuid: &Uuid) -> String {
 /// when the worker fell back to passing the canonical UUID string as
 /// `author_label` because the contact lookup returned nothing. Matches
 /// both dashed (36-char) and undashed (32-char) hex forms.
-fn looks_like_raw_uuid(s: &str) -> bool {
+pub(crate) fn looks_like_raw_uuid(s: &str) -> bool {
     let len = s.len();
     if len == 36 {
         s.chars()

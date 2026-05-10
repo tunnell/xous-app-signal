@@ -197,6 +197,26 @@ pub enum Event {
     /// before the call).
     SendError { reason: String, timestamp: Option<u64> },
 
+    /// First-touch profile lookup completed for a sender we
+    /// previously surfaced as `Event::Message { sender_name: None }`.
+    /// The UI walks its in-RAM messages and replaces any rows whose
+    /// `author_label` is the bare UUID with this `name`.
+    ///
+    /// Best-effort: emitted only after the receive stream is paused
+    /// (between iterations of `manager_task`'s outer loop), so the
+    /// UI may continue showing the UUID for some seconds after the
+    /// first message arrives. On 404 (sender opted out of profile
+    /// fetches) or other error, no event is emitted — the UI keeps
+    /// the UUID indefinitely until the next user-triggered Sync.
+    ContactResolved {
+        /// ACI of the resolved sender, formatted as a UUID.
+        aci_uuid: presage::libsignal_service::prelude::Uuid,
+        /// Profile name (`given_name [+ ' ' + family_name]`) decoded
+        /// from the cipher response. Empty profile names are filtered
+        /// out at the worker — this `name` is always non-empty.
+        name: String,
+    },
+
     /// Confirms the worker is winding down. The main thread joins
     /// after receiving this — same way Manager state machines on
     /// other Whisperfish ports signal teardown.
