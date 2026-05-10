@@ -35,7 +35,6 @@ crates for three concrete reasons:
 | Crate | LoC* | Purpose |
 |---|---|---|
 | [`xous-app-signal`](xous-app-signal/) | ~2.4k | Binary entry point (binary name: `xas`). Spawns the signal worker, renders UI via GAM, dispatches keys → `Cmd`s and `Event`s → screen updates. |
-| [`xous-app-signal-ui`](xous-app-signal-ui/) | ~2.0k | Stdin-driven UI fallback used in `main.rs` when `gam_app::run()` can't reach a Xous server (e.g., bare `cargo run` standalone for unit testing). The Xous-rendered UI in `xous-app-signal/src/gam_app.rs` is the primary path. |
 | [`xous-signal-worker`](xous-signal-worker/) | ~1.3k | Owns the worker thread that runs `presage::Manager` on a `LocalExecutor`. Defines the `Cmd` / `Event` enums that flow over async channels between worker and UI. Where `catch_unwind` lives so panics in libsignal don't kill the worker. |
 | [`presage-store-pddb`](presage-store-pddb/) | ~3.0k | Implements presage's `Store` + `IdentityKeyStore` + (a dozen) other storage traits over PDDB. Has a hosted-mode `backend_mock` for unit tests and a `backend_pddb` for real use. The biggest crate by line count, mostly because the trait surface is wide. |
 | [`xous-net-bridge`](xous-net-bridge/) | ~0.6k | Sync TLS + WebSocket transport, bridged to async via channels (`ws_pump`). This is what libsignal-service-rs's HTTP/WS code calls into. The keepalive race documented in the upstream PR draft #2 lives in `ws_pump.rs`. |
@@ -57,7 +56,8 @@ GAM UI loop). The crates here map to its sections roughly as:
 - **§8 ws_pump in detail** → `xous-net-bridge`
 - The GAM render path the walkthroughs end at →
   `xous-app-signal/src/gam_app.rs` + `xous-modals-ipc` (QR
-  modal) + `xous-app-signal-ui` (stdin fallback)
+  modal) + `xous-app-signal/src/stdin_ui/` (fallback when no
+  Xous server reachable)
 
 If a crate's purpose feels unclear after reading this table,
 that's a signal worth recording — the architecture-review chore
