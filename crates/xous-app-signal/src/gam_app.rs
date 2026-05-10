@@ -84,6 +84,22 @@ enum Screen {
     Profile,
     /// FAQ + issue-tracker pointer.
     Help,
+    /// Preflight failed: no Wi-Fi link or no DHCP lease. Shown
+    /// instead of attempting any network operation. Enter re-runs
+    /// the check; on success transitions to the screen the user
+    /// was trying to reach.
+    NoInternet { next: NextScreenAfterInternet, reason: String },
+}
+
+/// What to do when the no-internet preflight clears. Embedded in
+/// `Screen::NoInternet` so the retry-on-Enter path knows where to
+/// transition.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum NextScreenAfterInternet {
+    /// Pre-link path: the user was trying to Link.
+    Link,
+    /// Post-link path: the user was on Home (the post-link landing).
+    Home,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -231,23 +247,45 @@ impl App {
                  Author:  @tunnell\n\n\
                  github.com/tunnell/\n\
                   xous-app-signal\n\n\
-                 Security:\n\
-                  - End-to-end encrypted\n\
-                    via the Signal Protocol\n\
-                    (same Double Ratchet +\n\
-                    PQXDH used by the\n\
-                    official Signal app).\n\
-                  - Network connection to\n\
+                 What xas protects:\n\
+                  - Messages are end-to-end\n\
+                    encrypted via the Signal\n\
+                    Protocol (the same Double\n\
+                    Ratchet and post-quantum\n\
+                    key agreement the official\n\
+                    Signal app uses).\n\
+                  - The connection to\n\
                     chat.signal.org is\n\
-                    verified against\n\
-                    Signal's own pinned\n\
-                    Certificate Authority\n\
-                    (no public CA bundle\n\
-                    is trusted).\n\
-                  - Hardware-rooted on\n\
-                    Precursor: every layer\n\
-                    is inspectable; keys\n\
-                    are sealed on-device.\n\n\
+                    verified against Signal's\n\
+                    own pinned Certificate\n\
+                    Authority. The public\n\
+                    web certificate bundle\n\
+                    on your device is not\n\
+                    trusted.\n\
+                  - On Precursor every layer\n\
+                    of hardware and software\n\
+                    is inspectable. Keys are\n\
+                    generated on the device\n\
+                    and sealed there; they\n\
+                    do not leave.\n\n\
+                 What xas does NOT protect:\n\
+                  - The phone you linked\n\
+                    from. If your phone is\n\
+                    compromised, the attacker\n\
+                    can read messages out of\n\
+                    Signal's plaintext buffer\n\
+                    after they're decrypted.\n\
+                  - Physical seizure plus\n\
+                    knowledge of your PDDB\n\
+                    passphrase.\n\
+                  - Traffic-analysis: the\n\
+                    fact that you're talking\n\
+                    to chat.signal.org is\n\
+                    visible to your network\n\
+                    operator, even though\n\
+                    contents aren't.\n\
+                  - Disappearing-message\n\
+                    timers (not yet shown).\n\n\
                  Built on:\n\
                   - presage v0.8.0-dev\n\
                   - libsignal-service-rs\n\
@@ -255,7 +293,7 @@ impl App {
                  Limitations (alpha):\n\
                   - No group chats\n\
                   - No attachments\n\
-                  - Send takes 1-4 min\n\
+                  - Send takes 1-4 minutes\n\
                     (transport refactor\n\
                     pending)\n\
                   - 2.4 GHz Wi-Fi only\n\n\
@@ -266,19 +304,22 @@ impl App {
             Screen::Linking => write!(
                 tv.text,
                 "Linking device...\n\n\
-                 Connecting to Signal\n\
+                 Connecting to Signal's\n\
                  servers and requesting\n\
                  a provisioning URL.\n\n\
-                 The TLS certificate is\n\
-                 verified against Signal's\n\
+                 The Signal server's\n\
+                 certificate is verified\n\
+                 against Signal's own\n\
                  pinned Certificate\n\
-                 Authority (CA) — no\n\
-                 public root CA is\n\
-                 trusted.\n\n\
+                 Authority. The public\n\
+                 web certificate bundle\n\
+                 on your device is not\n\
+                 trusted for this.\n\n\
                  Linking takes a few\n\
                  minutes after you scan\n\
                  the QR. Don't\n\
                  power-cycle.\n\n\
+                 Press Esc to cancel.\n\n\
                  (Please wait.)"
             )
             .map_err(|e| format!("write Linking: {}", e))?,
@@ -299,6 +340,7 @@ impl App {
             Screen::Settings => self.write_settings(&mut tv.text)?,
             Screen::Profile => self.write_profile(&mut tv.text)?,
             Screen::Help => self.write_help(&mut tv.text)?,
+            Screen::NoInternet { reason, .. } => self.write_no_internet(&mut tv.text, reason)?,
         }
 
         self.gam
@@ -574,6 +616,30 @@ impl App {
         .map_err(|e| format!("help: {}", e))
     }
 
+    fn write_no_internet(&self, out: &mut String, reason: &str) -> Result<(), String> {
+        write!(
+            out,
+            "No internet\n\n\
+             {}\n\n\
+             Connect Wi-Fi from\n\
+             shellchat (run there,\n\
+             not here):\n\n\
+               wlan off\n\
+               wlan on\n\
+               ssid scan\n\
+               wlan status   (until\n\
+                 'Connected')\n\
+               net ping 1.1.1.1\n\n\
+             2.4 GHz networks only —\n\
+             5 GHz isn't supported.\n\
+             Use a saved SSID, or set\n\
+             one with `wlan setssid`\n\
+             and `wlan setpass`.\n\n\
+             Press Enter to retry.",
+            reason
+        )
+        .map_err(|e| format!("no-internet: {}", e))
+    }
 }
 
 /// Whether a character is acceptable in the Thread compose buffer.
@@ -978,7 +1044,16 @@ fn handle_keys(
             (Screen::Menu, '↑') => app.move_cursor(-1),
             (Screen::Menu, '↓') => app.move_cursor(1),
             (Screen::Menu, '∴') | (Screen::Menu, '\u{d}') => match app.selected {
-                MenuItem::Link => drive_link(app, cmd_tx, event_rx, modals_xns),
+                MenuItem::Link => match check_internet(modals_xns) {
+                    Ok(()) => drive_link(app, cmd_tx, event_rx, modals_xns),
+                    Err(reason) => {
+                        log::info!("xas/gam_app: preflight failed before Link: {}", reason);
+                        app.screen = Screen::NoInternet {
+                            next: NextScreenAfterInternet::Link,
+                            reason,
+                        };
+                    }
+                },
                 MenuItem::About => app.screen = Screen::About,
                 MenuItem::Help => app.screen = Screen::Help,
             },
@@ -993,13 +1068,56 @@ fn handle_keys(
             }
             (Screen::Linked { .. }, '∴') | (Screen::Linked { .. }, '\u{d}') => {
                 if app.linked {
-                    app.screen = Screen::Home;
-                    app.home_focus = 0;
+                    // Preflight before landing on Home so an offline
+                    // user gets the recipe instead of opaque receive
+                    // failures from libsignal.
+                    match check_internet(modals_xns) {
+                        Ok(()) => {
+                            app.screen = Screen::Home;
+                            app.home_focus = 0;
+                        }
+                        Err(reason) => {
+                            log::info!("xas/gam_app: preflight failed before Home: {}", reason);
+                            app.screen = Screen::NoInternet {
+                                next: NextScreenAfterInternet::Home,
+                                reason,
+                            };
+                        }
+                    }
                 } else {
                     app.screen = Screen::Menu;
                     app.selected = MenuItem::Link;
                 }
                 app.last_status.clear();
+            }
+            // Enter on Screen::NoInternet re-runs the preflight.
+            // On success, transition to the screen the user was
+            // trying to reach (Home for post-link, Link flow for
+            // pre-link). On failure, stay on NoInternet with a
+            // refreshed reason.
+            (Screen::NoInternet { next, .. }, '∴') | (Screen::NoInternet { next, .. }, '\u{d}') => {
+                let next = *next;
+                match check_internet(modals_xns) {
+                    Ok(()) => match next {
+                        NextScreenAfterInternet::Link => {
+                            drive_link(app, cmd_tx, event_rx, modals_xns)
+                        }
+                        NextScreenAfterInternet::Home => {
+                            app.screen = Screen::Home;
+                            app.home_focus = 0;
+                        }
+                    },
+                    Err(reason) => {
+                        log::info!("xas/gam_app: preflight retry still failing: {}", reason);
+                        app.screen = Screen::NoInternet { next, reason };
+                    }
+                }
+            }
+            // Esc / Backspace on Screen::NoInternet returns to the
+            // pre/post-link Menu so the user isn't stuck.
+            (Screen::NoInternet { .. }, '\u{1b}') | (Screen::NoInternet { .. }, '\u{8}') => {
+                app.screen = if app.linked { Screen::Home } else { Screen::Menu };
+                app.selected = MenuItem::Link;
             }
             // Esc / Backspace on Screen::Linking — cancel the
             // in-flight link. Worker drops the link future + emits
@@ -1565,6 +1683,33 @@ fn next_attempt_device_name() -> String {
 #[cfg(target_os = "xous")]
 fn next_attempt_device_name() -> String {
     "xas".to_string()
+}
+
+/// Result of the no-internet preflight. `Ok(())` means we have an
+/// IPv4 lease and the link is up; `Err(reason)` is a short
+/// user-facing string explaining what's missing.
+fn check_internet(xns: &xous_names::XousNames) -> Result<(), String> {
+    // com::Com::new only succeeds when the COM service is up — i.e.,
+    // we're inside a Xous environment with the EC ready. Outside Xous
+    // (bare cargo run on Linux) this returns Err and we treat the
+    // host kernel's networking as already-OK.
+    let com = match com::Com::new(xns) {
+        Ok(c) => c,
+        Err(_) => return Ok(()),
+    };
+    let status = match com.wlan_status() {
+        Ok(s) => s,
+        Err(e) => {
+            return Err(format!("COM didn't respond: {:?}", e));
+        }
+    };
+    if status.link_state != com_rs::LinkState::Connected {
+        return Err(format!("Wi-Fi link is {:?}.", status.link_state));
+    }
+    if status.ipv4.addr == [0, 0, 0, 0] {
+        return Err("Joined a network but no\nDHCP lease yet.".to_string());
+    }
+    Ok(())
 }
 
 /// Kick off the link flow. Synchronous part only: prompts for a

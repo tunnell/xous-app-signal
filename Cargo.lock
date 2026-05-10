@@ -5167,6 +5167,8 @@ version = "0.0.1"
 dependencies = [
  "async-channel",
  "blitstr2",
+ "com",
+ "com_rs",
  "env_logger",
  "flatipc",
  "flatipc-derive",
