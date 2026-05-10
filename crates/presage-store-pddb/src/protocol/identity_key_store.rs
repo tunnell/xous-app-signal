@@ -19,7 +19,7 @@ use presage::libsignal_service::protocol::{
 use presage::store::StateStore;
 use tracing::warn;
 
-use super::{PddbProtocolStore, dict_identity};
+use super::{PddbProtocolStore, dict_identity, protocol_backend_err};
 
 /// Key inside `signal.state` holding the ACI/PNI identity keypair —
 /// matches the constants in `state.rs` (kept in sync deliberately;
@@ -44,7 +44,7 @@ impl IdentityKeyStore for PddbProtocolStore {
             .store
             .backend
             .get(STATE_DICT, key)
-            .map_err(backend_to_protocol_error)?
+            .map_err(protocol_backend_err)?
             .ok_or_else(|| {
                 SignalProtocolError::InvalidState(
                     "get_identity_key_pair",
@@ -84,13 +84,13 @@ impl IdentityKeyStore for PddbProtocolStore {
             .store
             .backend
             .get(&dict, &key)
-            .map_err(backend_to_protocol_error)?;
+            .map_err(protocol_backend_err)?;
         let changed = matches!(prior, Some(ref old) if old.as_slice() != new_bytes.as_ref());
 
         self.store
             .backend
             .put(&dict, &key, &new_bytes)
-            .map_err(backend_to_protocol_error)?;
+            .map_err(protocol_backend_err)?;
 
         Ok(IdentityChange::from_changed(changed))
     }
@@ -128,14 +128,10 @@ impl IdentityKeyStore for PddbProtocolStore {
             .store
             .backend
             .get(&dict, &key)
-            .map_err(backend_to_protocol_error)?
+            .map_err(protocol_backend_err)?
         {
             Some(bytes) => Ok(Some(IdentityKey::decode(&bytes)?)),
             None => Ok(None),
         }
     }
-}
-
-fn backend_to_protocol_error(e: crate::Error) -> SignalProtocolError {
-    SignalProtocolError::InvalidState("kv backend", e.to_string())
 }

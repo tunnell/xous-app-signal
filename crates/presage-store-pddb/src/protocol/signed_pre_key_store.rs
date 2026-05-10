@@ -11,7 +11,7 @@ use presage::libsignal_service::protocol::{
     GenericSignedPreKey, SignalProtocolError, SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
 };
 
-use super::{PddbProtocolStore, dict_signed_prekey};
+use super::{PddbProtocolStore, dict_signed_prekey, protocol_backend_err};
 
 #[async_trait(?Send)]
 impl SignedPreKeyStore for PddbProtocolStore {
@@ -25,7 +25,7 @@ impl SignedPreKeyStore for PddbProtocolStore {
             .store
             .backend
             .get(&dict, &key)
-            .map_err(backend_err)?
+            .map_err(protocol_backend_err)?
             .ok_or(SignalProtocolError::InvalidSignedPreKeyId)?;
         SignedPreKeyRecord::deserialize(&bytes)
     }
@@ -41,12 +41,8 @@ impl SignedPreKeyStore for PddbProtocolStore {
         self.store
             .backend
             .put(&dict, &key, &bytes)
-            .map_err(backend_err)
+            .map_err(protocol_backend_err)
     }
-}
-
-fn backend_err(e: crate::Error) -> SignalProtocolError {
-    SignalProtocolError::InvalidState("kv backend", e.to_string())
 }
 
 pub(super) fn count_signed_pre_keys(
@@ -58,13 +54,13 @@ pub(super) fn count_signed_pre_keys(
         .backend
         .list_keys(&dict)
         .map(|keys| keys.len())
-        .map_err(backend_err)
+        .map_err(protocol_backend_err)
 }
 
 pub(super) fn max_signed_pre_key_id(
     store: &PddbProtocolStore,
 ) -> Result<Option<u32>, SignalProtocolError> {
     let dict = dict_signed_prekey(store.identity);
-    let keys = store.store.backend.list_keys(&dict).map_err(backend_err)?;
+    let keys = store.store.backend.list_keys(&dict).map_err(protocol_backend_err)?;
     Ok(keys.iter().filter_map(|k| k.parse::<u32>().ok()).max())
 }

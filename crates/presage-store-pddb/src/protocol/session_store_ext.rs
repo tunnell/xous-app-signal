@@ -17,7 +17,7 @@ use presage::libsignal_service::protocol::{
 use presage::libsignal_service::push_service::DEFAULT_DEVICE_ID;
 
 use super::session_store::{deserialize_bundle, serialize_bundle, session_key};
-use super::{PddbProtocolStore, dict_session};
+use super::{PddbProtocolStore, dict_session, protocol_backend_err};
 
 #[async_trait(?Send)]
 impl SessionStoreExt for PddbProtocolStore {
@@ -45,8 +45,8 @@ impl SessionStoreExt for PddbProtocolStore {
         }
 
         let dict = dict_session(self.identity);
-        if let Some(bytes) = self.store.backend.get(&dict, &uuid).map_err(backend_err)? {
-            let bundle = deserialize_bundle(&bytes).map_err(backend_err)?;
+        if let Some(bytes) = self.store.backend.get(&dict, &uuid).map_err(protocol_backend_err)? {
+            let bundle = deserialize_bundle(&bytes).map_err(protocol_backend_err)?;
             for dev in bundle.keys() {
                 if *dev != main {
                     device_ids.push(*dev);
@@ -81,10 +81,10 @@ impl SessionStoreExt for PddbProtocolStore {
         // bundle becomes empty, delete the whole key so a future
         // `list_keys` doesn't return a stale empty entry.
         let dict = dict_session(self.identity);
-        let Some(bytes) = self.store.backend.get(&dict, &key.1).map_err(backend_err)? else {
+        let Some(bytes) = self.store.backend.get(&dict, &key.1).map_err(protocol_backend_err)? else {
             return Ok(());
         };
-        let mut bundle = deserialize_bundle(&bytes).map_err(backend_err)?;
+        let mut bundle = deserialize_bundle(&bytes).map_err(protocol_backend_err)?;
         if bundle.remove(&key.2).is_none() {
             return Ok(());
         }
@@ -92,13 +92,13 @@ impl SessionStoreExt for PddbProtocolStore {
             self.store
                 .backend
                 .delete(&dict, &key.1)
-                .map_err(backend_err)?;
+                .map_err(protocol_backend_err)?;
         } else {
-            let value = serialize_bundle(&bundle).map_err(backend_err)?;
+            let value = serialize_bundle(&bundle).map_err(protocol_backend_err)?;
             self.store
                 .backend
                 .put(&dict, &key.1, &value)
-                .map_err(backend_err)?;
+                .map_err(protocol_backend_err)?;
         }
         Ok(())
     }
@@ -130,18 +130,14 @@ impl SessionStoreExt for PddbProtocolStore {
             });
         }
 
-        if let Some(bytes) = self.store.backend.get(&dict, &uuid).map_err(backend_err)? {
-            let bundle = deserialize_bundle(&bytes).map_err(backend_err)?;
+        if let Some(bytes) = self.store.backend.get(&dict, &uuid).map_err(protocol_backend_err)? {
+            let bundle = deserialize_bundle(&bytes).map_err(protocol_backend_err)?;
             for dev in bundle.keys() {
                 affected.insert(*dev);
             }
-            self.store.backend.delete(&dict, &uuid).map_err(backend_err)?;
+            self.store.backend.delete(&dict, &uuid).map_err(protocol_backend_err)?;
         }
 
         Ok(affected.len())
     }
-}
-
-fn backend_err(e: crate::Error) -> SignalProtocolError {
-    SignalProtocolError::InvalidState("kv backend", e.to_string())
 }

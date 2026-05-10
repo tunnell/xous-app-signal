@@ -7,7 +7,7 @@ use presage::libsignal_service::protocol::{
     ProtocolAddress, SenderKeyRecord, SenderKeyStore, SignalProtocolError,
 };
 
-use super::{PddbProtocolStore, dict_sender_key};
+use super::{PddbProtocolStore, dict_sender_key, protocol_backend_err};
 
 fn sender_key_key(address: &ProtocolAddress, distribution_id: Uuid) -> String {
     format!(
@@ -32,7 +32,7 @@ impl SenderKeyStore for PddbProtocolStore {
         self.store
             .backend
             .put(&dict, &key, &bytes)
-            .map_err(backend_err)
+            .map_err(protocol_backend_err)
     }
 
     async fn load_sender_key(
@@ -42,13 +42,9 @@ impl SenderKeyStore for PddbProtocolStore {
     ) -> Result<Option<SenderKeyRecord>, SignalProtocolError> {
         let dict = dict_sender_key(self.identity);
         let key = sender_key_key(sender, distribution_id);
-        match self.store.backend.get(&dict, &key).map_err(backend_err)? {
+        match self.store.backend.get(&dict, &key).map_err(protocol_backend_err)? {
             Some(bytes) => SenderKeyRecord::deserialize(&bytes).map(Some),
             None => Ok(None),
         }
     }
-}
-
-fn backend_err(e: crate::Error) -> SignalProtocolError {
-    SignalProtocolError::InvalidState("kv backend", e.to_string())
 }

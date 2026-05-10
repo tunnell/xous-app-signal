@@ -18,7 +18,7 @@ use presage::libsignal_service::protocol::{
     PreKeyId, PreKeyRecord, PreKeyStore, SignalProtocolError,
 };
 
-use super::{PREKEY_BUNDLE_KEY, PddbProtocolStore, dict_prekey_bundle};
+use super::{PREKEY_BUNDLE_KEY, PddbProtocolStore, dict_prekey_bundle, protocol_backend_err};
 
 /// Load the packed bundle, or an empty vec if the key doesn't exist.
 fn load_bundle(store: &PddbProtocolStore) -> Result<Vec<(u32, Vec<u8>)>, SignalProtocolError> {
@@ -27,7 +27,7 @@ fn load_bundle(store: &PddbProtocolStore) -> Result<Vec<(u32, Vec<u8>)>, SignalP
         .store
         .backend
         .get(&dict, PREKEY_BUNDLE_KEY)
-        .map_err(backend_err)?
+        .map_err(protocol_backend_err)?
     {
         Some(bytes) => serde_json::from_slice(&bytes)
             .map_err(|e| SignalProtocolError::InvalidState("decode prekey bundle", e.to_string())),
@@ -46,7 +46,7 @@ fn save_bundle(
         .store
         .backend
         .put(&dict, PREKEY_BUNDLE_KEY, &bytes)
-        .map_err(backend_err)
+        .map_err(protocol_backend_err)
 }
 
 #[async_trait(?Send)]
@@ -83,10 +83,6 @@ impl PreKeyStore for PddbProtocolStore {
         bundle.retain(|(rid, _)| *rid != id);
         save_bundle(self, &bundle)
     }
-}
-
-fn backend_err(e: crate::Error) -> SignalProtocolError {
-    SignalProtocolError::InvalidState("kv backend", e.to_string())
 }
 
 pub(super) fn max_pre_key_id(

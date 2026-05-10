@@ -26,7 +26,7 @@ use presage::libsignal_service::protocol::{
     ProtocolAddress, SessionRecord, SessionStore, SignalProtocolError,
 };
 
-use super::{IdentityType, PddbProtocolStore, dict_session};
+use super::{IdentityType, PddbProtocolStore, dict_session, protocol_backend_err};
 
 /// Cache key — `(identity, address.name(), device_id)`. The address
 /// part is split from the device id so `flush_sessions` can group
@@ -76,10 +76,10 @@ impl SessionStore for PddbProtocolStore {
         // 2. Fall through to PDDB. One key per address; the value is a
         //    `SessionBundle` (device_id → serialized SessionRecord).
         let dict = dict_session(self.identity);
-        let Some(bytes) = self.store.backend.get(&dict, &key.1).map_err(backend_err)? else {
+        let Some(bytes) = self.store.backend.get(&dict, &key.1).map_err(protocol_backend_err)? else {
             return Ok(None);
         };
-        let bundle = deserialize_bundle(&bytes).map_err(backend_err)?;
+        let bundle = deserialize_bundle(&bytes).map_err(protocol_backend_err)?;
 
         // Populate the cache with every device's record so a follow-up
         // `load_session` for a sibling device skips PDDB.
@@ -119,8 +119,4 @@ impl SessionStore for PddbProtocolStore {
         dirty.insert(key);
         Ok(())
     }
-}
-
-fn backend_err(e: crate::Error) -> SignalProtocolError {
-    SignalProtocolError::InvalidState("kv backend", e.to_string())
 }

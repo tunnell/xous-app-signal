@@ -19,7 +19,7 @@ use presage::libsignal_service::protocol::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{PddbProtocolStore, dict_kyber_meta, dict_kyber_prekey};
+use super::{PddbProtocolStore, dict_kyber_meta, dict_kyber_prekey, protocol_backend_err};
 
 /// Wire envelope for a stored Kyber pre-key. JSON-encoded. The
 /// `record` bytes are libsignal's binary `KyberPreKeyRecord::serialize`
@@ -48,7 +48,7 @@ pub(super) fn store_envelope(
         .store
         .backend
         .put(&dict, &key, &bytes)
-        .map_err(backend_err)
+        .map_err(protocol_backend_err)
 }
 
 pub(super) fn load_envelope(
@@ -57,7 +57,7 @@ pub(super) fn load_envelope(
 ) -> Result<Option<KyberStored>, SignalProtocolError> {
     let dict = dict_kyber_prekey(proto.identity);
     let key = u32::from(id).to_string();
-    match proto.store.backend.get(&dict, &key).map_err(backend_err)? {
+    match proto.store.backend.get(&dict, &key).map_err(protocol_backend_err)? {
         Some(bytes) => serde_json::from_slice(&bytes)
             .map(Some)
             .map_err(|e| SignalProtocolError::InvalidState("decode kyber envelope", e.to_string())),
@@ -106,7 +106,7 @@ impl KyberPreKeyStore for PddbProtocolStore {
             let key = format!("{}.{}", u32::from(kyber_prekey_id), u32::from(ec_prekey_id));
             let new_base_bytes = base_key.serialize();
 
-            if let Some(prior) = self.store.backend.get(&dict, &key).map_err(backend_err)? {
+            if let Some(prior) = self.store.backend.get(&dict, &key).map_err(protocol_backend_err)? {
                 if prior == new_base_bytes.as_ref() {
                     return Err(SignalProtocolError::InvalidMessage(
                         CiphertextMessageType::PreKey,
@@ -117,7 +117,7 @@ impl KyberPreKeyStore for PddbProtocolStore {
             self.store
                 .backend
                 .put(&dict, &key, &new_base_bytes)
-                .map_err(backend_err)?;
+                .map_err(protocol_backend_err)?;
         } else {
             // One-time: delete the prekey outright.
             let dict = dict_kyber_prekey(self.identity);
@@ -125,15 +125,11 @@ impl KyberPreKeyStore for PddbProtocolStore {
             self.store
                 .backend
                 .delete(&dict, &key)
-                .map_err(backend_err)?;
+                .map_err(protocol_backend_err)?;
         }
 
         Ok(())
     }
-}
-
-fn backend_err(e: crate::Error) -> SignalProtocolError {
-    SignalProtocolError::InvalidState("kv backend", e.to_string())
 }
 
 pub(super) fn count_kyber_pre_keys(
@@ -141,7 +137,7 @@ pub(super) fn count_kyber_pre_keys(
     last_resort_only: bool,
 ) -> Result<usize, SignalProtocolError> {
     let dict = dict_kyber_prekey(store.identity);
-    let keys = store.store.backend.list_keys(&dict).map_err(backend_err)?;
+    let keys = store.store.backend.list_keys(&dict).map_err(protocol_backend_err)?;
     if !last_resort_only {
         return Ok(keys.len());
     }
@@ -162,7 +158,7 @@ pub(super) fn max_kyber_pre_key_id(
     store: &PddbProtocolStore,
 ) -> Result<Option<u32>, SignalProtocolError> {
     let dict = dict_kyber_prekey(store.identity);
-    let keys = store.store.backend.list_keys(&dict).map_err(backend_err)?;
+    let keys = store.store.backend.list_keys(&dict).map_err(protocol_backend_err)?;
     Ok(keys.iter().filter_map(|k| k.parse::<u32>().ok()).max())
 }
 
@@ -170,7 +166,7 @@ pub(super) fn max_last_resort_kyber_pre_key_id(
     store: &PddbProtocolStore,
 ) -> Result<Option<u32>, SignalProtocolError> {
     let dict = dict_kyber_prekey(store.identity);
-    let keys = store.store.backend.list_keys(&dict).map_err(backend_err)?;
+    let keys = store.store.backend.list_keys(&dict).map_err(protocol_backend_err)?;
     let mut best: Option<u32> = None;
     for k in keys {
         let Ok(id) = k.parse::<u32>() else { continue };

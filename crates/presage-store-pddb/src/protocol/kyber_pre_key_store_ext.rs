@@ -17,7 +17,7 @@ use presage::libsignal_service::protocol::{
 };
 
 use super::{
-    PddbProtocolStore, dict_kyber_prekey,
+    PddbProtocolStore, dict_kyber_prekey, protocol_backend_err,
     kyber_pre_key_store::{KyberStored, load_envelope, store_envelope},
 };
 
@@ -40,7 +40,7 @@ impl KyberPreKeyStoreExt for PddbProtocolStore {
         &self,
     ) -> Result<Vec<KyberPreKeyRecord>, SignalProtocolError> {
         let dict = dict_kyber_prekey(self.identity);
-        let keys = self.store.backend.list_keys(&dict).map_err(backend_err)?;
+        let keys = self.store.backend.list_keys(&dict).map_err(protocol_backend_err)?;
         let mut out = Vec::new();
         for k in keys {
             let Ok(id) = k.parse::<u32>() else { continue };
@@ -61,7 +61,7 @@ impl KyberPreKeyStoreExt for PddbProtocolStore {
     ) -> Result<(), SignalProtocolError> {
         let dict = dict_kyber_prekey(self.identity);
         let key = u32::from(kyber_prekey_id).to_string();
-        self.store.backend.delete(&dict, &key).map_err(backend_err)
+        self.store.backend.delete(&dict, &key).map_err(protocol_backend_err)
     }
 
     async fn mark_all_one_time_kyber_pre_keys_stale_if_necessary(
@@ -78,8 +78,4 @@ impl KyberPreKeyStoreExt for PddbProtocolStore {
     ) -> Result<(), SignalProtocolError> {
         unimplemented!("should not be used yet")
     }
-}
-
-fn backend_err(e: crate::Error) -> SignalProtocolError {
-    SignalProtocolError::InvalidState("kv backend", e.to_string())
 }
