@@ -66,24 +66,22 @@ and the existing fn `run_signal_worker()`).
 
 ---
 
-## P2 — Standardize "bridge" vs "worker" terminology in code + logs
+## P2 — Standardize "bridge" vs "worker" terminology in code + logs ✅ DONE
 
-**Problem.** Even if we don't do P1, the same thread is
-referred to as both "bridge" (in tracing spans, e.g.
-`bridge: spawned manager_task`) and "worker" (in module
-comments, function names like `run_signal_worker`, thread name
-`signal-worker`). Same thing, two names. Costs the reader a
-small but recurring tax.
+**Status:** implemented as the follow-up to P1. ~50 log
+strings inside `xous-signal-worker/src/lib.rs` renamed
+("bridge:" / "bridge/link:" / "bridge/send:" → "worker:" /
+"worker/link:" / "worker/send:") plus the test-script greps
+that match those prefixes (otherwise the headless link test
+would silently fail to find the URL log). The noun "bridge"
+in the codebase now refers exclusively to xous-net-bridge.
 
-**Proposal.** Pick one term. If P1 lands (rename to
-xous-signal-worker), pick **"worker"** and grep-replace
-"bridge:" in tracing macros + comments to "worker:". If P1
-doesn't land, the inverse — pick "bridge" — also works but
-contradicts the thread name and `run_signal_worker()` fn.
-
-**Effort.** 30 min. Grep + edit + skim.
-
-**Risk.** Trivial. Strings only.
+**Original problem (preserved for the record):** Even before
+P1, the same thread was referred to as both "bridge" (in
+tracing spans, `bridge: spawned manager_task`) and "worker"
+(in comments, fn name `run_signal_worker`, thread name
+`signal-worker`). Same thing, two names — small but recurring
+reader tax.
 
 ---
 
