@@ -73,6 +73,53 @@ wrong — please open an issue.
 - For the §2.5 headless smoke-test only: `xdotool` and `xvfb`.
   On Debian/Ubuntu: `apt install xdotool xvfb`.
 
+### Order of operations on a fresh box (READ THIS)
+
+Two rustup pitfalls bite every fresh contributor in the first
+five minutes. Resolve both before running any `cargo` command in
+this workspace, **regardless of which path (hosted or hardware)
+you intend to use**:
+
+1. **`rustup` must have a default toolchain.** `xous-core/` is
+   not pinned by a `rust-toolchain.toml`, so on a box where
+   rustup has no default (`rustup default` prints `error: no
+   default toolchain is configured`), every `cargo xtask …`
+   command run from `xous-core/` fails with `error: rustup could
+   not choose a version of cargo to run, because one wasn't
+   specified explicitly, and no default is configured`. Fix
+   once: `rustup default stable`.
+
+2. **The Xous std bundle must be installed before any cargo
+   build.** This workspace's `rust-toolchain.toml` declares
+   `targets = ["riscv32imac-unknown-xous-elf"]`. On rustup
+   ≥ 1.28 the previously-tolerated "warn: skipping unavailable
+   component rust-std for target …" is now a **hard error**:
+   `error: component 'rust-std' for target
+   'riscv32imac-unknown-xous-elf' is unavailable for download
+   for channel 'stable'`. The error fires on first `cargo`
+   invocation and blocks both the hosted and hardware paths.
+   Fix once by installing the betrusted-io Xous std bundle via
+   xous-core's xtask **before** any other cargo command in this
+   workspace:
+
+   ```sh
+   cd ~/code/xas/xous-core
+   cargo xtask install-toolkit
+   ```
+
+   That bundle ships precompiled `libstd-*.rlib` for the
+   `riscv32imac-unknown-xous-elf` target, which both satisfies
+   the hard error and is a strict prerequisite for §3 (the
+   hardware build). Hosted-only readers may be tempted to skip
+   it; you can't, because the toolchain file fires before any
+   feature flags are evaluated. See §1.5 for full detail.
+
+If you skip these and start with §2.2, the symptom is a cryptic
+rustup error before a single crate compiles. The smoke-test in
+§2.5 disguises the same problem as `ERROR: Xous never booted` —
+inspect `/tmp/xas-hosted-test.*/xous.log` and you'll see the
+rustup error there.
+
 ---
 
 ## 1. Clone the source
@@ -162,19 +209,33 @@ You can confirm this by running:
 rustup target add riscv32imac-unknown-xous-elf
 ```
 
-You'll see:
+On rustup older than ~1.28 you'll see a warning:
 
 ```
 warn: skipping unavailable component rust-std for target
       riscv32imac-unknown-xous-elf
 ```
 
-The target is "added" (recognized), but the precompiled
-`rust-std` component isn't downloaded — it doesn't exist as a
-published rustup component. Try to build now and you'll get
-errors like `error[E0463]: can't find crate for `core``.
+On rustup ≥ 1.28 (the current default) the same condition is now
+a **hard error**:
 
-You have to install the sysroot some other way.
+```
+error: component 'rust-std' for target
+       'riscv32imac-unknown-xous-elf' is unavailable for download
+       for channel 'stable'
+```
+
+Either way, the target is "added" (recognized) but the
+precompiled `rust-std` component isn't downloaded — it doesn't
+exist as a published rustup component. With the modern hard
+error, every `cargo` command in this workspace fails before
+compiling a single crate (because `rust-toolchain.toml` lists
+the target). With the legacy warning you can attempt a build
+and instead get `error[E0463]: can't find crate for `core``.
+
+You have to install the sysroot some other way — see the
+"Order of operations on a fresh box" callout in §0 and the
+recommended path immediately below.
 
 ### How to install it (recommended path)
 
@@ -192,6 +253,13 @@ cargo xtask install-toolkit
 This runs non-interactively (no prompt). The first run takes a few
 minutes (downloads + unpacks std + companion crates). Pass `--force`
 to overwrite an existing sysroot, e.g. after a Rust toolchain bump.
+
+> **Heads-up on a fresh rustup install**: `xous-core/` carries
+> no `rust-toolchain.toml`, so if rustup has no default
+> toolchain set, the command above fails with `error: rustup
+> could not choose a version of cargo to run`. Run `rustup
+> default stable` once, or invoke explicitly via
+> `rustup run stable cargo xtask install-toolkit`.
 
 To verify success:
 
@@ -376,6 +444,16 @@ found, `4` link URL never emitted (raise `LINK_TIMEOUT` or set
 test passes, so you can scan the QR from a phone for an
 end-to-end manual link.
 
+For the broader hosted send/receive harness (drives `signal-cli`
+on the same host as the test peer, sends a message in, asserts
+xas's render, then sends one back), copy
+`tests/hosted/test_env.example` to `tests/hosted/test_env`
+(gitignored) and fill in your `TEST_PEER_NUMBER` /
+`TEST_XAS_NUMBER`. `tests/hosted/scan_receive.sh` and
+`drive_link.py` consume those values via
+`tests/hosted/test_helpers.sh`. The QR smoke-test above does
+**not** need them.
+
 ### 2.6 Hosted-mode unit tests
 
 ```sh
@@ -383,8 +461,10 @@ cd ~/code/xas/xous-app-signal
 cargo test --features hosted -p xous-app-signal --bins
 ```
 
-22 tests covering the dialogue model, message rendering, and
-contact-name resolution. Should all pass green.
+~50 tests covering the dialogue model, message rendering,
+contact-name resolution, the stdin UI state machine, and link/
+send/receive event dispatch. Should all pass green. (Verified
+2026-05: `test result: ok. 53 passed`.)
 
 ---
 
@@ -540,6 +620,9 @@ When the Precursor boots into Xous:
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
+| `error: component 'rust-std' for target 'riscv32imac-unknown-xous-elf' is unavailable for download` (any cargo command, before any crate compiles) | Modern rustup (≥ 1.28) hard-errors on the unavailable tier-3 std declared in `rust-toolchain.toml` | Install the betrusted-io std bundle first: `cd ../xous-core && cargo xtask install-toolkit`. See §0 "Order of operations" and §1.5. |
+| `error: rustup could not choose a version of cargo to run, because one wasn't specified explicitly` (running anything from `xous-core/`) | `xous-core/` carries no `rust-toolchain.toml` and rustup has no default | `rustup default stable` (one-time), or prefix the command with `rustup run stable …` |
+| `tests/hosted/test_link_qr.sh` reports `ERROR: Xous never booted within Ns` despite a long timeout | Often a misleading symptom of one of the two rustup pitfalls above — `cargo xtask run` exits before booting | `cat /tmp/xas-hosted-test.*/xous.log` and look for the rustup error before raising `BOOT_TIMEOUT` |
 | `lsusb \| grep 1209` shows nothing | Precursor not in loader mode | Hold left-side button while plugging in USB; release after 2 seconds |
 | `lsusb \| grep 1209` shows `1209:3613` not `1209:5bf0` | Precursor in running mode, not loader | Hold left-side button + paperclip-reset |
 | `failed to read .../repos/xous-core/services/trng/Cargo.toml` (cargo build, very early) | `repos/xous-core` symlink missing or in the wrong place | See section 1 — symlink lives at `<workspace-parent>/repos/xous-core`, *not* inside `xous-app-signal/`. Run `ln -s ../xous-core repos/xous-core` from the workspace parent. |
