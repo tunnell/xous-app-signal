@@ -128,3 +128,15 @@ mod signed_pre_key_store;
 /// `ProtocolStore` blanket impl — composes the five required protocol
 /// traits (per [`presage/src/store.rs:342-355`](https://github.com/whisperfish/presage/blob/main/presage/src/store.rs#L342-L355)).
 impl presage::libsignal_service::protocol::ProtocolStore for PddbProtocolStore {}
+
+/// Convert a `crate::Error` into the `SignalProtocolError` shape that
+/// every libsignal protocol-store impl in this crate needs to return.
+/// Centralized here so the eight impls don't each redefine it.
+pub(crate) fn protocol_backend_err(
+    e: crate::Error,
+) -> presage::libsignal_service::protocol::SignalProtocolError {
+    presage::libsignal_service::protocol::SignalProtocolError::InvalidState(
+        "kv backend",
+        e.to_string(),
+    )
+}

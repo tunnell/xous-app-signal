@@ -227,6 +227,55 @@ impl fmt::Debug for PddbStore {
     }
 }
 
+// --- Helpers shared by every trait impl in this crate. ---
+//
+// The patterns below were duplicated 8-24 times across the protocol /
+// state / content stores until P8a centralized them. Each is a
+// trivial wrapper, but having one place to set the error mapping or
+// serde format means future changes don't need to find every site.
+
+/// Fetch a serde-JSON value from the backend, deserializing on hit.
+/// Wraps the `backend.get(...)? + serde_json::from_slice(...)?`
+/// pattern.
+pub(crate) fn backend_get_json<T: for<'de> serde::Deserialize<'de>>(
+    backend: &dyn KvBackend,
+    dict: &str,
+    key: &str,
+) -> Result<Option<T>, Error> {
+    match backend.get(dict, key)? {
+        Some(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+        None => Ok(None),
+    }
+}
+
+/// Serialize a value as JSON and write to the backend. Inverse of
+/// `backend_get_json`. `serde_json::to_vec` failure is wrapped
+/// explicitly as `Error::Encode` (the From impl picks `Decode`).
+pub(crate) fn backend_put_json<T: serde::Serialize>(
+    backend: &dyn KvBackend,
+    dict: &str,
+    key: &str,
+    value: &T,
+) -> Result<(), Error> {
+    let bytes = serde_json::to_vec(value).map_err(Error::encode)?;
+    backend.put(dict, key, &bytes)?;
+    Ok(())
+}
+
+/// List a dict's keys parsed as `u32` IDs (silently dropping anything
+/// that doesn't parse). Used by the `*PreKeyStore::max_*_id` and
+/// similar count/max queries.
+pub(crate) fn list_keys_as_u32s(
+    backend: &dyn KvBackend,
+    dict: &str,
+) -> Result<Vec<u32>, Error> {
+    Ok(backend
+        .list_keys(dict)?
+        .into_iter()
+        .filter_map(|k| k.parse::<u32>().ok())
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
