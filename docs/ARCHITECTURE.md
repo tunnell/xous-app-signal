@@ -365,7 +365,94 @@ WS dies within seconds. With the fix, ws_pump silently absorbs
 the timeout and the WS lives until something actually goes
 wrong.
 
-## 9. Where to look for common bug classes
+## 9. Layers a `Cmd` (or `Event`) crosses
+
+A common debugging move is "instrument the layer where the bug
+might live." This requires knowing what layers there are. Here
+are the two end-to-end traces, with file:line cites at each
+hop, so you can pick where to put a `log::info!`.
+
+### Outbound: `Cmd::SendMessage` from key-press to TLS bytes
+
+1. **UI captures the keystroke** — `crates/xous-app-signal/src/gam_app.rs`
+   handle_keys arm. Sends on the worker channel via
+   `cmd_tx.send_blocking(Cmd::SendMessage { ... })`
+   (`gam_app.rs:1031` and `:1084`).
+2. **Worker dispatcher receives** — `crates/xous-signal-worker/src/lib.rs::worker_main`
+   match arm `Ok(Cmd::SendMessage { recipient, body, timestamp })`
+   (`lib.rs:317`). Forwards via internal `send_tx` channel
+   into `manager_task`.
+3. **`manager_task` selects out of receive-stream** —
+   `lib.rs:479` (`async fn manager_task`). When a queued send
+   arrives on `send_rx`, it drops the receive-stream borrow
+   and calls `handle_send(&mut manager, send, &event_tx)`
+   (`lib.rs:636`).
+4. **`handle_send` invokes presage** — `lib.rs:768`
+   (`async fn handle_send`). Parses the recipient (UUID or
+   E.164), then calls `manager.send_message(...).await` inside
+   a `catch_unwind` so a panic in libsignal becomes
+   `Event::SendError("panic in send: ...")` rather than
+   killing the worker.
+5. **presage calls libsignal-service-rs** —
+   `vendor/presage/presage/src/manager/registered.rs`. Uses
+   the `Manager`'s identified WS to send, fetching prekey
+   bundles via the `HttpClient` if first-send for the
+   recipient.
+6. **libsignal-service-rs uses our transport** —
+   `vendor/libsignal-service-rs/src/`'s WebSocket and HTTP
+   code calls into `xous-net-bridge`'s `SyncHttpClient`
+   (`crates/xous-net-bridge/src/http.rs:35` constructor;
+   `:46` `execute`) and into the `WebSocketChannels` returned
+   by `connect_websocket` (`http.rs:68`).
+7. **`ws_pump` writer thread sends the frame** —
+   `crates/xous-net-bridge/src/ws_pump.rs:240`
+   (`fn writer_loop`). Receives the frame on its
+   `async-channel`, takes the `Mutex<WebSocket<RustlsStream>>`,
+   calls `ws.send(frame)` which writes through rustls to
+   `std::net::TcpStream` to the kernel net service.
+8. **Kernel net service to the wire.** From here you're in
+   `xous-core/services/net/`, outside this repo.
+
+### Inbound: a Signal-server message to `Event::Message` on the UI
+
+1. **WS reader thread reads a frame** —
+   `crates/xous-net-bridge/src/ws_pump.rs:135` (`reader_loop`).
+   Calls `ws.read()` blocking; pushes the frame into the
+   incoming `async-channel`.
+2. **libsignal-service-rs polls the channel** in its
+   `SignalWebSocketProcess::run` loop
+   (`vendor/libsignal-service-rs/src/websocket/mod.rs`),
+   correlates response frames to outstanding requests, and
+   surfaces protocol-level events to presage.
+3. **presage's `receive_messages` stream yields** —
+   inside the executor running on the worker thread.
+4. **`manager_task` consumes the stream item** —
+   `lib.rs:592` `log::info!("worker: stream item received")`,
+   then calls
+   `process_received(item, &store, &event_tx).await`
+   (`lib.rs:598`).
+5. **`process_received` decodes content + emits Event** —
+   `lib.rs:668` (`async fn process_received`). Parses the
+   Content body, builds an `Event::Message { sender,
+   sender_phone, sender_name, body, timestamp }`, and sends on
+   `event_tx` (`lib.rs:737`).
+6. **UI consumes the event** —
+   `crates/xous-app-signal/src/gam_app.rs::handle_worker_event`.
+   The event reaches the GAM main loop via the forwarder
+   thread that pushes into a shared `Mutex<VecDeque<Event>>`.
+
+### How to use these traces
+
+When debugging, narrow to ONE layer first. If a `Cmd::SendMessage`
+never reaches `handle_send` (no `worker/send: handle_send entered`
+in UART), the bug is in steps 1–3. If it reaches `handle_send`
+but never returns, the bug is in steps 4–7. The `worker:` /
+`worker/link:` / `worker/send:` log prefixes (see
+`xous-signal-worker/src/lib.rs`) are designed to make this
+narrowing fast — grep UART for the prefix corresponding to the
+layer.
+
+## 10. Where to look for common bug classes
 
 | Symptom | Most likely file |
 |---|---|
@@ -376,7 +463,7 @@ wrong.
 | New `Cmd` variant doesn't reach the worker | Check the dispatcher in `xous-signal-worker/src/lib.rs::worker_main`'s `match cmd_rx.recv()` |
 | Profile screen says "(not loaded)" after restart | `xous-signal-worker/src/lib.rs::cached_account_info` + `Cmd::GetAccountInfo` handler — see if the worker cached it |
 
-## 10. What this doc deliberately does not cover
+## 11. What this doc deliberately does not cover
 
 - **Build / flash workflow** → [BUILDING.md](../BUILDING.md).
 - **Why Precursor / why Signal** → README's "Why a Signal client on Precursor" section.
