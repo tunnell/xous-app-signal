@@ -11,7 +11,7 @@
 //! directly. This keeps the audit story clean: a screen reads its own
 //! state, returns a transition; the `Ui` driver applies the transition.
 
-use crate::screens::{
+use crate::stdin_ui::screens::{
     about::AboutScreen,
     compose::ComposeScreen,
     conversation_list::ConversationListScreen,
@@ -120,7 +120,7 @@ impl Screen {
     /// driver should do next. Mutates `self` for in-screen state
     /// changes (e.g. moving menu focus); returns `Push`/`Pop`/etc. for
     /// stack changes.
-    pub fn handle_key(&mut self, key: crate::key::Key) -> Transition {
+    pub fn handle_key(&mut self, key: crate::stdin_ui::key::Key) -> Transition {
         match self {
             Screen::Splash(s) => s.handle_key(key),
             Screen::Menu(m) => m.handle_key(key),

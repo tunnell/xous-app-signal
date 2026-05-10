@@ -7,9 +7,9 @@
 //! The other items are flagged unimplemented and Pop immediately
 //! when chosen.
 
-use crate::key::Key;
-use crate::screen::{Screen, Transition};
-use crate::screens::about::AboutScreen;
+use crate::stdin_ui::key::Key;
+use crate::stdin_ui::screen::{Screen, Transition};
+use crate::stdin_ui::screens::about::AboutScreen;
 
 /// Menu item. We use indexes-into-a-static-list rather than a
 /// `&'static str` per item so the audit can see the entire menu by
@@ -99,7 +99,7 @@ impl MenuScreen {
                     // Hands a `Cmd::Hello` to the worker. The
                     // driver intercepts this transition, sends, awaits
                     // pong, and pops back. See Ui::run.
-                    Transition::Push(Screen::Splash(crate::screens::splash::SplashScreen::new()))
+                    Transition::Push(Screen::Splash(crate::stdin_ui::screens::splash::SplashScreen::new()))
                     // ^ placeholder until the driver wiring lands; the
                     // test only exercises that we hit this branch.
                 }

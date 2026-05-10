@@ -6,9 +6,9 @@
 //! thread per UI.md §5.7's pinned/unpinned layout, but for MVP a
 //! single chronological list is enough).
 
-use crate::key::Key;
-use crate::screen::{Screen, Transition};
-use crate::screens::menu::MenuScreen;
+use crate::stdin_ui::key::Key;
+use crate::stdin_ui::screen::{Screen, Transition};
+use crate::stdin_ui::screens::menu::MenuScreen;
 
 /// One received message, flattened for display. Mirrors the
 /// `Event::Message` payload from `xous-signal-worker`.
@@ -116,7 +116,7 @@ impl ConversationListScreen {
             Key::Char('c') => {
                 if let Some(latest) = self.messages.last() {
                     Transition::Push(Screen::Compose(
-                        crate::screens::compose::ComposeScreen::new(latest.sender.clone()),
+                        crate::stdin_ui::screens::compose::ComposeScreen::new(latest.sender.clone()),
                     ))
                 } else {
                     Transition::None

@@ -9,8 +9,8 @@
 //! `Event::LinkUrl` / `LinkComplete` / `LinkError`. The driver
 //! transitions between them based on those events.
 
-use crate::key::Key;
-use crate::screen::Transition;
+use crate::stdin_ui::key::Key;
+use crate::stdin_ui::screen::Transition;
 
 // ---------------------------------------------------------------
 // LinkStarting — shown immediately after the user hits "Link this
@@ -188,8 +188,8 @@ impl LinkDoneScreen {
             // From LinkDone, Home transitions into the
             // ConversationList screen which on entry sends
             // `Cmd::StartReceive` and begins streaming messages.
-            Key::Home | Key::Right => Transition::Replace(crate::screen::Screen::ConversationList(
-                crate::screens::conversation_list::ConversationListScreen::new(),
+            Key::Home | Key::Right => Transition::Replace(crate::stdin_ui::screen::Screen::ConversationList(
+                crate::stdin_ui::screens::conversation_list::ConversationListScreen::new(),
             )),
             Key::Left | Key::Esc => Transition::Pop,
             _ => Transition::None,
@@ -260,7 +260,7 @@ impl LinkErrorScreen {
                 Transition::None
             }
             Key::Home | Key::Right => match self.focus {
-                0 => Transition::Replace(crate::screen::Screen::LinkStarting(
+                0 => Transition::Replace(crate::stdin_ui::screen::Screen::LinkStarting(
                     LinkStartingScreen::new(),
                 )),
                 1 => Transition::Pop,

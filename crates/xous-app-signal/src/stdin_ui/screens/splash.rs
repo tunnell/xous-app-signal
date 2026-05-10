@@ -3,9 +3,9 @@
 //! Four menu items: Link this device / Register a phone number (greyed)
 //! / About / Quit. Up/Down moves focus, Home selects.
 
-use crate::key::Key;
-use crate::screen::{Screen, Transition};
-use crate::screens::{about::AboutScreen, menu::MenuScreen};
+use crate::stdin_ui::key::Key;
+use crate::stdin_ui::screen::{Screen, Transition};
+use crate::stdin_ui::screens::{about::AboutScreen, menu::MenuScreen};
 
 /// 0 = Link, 1 = Register (deferred), 2 = About, 3 = Quit. `Default`
 /// starts focused on Link, which is what users hit first on a fresh
@@ -69,7 +69,7 @@ impl SplashScreen {
                 // and replaces the screen with LinkShowUrl when the
                 // worker emits `Event::LinkUrl`.
                 0 => Transition::Push(Screen::LinkStarting(
-                    crate::screens::link::LinkStartingScreen::new(),
+                    crate::stdin_ui::screens::link::LinkStartingScreen::new(),
                 )),
                 1 => Transition::None, // Register: greyed, no-op
                 2 => Transition::Push(Screen::About(AboutScreen::new())),

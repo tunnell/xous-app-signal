@@ -5187,16 +5187,7 @@ dependencies = [
  "xous-api-log",
  "xous-api-names",
  "xous-api-susres 0.9.68",
- "xous-app-signal-ui",
  "xous-modals-ipc",
- "xous-signal-worker",
-]
-
-[[package]]
-name = "xous-app-signal-ui"
-version = "0.0.1"
-dependencies = [
- "async-channel",
  "xous-signal-worker",
 ]
 

@@ -16,11 +16,12 @@
 
 mod dialogue;
 mod gam_app;
+mod stdin_ui;
 
 use async_channel::bounded;
 use presage_store_pddb::PddbStore;
 #[cfg(not(all(feature = "auto-link", target_os = "xous")))]
-use xous_app_signal_ui::Ui;
+use stdin_ui::Ui;
 use xous_signal_worker::{Cmd, Event, run_signal_worker};
 
 /// Real `__getrandom_v03_custom` body backed by xous-core's TRNG

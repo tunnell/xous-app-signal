@@ -15,8 +15,8 @@
 //! with backspace/cursor; the `SendState` and event handling stay
 //! the same.
 
-use crate::key::Key;
-use crate::screen::Transition;
+use crate::stdin_ui::key::Key;
+use crate::stdin_ui::screen::Transition;
 
 #[derive(Debug, Clone)]
 pub struct ComposeScreen {

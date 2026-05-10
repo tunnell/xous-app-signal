@@ -22,6 +22,15 @@
 //! Subsequent work fills in `Screen::Link*` / `Conversation` /
 //! `Compose` placeholders.
 
+// This module previously lived in its own crate (xous-app-signal-ui)
+// and exposed every screen + helper as `pub` for cross-crate use.
+// After the collapse into xous-app-signal/src/stdin_ui/, some of that
+// surface (e.g. screen constructors that the old test crate
+// instantiated directly) is no longer reached — but the surface is
+// kept whole so the fallback UI can later be reactivated end-to-end
+// without re-exposing internals one-by-one.
+#![allow(dead_code)]
+
 pub mod key;
 pub mod render;
 pub mod screen;
@@ -167,8 +176,8 @@ impl Ui {
     /// were emitted by side channels — `Event::Pong` etc. — and
     /// don't affect the user-visible screen).
     fn handle_event(&mut self, evt: Event) {
-        use crate::screens::conversation_list::{MessageSummary, ReceiveStatus};
-        use crate::screens::link::{LinkDoneScreen, LinkErrorScreen, LinkShowUrlScreen};
+        use crate::stdin_ui::screens::conversation_list::{MessageSummary, ReceiveStatus};
+        use crate::stdin_ui::screens::link::{LinkDoneScreen, LinkErrorScreen, LinkShowUrlScreen};
         match evt {
             Event::LinkUrl(url) => {
                 if matches!(self.stack.last(), Some(Screen::LinkStarting(_))) {
@@ -605,7 +614,7 @@ mod tests {
 
     // ----- ConversationList -----
 
-    use crate::screens::conversation_list::{
+    use crate::stdin_ui::screens::conversation_list::{
         ConversationListScreen, MessageSummary, ReceiveStatus,
     };
 
@@ -727,7 +736,7 @@ mod tests {
 
     // ----- Compose -----
 
-    use crate::screens::compose::SendState;
+    use crate::stdin_ui::screens::compose::SendState;
 
     /// Helper: park UI on a populated ConversationList, then push
     /// Compose. Drains all queued cmds so caller sees only

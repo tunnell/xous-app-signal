@@ -4,9 +4,9 @@
 //! yet. The hint footer collapses to one item ("Menu") since no
 //! navigation is possible.
 
-use crate::key::Key;
-use crate::screen::{Screen, Transition};
-use crate::screens::menu::MenuScreen;
+use crate::stdin_ui::key::Key;
+use crate::stdin_ui::screen::{Screen, Transition};
+use crate::stdin_ui::screens::menu::MenuScreen;
 
 #[derive(Debug, Clone, Default)]
 pub struct EmptyListScreen;

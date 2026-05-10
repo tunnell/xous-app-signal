@@ -88,9 +88,10 @@ xous-signal-worker = { path = "../xous-signal-worker" }
 presage-store-pddb = { path = "../presage-store-pddb" }
 async-channel = { workspace = true }
 
-# The UI layer. main.rs constructs the worker, then hands
-# the cmd/event channels to Ui::new and calls Ui::run.
-xous-app-signal-ui = { path = "../xous-app-signal-ui" }
+# The stdin-UI fallback (used by main.rs when gam_app::run() can't
+# reach a Xous server) lives inline at src/stdin_ui/. It used to
+# be its own crate (xous-app-signal-ui) but the boundary didn't
+# earn its keep — only main.rs consumed it.
 
 # log facade. Boot events log::info! through here so the
 # Renode UART tester can assert on them. Hosted binds env_logger

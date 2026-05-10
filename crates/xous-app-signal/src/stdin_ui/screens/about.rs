@@ -5,8 +5,8 @@
 //! values are `static` strings so the screen is allocation-free at
 //! render time.
 
-use crate::key::Key;
-use crate::screen::Transition;
+use crate::stdin_ui::key::Key;
+use crate::stdin_ui::screen::Transition;
 
 #[derive(Debug, Clone, Default)]
 pub struct AboutScreen;
