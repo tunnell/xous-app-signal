@@ -1,6 +1,6 @@
 [package]
-name = "xous-signal-bridge"
-description = "Glue between presage::Manager (worker thread + LocalExecutor) and the Xous IPC server."
+name = "xous-signal-worker"
+description = "Worker thread that owns presage::Manager on a LocalExecutor; exposes a Cmd/Event channel surface to the rest of xas."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

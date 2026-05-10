@@ -66,8 +66,8 @@ if ! xas_verify_linked_device "$TEST_PEER_NUMBER" "signal-cli"; then
 fi
 echo ""
 
-# Gate: refuse to send until the bridge is in receive mode. Look for
-# the new diagnostic line (added in xous-signal-bridge for the receive
+# Gate: refuse to send until the worker is in receive mode. Look for
+# the diagnostic line (added in xous-signal-worker for the receive
 # debug session). If the user hasn't linked yet, this never appears
 # and we time out — exit 2 with a clear hint.
 echo "=== Waiting for xas receive loop to be up ==="

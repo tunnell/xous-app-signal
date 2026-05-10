@@ -5,7 +5,7 @@ members = [
     "crates/xous-net-bridge",
     "crates/xous-pddb-ipc",
     "crates/xous-modals-ipc",
-    "crates/xous-signal-bridge",
+    "crates/xous-signal-worker",
     "crates/xous-app-signal",
     "crates/xous-app-signal-ui",
     "vendor/libsignal-service-rs",

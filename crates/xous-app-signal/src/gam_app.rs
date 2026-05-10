@@ -45,7 +45,7 @@ use uuid::Uuid;
 use ux_api::minigfx::*;
 use ux_api::service::api::Gid;
 use xous::{CID, Message};
-use xous_signal_bridge::{Cmd, Event};
+use xous_signal_worker::{Cmd, Event};
 
 use crate::dialogue::{DialogueSummary, SendStatus, ThreadMessage, rebuild_summaries};
 

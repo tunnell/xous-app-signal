@@ -11,7 +11,7 @@ use crate::screen::{Screen, Transition};
 use crate::screens::menu::MenuScreen;
 
 /// One received message, flattened for display. Mirrors the
-/// `Event::Message` payload from `xous-signal-bridge`.
+/// `Event::Message` payload from `xous-signal-worker`.
 #[derive(Debug, Clone)]
 pub struct MessageSummary {
     pub sender: String,

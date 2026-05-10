@@ -7,7 +7,7 @@
 //!
 //! 1. Construct a `PddbStore` (mock backend in hosted; real PDDB
 //!    behind a `pddb-backend` feature flag).
-//! 2. Spawn the manager worker thread (`xous-signal-bridge`).
+//! 2. Spawn the manager worker thread (`xous-signal-worker`).
 //! 3. Hand the cmd/event channels to `Ui::new` and call `Ui::run`.
 //! 4. Worker shutdown is the responsibility of the UI driver — it
 //!    sends `Cmd::Shutdown` on Quit.
@@ -21,7 +21,7 @@ use async_channel::bounded;
 use presage_store_pddb::PddbStore;
 #[cfg(not(all(feature = "auto-link", target_os = "xous")))]
 use xous_app_signal_ui::Ui;
-use xous_signal_bridge::{Cmd, Event, run_signal_worker};
+use xous_signal_worker::{Cmd, Event, run_signal_worker};
 
 /// Real `__getrandom_v03_custom` body backed by xous-core's TRNG
 /// service.

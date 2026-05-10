@@ -5189,7 +5189,7 @@ dependencies = [
  "xous-api-susres 0.9.68",
  "xous-app-signal-ui",
  "xous-modals-ipc",
- "xous-signal-bridge",
+ "xous-signal-worker",
 ]
 
 [[package]]
@@ -5197,7 +5197,7 @@ name = "xous-app-signal-ui"
 version = "0.0.1"
 dependencies = [
  "async-channel",
- "xous-signal-bridge",
+ "xous-signal-worker",
 ]
 
 [[package]]
@@ -5276,7 +5276,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "906500be0c4ed13afc3c8743e4d40337bfbe08e7dadfa216c39907aaa06cc8c2"
 
 [[package]]
-name = "xous-signal-bridge"
+name = "xous-signal-worker"
 version = "0.0.1"
 dependencies = [
  "async-channel",

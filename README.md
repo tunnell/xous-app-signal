@@ -192,7 +192,7 @@ xous-app-signal/
 │   ├── xous-net-bridge/        sync TLS + WS pump + channel bridge
 │   ├── xous-pddb-ipc/          hand-rolled PDDB IPC client
 │   ├── xous-modals-ipc/        hand-rolled modals IPC client
-│   ├── xous-signal-bridge/     Manager-on-worker + IPC forwarder
+│   ├── xous-signal-worker/     presage::Manager on worker thread + Cmd/Event channels
 │   ├── xous-app-signal/        binary entry point (binary name: `xas`)
 │   └── xous-app-signal-ui/     stdin-driven UI fallback for standalone runs (no Xous server)
 ├── docs/                       ARCHITECTURE.md (reader's-eye-view of the codebase)

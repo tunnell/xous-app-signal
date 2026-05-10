@@ -39,7 +39,7 @@ Four boxes. Three boundaries you cross every time a message moves.
               ▼
    ┌──────────────────────┐
    │  signal-worker       │   our code: thin async bridge
-   │  thread              │   (xous-signal-bridge crate)
+   │  thread              │   (xous-signal-worker crate)
    │  (worker_main)       │
    └──────────┬───────────┘
               │  rust function calls into:
@@ -79,9 +79,10 @@ and that have years of community use. xas adds:
 2. A network backend (`xous-net-bridge`) that wires
    libsignal-service-rs's `HttpClient` and `WebSocketChannels`
    traits to Xous's `std::net::TcpStream` + tungstenite + rustls.
-3. The IPC bridge (`xous-signal-bridge`) that gives the
-   single-threaded GAM event loop a Cmd/Event interface to a
-   long-lived worker thread that owns the presage Manager.
+3. The signal worker (`xous-signal-worker`) that owns a
+   long-lived thread running the presage Manager and exposes a
+   `Cmd`/`Event` channel surface to the single-threaded GAM
+   event loop.
 4. The UI itself (`xous-app-signal`).
 
 **We do not implement any cryptography ourselves.** We do not
@@ -159,7 +160,7 @@ can jump straight to the code.
 6. **presage's stream yields the `Received::Content`** to its
    consumer (us).
 7. **xas's `manager_task`** (in
-   [`crates/xous-signal-bridge/src/lib.rs`](../crates/xous-signal-bridge/src/lib.rs))
+   [`crates/xous-signal-worker/src/lib.rs`](../crates/xous-signal-worker/src/lib.rs))
    pulls the `Received::Content`, calls our `process_received`
    to flatten it into an IPC-friendly shape (string-typed
    sender, body, timestamp), and sends `Event::Message` over
@@ -185,7 +186,7 @@ The mirror image, with one sharp edge worth knowing about.
    with status `Pending` and sends `Cmd::SendMessage { recipient,
    body, timestamp }` to the worker.
 2. **manager_task** routes the cmd to `handle_send`
-   ([`xous-signal-bridge/src/lib.rs`](../crates/xous-signal-bridge/src/lib.rs)
+   ([`xous-signal-worker/src/lib.rs`](../crates/xous-signal-worker/src/lib.rs)
    `handle_send`).
 3. **`handle_send` calls `manager.send_message()`** (presage,
    upstream) inside a 6-attempt retry loop with exponential
@@ -228,7 +229,7 @@ Three different stores, each with a clear scope:
   this is alpha). Lost on app restart. Persistence to PDDB is a
   filed chore.
 - **Bridge-side caches.** `cached_account_info`
-  (xous-signal-bridge/src/lib.rs) holds the
+  (xous-signal-worker/src/lib.rs) holds the
   device-name/ACI/phone for the Profile screen so the UI doesn't
   have to round-trip to the manager every time. Lost on worker
   restart.
@@ -368,12 +369,12 @@ wrong.
 
 | Symptom | Most likely file |
 |---|---|
-| Send fails with `WebSocket closing while...` | `xous-signal-bridge/src/lib.rs::handle_send` retry loop; or the underlying WS lifetime in `vendor/libsignal-service-rs/src/websocket/mod.rs::SignalWebSocketProcess::run` |
-| Receive doesn't surface a message that the phone says was delivered | `xous-signal-bridge/src/lib.rs::manager_task` and `process_received`; check `Received` enum variants |
+| Send fails with `WebSocket closing while...` | `xous-signal-worker/src/lib.rs::handle_send` retry loop; or the underlying WS lifetime in `vendor/libsignal-service-rs/src/websocket/mod.rs::SignalWebSocketProcess::run` |
+| Receive doesn't surface a message that the phone says was delivered | `xous-signal-worker/src/lib.rs::manager_task` and `process_received`; check `Received` enum variants |
 | Linking hangs after QR scan | `vendor/presage/presage/src/manager/linking.rs`; check ProvisionEnvelope decrypt + prekey gen + `POST /v1/devices/link` |
 | LCD doesn't repaint after an event | `gam_app.rs::handle_worker_event` — confirm the event arm calls `app.render()` |
-| New `Cmd` variant doesn't reach the worker | Check the dispatcher in `xous-signal-bridge/src/lib.rs::worker_main`'s `match cmd_rx.recv()` |
-| Profile screen says "(not loaded)" after restart | `xous-signal-bridge/src/lib.rs::cached_account_info` + `Cmd::GetAccountInfo` handler — see if the bridge cached it |
+| New `Cmd` variant doesn't reach the worker | Check the dispatcher in `xous-signal-worker/src/lib.rs::worker_main`'s `match cmd_rx.recv()` |
+| Profile screen says "(not loaded)" after restart | `xous-signal-worker/src/lib.rs::cached_account_info` + `Cmd::GetAccountInfo` handler — see if the bridge cached it |
 
 ## 10. What this doc deliberately does not cover
 

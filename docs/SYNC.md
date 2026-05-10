@@ -132,7 +132,7 @@ gh pr view xas --repo tunnell/xous-core   # the same diff in PR form
 apps/xas/
 ├── crates/
 │   ├── xous-app-signal/        ← the binary
-│   ├── xous-signal-bridge/     ← Manager worker thread + IPC
+│   ├── xous-signal-worker/     ← Manager worker thread + Cmd/Event channels
 │   ├── presage-store-pddb/     ← storage trait impls
 │   └── xous-net-bridge/        ← TLS + sync HTTP + WS pump
 ├── vendor/

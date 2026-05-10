@@ -61,7 +61,7 @@ xous-core-for-xas/
         │   └── stage/REPORT-*.md  (historical per-stage execution reports)
         ├── crates/
         │   ├── xous-app-signal/        ← the binary
-        │   ├── xous-signal-bridge/
+        │   ├── xous-signal-worker/
         │   ├── presage-store-pddb/
         │   └── xous-net-bridge/
         ├── vendor/
@@ -91,7 +91,7 @@ that workspace:
 members = [
     # ... existing xous-core members ...
     "apps/xas/crates/xous-app-signal",
-    "apps/xas/crates/xous-signal-bridge",
+    "apps/xas/crates/xous-signal-worker",
     "apps/xas/crates/presage-store-pddb",
     "apps/xas/crates/xous-net-bridge",
     "apps/xas/vendor/libsignal-service-rs",

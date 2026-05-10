@@ -34,7 +34,7 @@ Decision 7 explicitly avoids. Section 9 below addresses this.
   is mostly for `libsignal` and TLS state.
 - **Single-thread, sync.** UI runs in `xous-app-signal`'s main
   thread; manager events arrive over the `Event` channel from
-  `xous-signal-bridge`. No locks, no `Send` plumbing, no async UI.
+  `xous-signal-worker`. No locks, no `Send` plumbing, no async UI.
 
 ## 2. Screen inventory
 
@@ -705,7 +705,7 @@ The research memo recommends adding a `ChatScreen::List` state to
    render — extra code, not less.
 
 3. **Different state machines.** `libs/chat::Chat` is a server with
-   its own opcode loop; we already have `xous-signal-bridge` running
+   its own opcode loop; we already have `xous-signal-worker` running
    the manager state machine over `Cmd`/`Event` channels. Putting
    `libs/chat` between them adds a third loop with its own scheduling
    semantics.
@@ -743,11 +743,11 @@ What we **don't** adopt:
 ## 10. Data flow: bridge → UI
 
 Every screen reads from the manager state machine and writes by
-emitting commands. The existing `xous-signal-bridge` `Cmd`/`Event`
+emitting commands. The existing `xous-signal-worker` `Cmd`/`Event`
 channels gain new variants (Stages 10-12 will wire these):
 
 ```rust
-// xous-signal-bridge/src/cmd.rs (additions)
+// xous-signal-worker/src/cmd.rs (additions)
 pub enum Cmd {
     // … existing Hello, GetWhoami, Shutdown …
 
@@ -811,7 +811,7 @@ A new crate joins the workspace at Stage 9c:
 crates/
 ├── xous-app-signal/          binary "xas" (existing)
 ├── xous-app-signal-ui/       NEW — all UI, ~2-3 kLoC
-├── xous-signal-bridge/       Manager worker (existing; +Cmd/Event variants)
+├── xous-signal-worker/       Manager worker (existing; +Cmd/Event variants)
 ├── xous-net-bridge/          TLS + WS + HTTP (existing)
 └── presage-store-pddb/       storage trait surface (existing)
 ```

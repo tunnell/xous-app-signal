@@ -39,38 +39,30 @@ and a few crates whose role isn't clearly described in code.
 
 ---
 
-## P1 — Rename one of the two `*-bridge` crates
+## P1 — Rename one of the two `*-bridge` crates ✅ DONE
 
-**Problem.** Two first-party crates have "bridge" in the name
-but mean different things:
+**Status:** implemented. The crate that was `xous-signal-bridge`
+is now `xous-signal-worker`. Workspace member, path-deps, and
+all imports updated; unit tests pass; the kept "bridge"
+nomenclature now refers exclusively to `xous-net-bridge` (the
+sync↔async transport bridge).
+
+**Original problem (preserved for the record):** Two first-party
+crates had "bridge" in the name but meant different things:
 
 - `xous-signal-bridge` — the worker thread that runs
-  `presage::Manager` inside a `LocalExecutor`. It's a
+  `presage::Manager` inside a `LocalExecutor`. A
   *runtime/worker*, not a transport bridge.
 - `xous-net-bridge` — the sync TLS + WS pump that bridges
-  blocking I/O into the async executor. It's a *real* bridge in
-  the data-flow sense.
+  blocking I/O into the async executor. A *real* bridge in the
+  data-flow sense.
 
 A new contributor reading "bridge" expects sync↔async or
-process↔kernel adapters; the signal-bridge isn't either.
+process↔kernel adapters; the signal-bridge wasn't either.
 
-**Proposal.** Rename `xous-signal-bridge` to one of:
-
-- `xous-signal-worker` (matches the "worker thread" framing
-  used in comments)
-- `xous-signal-runtime` (matches "Manager-on-LocalExecutor"
-  framing in docs)
-
-I lean **`xous-signal-worker`** — short, matches how the rest
-of the code already talks about it (the spawned thread is named
-`signal-worker`; lib.rs has `run_signal_worker()`).
-
-**Effort.** ~1-2 hours: rename the crate dir + Cargo.toml entry
-+ update workspace members + update all `use
-xous_signal_bridge::*` imports + update README/ARCHITECTURE
-references.
-
-**Risk.** Low. Mechanical rename. Run unit tests after.
+**Resolution.** Renamed `xous-signal-bridge` → `xous-signal-worker`
+(the option that matches the existing thread name `signal-worker`
+and the existing fn `run_signal_worker()`).
 
 ---
 
@@ -323,7 +315,7 @@ Specifically: how does a `Cmd::SendMessage` sent by the UI
 actually reach a TLS write on the wire? It crosses ~5 layers:
 
 1. UI emits `Cmd::SendMessage` on `cmd_tx` (async-channel)
-2. `xous-signal-bridge::run_signal_worker` matches it
+2. `xous-signal-worker::run_signal_worker` matches it
 3. Forwards via internal channel to `manager_task`
 4. `manager_task` calls `presage::Manager::send_message`
 5. presage calls libsignal-service-rs which calls

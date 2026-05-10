@@ -84,7 +84,7 @@ precursor = [
 # round-trips. The presage-store-pddb dep is direct (not just
 # transitive through the bridge) because the binary owns the store
 # and hands a clone to the worker.
-xous-signal-bridge = { path = "../xous-signal-bridge" }
+xous-signal-worker = { path = "../xous-signal-worker" }
 presage-store-pddb = { path = "../presage-store-pddb" }
 async-channel = { workspace = true }
 
@@ -145,7 +145,7 @@ locales = { path = "../../../repos/xous-core/locales" }
 
 # uuid is already in the dep graph transitively (via libsignal); add it
 # as a direct dep so the dialogue.rs data model can use the same Uuid
-# type as xous-signal-bridge without going through a re-export.
+# type as xous-signal-worker without going through a re-export.
 uuid = { version = "1", default-features = false, features = ["std"] }
 
 [target.'cfg(not(target_os = "xous"))'.dependencies]

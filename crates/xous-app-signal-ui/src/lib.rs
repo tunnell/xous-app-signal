@@ -36,7 +36,7 @@ use std::thread;
 use std::time::Duration;
 
 use async_channel::{Receiver, Sender};
-use xous_signal_bridge::{Cmd, Event};
+use xous_signal_worker::{Cmd, Event};
 
 /// Driver. Owns the screen stack and routes input/events.
 #[derive(Debug)]

@@ -22,21 +22,21 @@ crates for three concrete reasons:
    storage traits; `presage-store-pddb` implements them against
    PDDB. Keeping it in its own crate makes the trait surface
    explicit and means the Signal-protocol-bearing code
-   (`xous-signal-bridge`) doesn't reach into PDDB internals.
-3. **Bridge-vs-app separation.** The `xous-signal-bridge` crate
+   (`xous-signal-worker`) doesn't reach into PDDB internals.
+3. **Worker-vs-app separation.** The `xous-signal-worker` crate
    owns the worker thread + LocalExecutor that runs presage; the
    `xous-app-signal` binary owns the GAM-rendered UI and talks
-   to the bridge over async channels. This split is what lets
-   the same UI code run in both hosted Xous emulation and on
-   rv32 hardware unchanged.
+   to the worker over async channels (`Cmd`/`Event`). This
+   split is what lets the same UI code run in both hosted Xous
+   emulation and on rv32 hardware unchanged.
 
 ## Crates in this folder
 
 | Crate | LoC* | Purpose |
 |---|---|---|
-| [`xous-app-signal`](xous-app-signal/) | ~2.4k | Binary entry point (binary name: `xas`). Spawns the bridge worker, renders UI via GAM, dispatches keys → `Cmd`s and `Event`s → screen updates. |
+| [`xous-app-signal`](xous-app-signal/) | ~2.4k | Binary entry point (binary name: `xas`). Spawns the signal worker, renders UI via GAM, dispatches keys → `Cmd`s and `Event`s → screen updates. |
 | [`xous-app-signal-ui`](xous-app-signal-ui/) | ~2.0k | Stdin-driven UI fallback used in `main.rs` when `gam_app::run()` can't reach a Xous server (e.g., bare `cargo run` standalone for unit testing). The Xous-rendered UI in `xous-app-signal/src/gam_app.rs` is the primary path. |
-| [`xous-signal-bridge`](xous-signal-bridge/) | ~1.3k | Glue between `presage::Manager` (running on a worker thread inside a `LocalExecutor`) and the rest of the app. Defines the `Cmd` / `Event` enums that flow over async channels. Where `catch_unwind` lives so panics in libsignal don't kill the worker. |
+| [`xous-signal-worker`](xous-signal-worker/) | ~1.3k | Owns the worker thread that runs `presage::Manager` on a `LocalExecutor`. Defines the `Cmd` / `Event` enums that flow over async channels between worker and UI. Where `catch_unwind` lives so panics in libsignal don't kill the worker. |
 | [`presage-store-pddb`](presage-store-pddb/) | ~3.0k | Implements presage's `Store` + `IdentityKeyStore` + (a dozen) other storage traits over PDDB. Has a hosted-mode `backend_mock` for unit tests and a `backend_pddb` for real use. The biggest crate by line count, mostly because the trait surface is wide. |
 | [`xous-net-bridge`](xous-net-bridge/) | ~0.6k | Sync TLS + WebSocket transport, bridged to async via channels (`ws_pump`). This is what libsignal-service-rs's HTTP/WS code calls into. The keepalive race documented in the upstream PR draft #2 lives in `ws_pump.rs`. |
 | [`xous-pddb-ipc`](xous-pddb-ipc/) | ~0.8k | Hand-rolled PDDB IPC client (rv32-xous only). Replicates just the wire protocol `presage-store-pddb`'s `KvBackend` needs, instead of pulling in the full `services/pddb` crate (which would drag in 10+ other services as path deps and rebuild xous-core on every iteration). |
@@ -50,7 +50,7 @@ crates for three concrete reasons:
 runtime architecture (worker thread, async channel bridge,
 GAM UI loop). The crates here map to its sections roughly as:
 
-- **Section "Worker + bridge"** → `xous-signal-bridge`
+- **Section "Worker + bridge"** → `xous-signal-worker`
 - **Section "Storage"** → `presage-store-pddb` + `xous-pddb-ipc`
 - **Section "Transport (ws_pump)"** → `xous-net-bridge`
 - **Section "UI"** → `xous-app-signal/src/gam_app.rs`
