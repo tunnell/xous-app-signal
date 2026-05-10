@@ -61,11 +61,17 @@ wrong — please open an issue.
 ### Required for hosted path only
 
 - **An X11 display** — `xset q` should return without error.
-  Over SSH, use `ssh -X` or `ssh -Y`.
-- **A real Signal account** to link from.
+  Over SSH, use `ssh -X` or `ssh -Y`. On a headless box, install
+  `xvfb` and run hosted commands under `xvfb-run` (the
+  smoke-test in §2.5 documents the exact wrapper).
+- **A real Signal account** to link from (only needed for the
+  manual flow in §2.4 — the headless smoke-test in §2.5 stops
+  at QR generation and does not need a phone).
 - **`signal-cli`** installed on the same machine, used as the
   test peer for sending/receiving messages.
   ([install instructions](https://github.com/AsamK/signal-cli#installation))
+- For the §2.5 headless smoke-test only: `xdotool` and `xvfb`.
+  On Debian/Ubuntu: `apt install xdotool xvfb`.
 
 ---
 
@@ -92,30 +98,37 @@ git clone https://github.com/tunnell/xous-app-signal.git
 # patches section.
 git clone --depth 1 -b xas https://github.com/tunnell/xous-core.git
 
-# xous-core sub-crates expect a sibling 'repos/xous-core'
-# checkout. We provide that as a symlink so we don't duplicate
-# 4 GB of source.
-mkdir -p xous-app-signal/repos
-ln -s ../../xous-core xous-app-signal/repos/xous-core
+# xous-app-signal's workspace Cargo.toml uses paths like
+# `../repos/xous-core/...`, i.e. relative to xous-app-signal's
+# *parent*. So the symlink lives at the parent level — not inside
+# xous-app-signal/. (Putting it inside xous-app-signal/repos/ as
+# earlier revisions of this doc said is a no-op: cargo never
+# looks there.)
+mkdir -p repos
+ln -s ../xous-core repos/xous-core
 ```
 
 Verify the layout:
 
 ```
 ~/code/xas/
+├── repos/
+│   └── xous-core -> ../xous-core      # path used by Cargo manifests
 ├── xous-app-signal/
 │   ├── Cargo.toml
 │   ├── crates/
-│   ├── vendor/                    # vendored presage + libsignal-service-rs
-│   └── repos/xous-core -> ../../xous-core
+│   └── vendor/                        # vendored presage + libsignal-service-rs
 └── xous-core/
     ├── kernel/
     ├── services/
     └── xtask/
 ```
 
-`xous-app-signal/repos/xous-core` must point at the same checkout
-you cloned as `~/code/xas/xous-core`.
+`repos/xous-core` must point at the same checkout you cloned as
+`~/code/xas/xous-core`. Verify with `ls repos/xous-core/services/trng/Cargo.toml`
+— that file must exist, otherwise the very first crate cargo tries
+to load (`crates/xous-modals-ipc`) will fail with `failed to read
+'.../repos/xous-core/services/trng/Cargo.toml'`.
 
 ---
 
@@ -169,8 +182,9 @@ cd ~/code/xas/xous-core
 cargo xtask install-toolkit
 ```
 
-When prompted, answer **Y** to install. The first run takes a few
-minutes (downloads + unpacks std + companion crates).
+This runs non-interactively (no prompt). The first run takes a few
+minutes (downloads + unpacks std + companion crates). Pass `--force`
+to overwrite an existing sysroot, e.g. after a Rust toolchain bump.
 
 To verify success:
 
@@ -231,7 +245,47 @@ Three things conspire to make this awkward:
 
 ## 2. Hosted-mode path (Linux x86_64, no hardware)
 
-### 2.1 Build
+### 2.1 Bootstrap `services/gam/src/apps.rs` (one-time, both paths)
+
+`xous-core/services/gam/src/apps.rs` is **auto-generated and
+gitignored**. It's normally written out by xous-core's xtask
+(`generate_app_menus()` in `xtask/src/app_manifest.rs`) as a side
+effect of `cargo xtask app-image-xip` / `cargo xtask run`. A fresh
+checkout has no `apps.rs`, so a standalone `cargo build` against
+`gam` fails with:
+
+```
+error[E0583]: file not found for module `apps`
+  --> .../repos/xous-core/services/gam/src/lib.rs:11:1
+```
+
+xas references `gam::APP_NAME_XAS`, so the generated stub has to
+include `xas` in its apps list (`cargo xtask dummy-template`
+generates an empty stub that compiles `gam` but then fails the xas
+link with `error[E0425]: cannot find value APP_NAME_XAS`).
+
+Easiest workaround until xtask grows a proper "manifest-for &lt;app&gt;"
+verb: write the file by hand, once. Run from `~/code/xas/`:
+
+```sh
+cat > xous-core/services/gam/src/apps.rs <<'EOF'
+#![cfg_attr(rustfmt, rustfmt_skip)]
+// Hand-written stand-in for xtask-generated apps.rs.
+// Will be overwritten by `cargo xtask app-image-xip` (hardware path).
+pub const APP_NAME_XAS: &'static str = "Signal";
+
+pub const EXPECTED_APP_CONTEXTS: &[&'static str] = &[
+    APP_NAME_XAS,
+];
+EOF
+```
+
+This file is overwritten by `cargo xtask app-image-xip` during
+the hardware build (with both `xas` and `vault` entries) — that's
+fine; the hand-written version is only needed for the standalone
+hosted `cargo build` in 2.2.
+
+### 2.2 Build
 
 ```sh
 cd ~/code/xas/xous-app-signal
@@ -242,7 +296,7 @@ First build downloads ~500 MB of crates and takes 5–15 minutes
 on a recent laptop. The output binary is at
 `target/release/xas`.
 
-### 2.2 Run hosted Xous with xas bundled
+### 2.3 Run hosted Xous with xas bundled
 
 From the **xous-core** directory:
 
@@ -255,7 +309,7 @@ This boots a Linux process that emulates the full Xous kernel
 plus all required services, with xas bundled as the application.
 A small minifb window labelled "Precursor" appears.
 
-### 2.3 First-run flow inside the hosted window
+### 2.4 First-run flow inside the hosted window
 
 1. **Unlock PDDB**: enter any password the first time (it
    bootstraps a fresh encrypted store).
@@ -274,21 +328,42 @@ real Signal servers, so any Signal Protocol bug you hit on
 hardware should also reproduce here (with much less iteration
 cost).
 
-### 2.4 Headless link smoke-test
+### 2.5 Headless link smoke-test
 
-xas ships a script that boots hosted Xous, drives the link flow,
-and gates on "Provisioning URL appeared" — useful as a CI
-sanity-check.
+xas ships a script that boots hosted Xous, drives the link flow
+via XSendEvent, and gates on the link URL reaching the UI —
+useful as a CI sanity-check. PASS criterion is two log lines:
+`worker/link: URL received from libsignal: sgnl://linkdevice?...`
+and `xas/gam_app: link URL = sgnl://linkdevice?...`.
+
+The script still needs an X server (it greps for the "Precursor"
+window with `xdotool` and injects keystrokes via `libX11.so.6`),
+but a real display is not required — `xvfb-run` works:
 
 ```sh
 cd ~/code/xas/xous-app-signal
-INSPECT_HOLD=900 bash tests/hosted/test_link_qr.sh
+export XOUS_CORE_DIR=$(pwd)/../xous-core
+export XAS_BIN_PATH=$(pwd)/target/release/xas
+export LINK_TIMEOUT=180 BOOT_TIMEOUT=300
+
+# headless box (no $DISPLAY): wrap in Xvfb
+xvfb-run -a -s "-screen 0 1024x768x24" bash tests/hosted/test_link_qr.sh
+
+# real X11 box: just run it
+bash tests/hosted/test_link_qr.sh
 ```
 
-`INSPECT_HOLD` keeps the kernel alive for that many seconds
-after the QR appears, so you can scan from your phone.
+End-to-end (kernel boot + drive + link URL emission) takes ~2 min
+on a fresh build. Exit codes: `0` PASS, `2` Xous never finished
+booting (raise `BOOT_TIMEOUT`), `3` Precursor X11 window not
+found, `4` link URL never emitted (raise `LINK_TIMEOUT` or set
+`KEEP_LOGS=1` and inspect `/tmp/xas-hosted-test.*`).
 
-### 2.5 Hosted-mode unit tests
+`INSPECT_HOLD=NN` (seconds) keeps the kernel alive after the
+test passes, so you can scan the QR from a phone for an
+end-to-end manual link.
+
+### 2.6 Hosted-mode unit tests
 
 ```sh
 cd ~/code/xas/xous-app-signal
@@ -301,6 +376,11 @@ contact-name resolution. Should all pass green.
 ---
 
 ## 3. Hardware path (Precursor PVT2)
+
+If you skipped section 2 entirely, you still need the
+`apps.rs` bootstrap from §2.1 — the standalone `cargo build`
+in 3.1 has the same gam dependency and fails the same way
+without it.
 
 ### 3.1 Build the rv32 xas binary
 
@@ -330,7 +410,7 @@ Output: `target/riscv32imac-unknown-xous-elf/release/xas`
 ```sh
 cd ~/code/xas/xous-core
 cargo xtask app-image-xip \
-    xas:../xous-app-signal/dist/xas-rv32/xas \
+    xas:../xous-app-signal/target/riscv32imac-unknown-xous-elf/release/xas \
     vault \
     --kernel-feature big-heap \
     --gdb-stub \
@@ -340,9 +420,12 @@ cargo xtask app-image-xip \
 
 Notes on the flags:
 
-- `xas:..` is the path to the rv32 binary built in 3.1. `vault`
-  is bundled alongside as a co-resident app (xas's launcher
-  navigation lives inside vault's launcher conventions).
+- `xas:..` is the path to the rv32 binary built in 3.1. (Earlier
+  doc revisions said `dist/xas-rv32/xas`; that path doesn't
+  exist — cargo writes directly to `target/<triple>/release/xas`,
+  and `tests/precursor/build-and-bundle.sh` reads it from there.)
+  `vault` is bundled alongside as a co-resident app (xas's
+  launcher navigation lives inside vault's launcher conventions).
 - `--kernel-feature big-heap` raises the per-process heap cap
   from 512 KiB → 12 MiB. Required because the libsignal +
   presage + rustls + smol working set exceeds the default cap
@@ -443,7 +526,8 @@ When the Precursor boots into Xous:
 |---|---|---|
 | `lsusb \| grep 1209` shows nothing | Precursor not in loader mode | Hold left-side button while plugging in USB; release after 2 seconds |
 | `lsusb \| grep 1209` shows `1209:3613` not `1209:5bf0` | Precursor in running mode, not loader | Hold left-side button + paperclip-reset |
-| `cargo xtask app-image-xip` fails with "no library targets" | `repos/xous-core` symlink missing | See section 1 — `ln -s ../../xous-core xous-app-signal/repos/xous-core` |
+| `failed to read .../repos/xous-core/services/trng/Cargo.toml` (cargo build, very early) | `repos/xous-core` symlink missing or in the wrong place | See section 1 — symlink lives at `<workspace-parent>/repos/xous-core`, *not* inside `xous-app-signal/`. Run `ln -s ../xous-core repos/xous-core` from the workspace parent. |
+| `error[E0583]: file not found for module 'apps'` in `services/gam/src/lib.rs` | `gam/src/apps.rs` not bootstrapped | See section 2.1 — write `apps.rs` by hand (with `APP_NAME_XAS`) before the standalone hosted build. |
 | `usb_update.py` permission denied (Linux host) | udev rule missing | Add `tools/49-precursor.rules` to `/etc/udev/rules.d/` and `udevadm control --reload`, or run with sudo (not recommended) |
 | Hosted xas shows "OOM during link" | Default heap cap too low | Run with `RUST_LOG=info` to see allocator messages; rebuild with `--features pddb-real,hosted` (the dist build is otherwise too lean) |
 | Hardware link succeeds but no messages flow | Wi-Fi connected to 5 GHz, or DNS broken | Re-run the wlan recipe; verify `net ping chat.signal.org` works before opening xas |
