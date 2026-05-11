@@ -420,6 +420,20 @@ A small minifb window labelled "Precursor" appears.
 
 ### 2.4 First-run flow inside the hosted window
 
+**Required env var for human-driven hosted runs**: set
+`XAS_BYPASS_PREFLIGHT=1` before launching xtask. Hosted has no
+real WF200 radio; `com.wlan_status()` always returns
+`LinkState::Unknown`; xas's no-internet preflight then routes
+`Link device` → `Screen::NoInternet` and the link flow never
+proceeds. The env var is the documented escape hatch
+(`gam_app.rs::check_internet`); production code on hardware still
+runs the preflight as designed. The §2.5 smoke-test script sets
+this env var itself; for human walkthroughs you have to set it:
+
+```sh
+XAS_BYPASS_PREFLIGHT=1 cargo xtask run xas:.../xas
+```
+
 1. **Unlock PDDB**: enter any password the first time (it
    bootstraps a fresh encrypted store).
 2. **Open xas**: from the launcher, navigate to Apps → xas.
