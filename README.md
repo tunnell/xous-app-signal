@@ -52,7 +52,7 @@ or a roadmap item (planned but not yet built).
 | Feature | Status | Note |
 |---|---|---|
 | Link as a secondary device (QR scan) | ✅ | Boot, PDDB unlock, QR scan, decrypt ProvisionEnvelope, register, persist |
-| Receive 1:1 text messages | ✅ | Near-instant once linked |
+| Receive 1:1 text messages | ✅ | Near-instant once linked. Verified on hardware (2026-05-11) receiving DMs from multiple distinct senders. |
 | Send 1:1 text messages | ✅ | Latency 1–4 min — Signal edge-server WS rotation race; transport refactor on roadmap |
 | Conversation list (Home) | ✅ | Per-thread last-message + relative timestamp + unread indicator |
 | Per-thread message view | ✅ | Optimistic-render compose; auto-mark-read on thread open |
