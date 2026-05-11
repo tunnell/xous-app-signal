@@ -5,7 +5,7 @@
 #
 # Env vars (defaults shown):
 #   XOUS_CORE_DIR=../xous-core
-#   XOUS_TARGET=precursor-c809403e
+#   XOUS_TARGET=riscv32imac-unknown-xous-elf
 #   BUILD_LOG=/tmp/xous-build-$(date +%s).log
 #
 # Safe to re-run; cargo will skip unchanged crates.
@@ -13,7 +13,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 XOUS_CORE_DIR="${XOUS_CORE_DIR:-$REPO_ROOT/../xous-core}"
-XOUS_TARGET="${XOUS_TARGET:-precursor-c809403e}"
+XOUS_TARGET="${XOUS_TARGET:-riscv32imac-unknown-xous-elf}"
 BUILD_LOG="${BUILD_LOG:-/tmp/xous-build-$(date +%s).log}"
 # SoC version pins. Override per device via env: see `lsusb -v | grep iSerial`
 # while Precursor is in loader mode. Defaults match the latest stable PVT2 SoC
