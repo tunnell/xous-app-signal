@@ -577,6 +577,7 @@ cd ~/code/xas/xous-core
 cargo xtask app-image-xip \
     xas:../xous-app-signal/target/riscv32imac-unknown-xous-elf/release/xas \
     vault \
+    transientdisk \
     --kernel-feature big-heap \
     --gdb-stub \
     --git-describe v0.9.8-791-gc707f9d8 \
@@ -589,7 +590,8 @@ Notes on the flags:
   doc revisions said `dist/xas-rv32/xas`; that path doesn't
   exist — cargo writes directly to `target/<triple>/release/xas`,
   and `tests/precursor/build-and-bundle.sh` reads it from there.)
-  `vault` is bundled alongside as a co-resident app (xas's
+  `vault` and `transientdisk` are bundled as co-resident apps
+  (xas's
   launcher navigation lives inside vault's launcher conventions).
 - `--kernel-feature big-heap` raises the per-process heap cap
   from 512 KiB → 12 MiB. Required because the libsignal +
