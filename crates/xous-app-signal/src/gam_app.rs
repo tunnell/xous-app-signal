@@ -319,7 +319,7 @@ impl App {
                  minutes after you scan\n\
                  the QR. Don't\n\
                  power-cycle.\n\n\
-                 Press Esc to cancel.\n\n\
+                 Press Backspace to cancel.\n\n\
                  (Please wait.)"
             )
             .map_err(|e| format!("write Linking: {}", e))?,
