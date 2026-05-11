@@ -39,6 +39,12 @@ XAS_BIN_PATH="${XAS_BIN_PATH:-$HOME/precursor-signal/xous-app-signal/target/rele
 export DISPLAY="${DISPLAY:-localhost:10.0}"
 LINK_TIMEOUT="${LINK_TIMEOUT:-90}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-180}"
+# Hosted has no real WF200 radio; wlan_status() returns Unknown
+# and xas's no-internet preflight would otherwise route Link to
+# Screen::NoInternet and never emit the link URL. Production code
+# still runs the preflight; this env var is the documented escape
+# hatch for hosted/CI runs.
+export XAS_BYPASS_PREFLIGHT=1
 
 LOG_DIR="$(mktemp -d -t xas-hosted-test.XXXXXX)"
 KERNEL_LOG="$LOG_DIR/xous-kernel.log"

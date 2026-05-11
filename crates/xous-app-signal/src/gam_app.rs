@@ -1689,6 +1689,13 @@ fn next_attempt_device_name() -> String {
 /// IPv4 lease and the link is up; `Err(reason)` is a short
 /// user-facing string explaining what's missing.
 fn check_internet(xns: &xous_names::XousNames) -> Result<(), String> {
+    // Hosted-mode escape hatch: tests/hosted/test_link_qr.sh sets
+    // XAS_BYPASS_PREFLIGHT=1 because hosted has no real WF200 radio
+    // and wlan_status() always returns Unknown. Without this, the
+    // smoke test can never reach the link-URL emit.
+    if std::env::var("XAS_BYPASS_PREFLIGHT").is_ok() {
+        return Ok(());
+    }
     // com::Com::new only succeeds when the COM service is up — i.e.,
     // we're inside a Xous environment with the EC ready. Outside Xous
     // (bare cargo run on Linux) this returns Err and we treat the
