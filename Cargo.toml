@@ -16,11 +16,11 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "AGPL-3.0-only OR Apache-2.0"
-authors = []
+authors = ["tunnell"]
 publish = false
 
 # Smol-rs async primitives, pinned to the HEAD revs verified at
