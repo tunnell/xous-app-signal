@@ -93,14 +93,18 @@ you intend to use**:
    build.** This workspace's `rust-toolchain.toml` declares
    `targets = ["riscv32imac-unknown-xous-elf"]`. On rustup
    ≥ 1.28 the previously-tolerated "warn: skipping unavailable
-   component rust-std for target …" is now a **hard error**:
-   `error: component 'rust-std' for target
+   component rust-std for target …" **may** be a hard error
+   (`error: component 'rust-std' for target
    'riscv32imac-unknown-xous-elf' is unavailable for download
-   for channel 'stable'`. The error fires on first `cargo`
-   invocation and blocks both the hosted and hardware paths.
-   Fix once by installing the betrusted-io Xous std bundle via
-   xous-core's xtask **before** any other cargo command in this
-   workspace:
+   for channel 'stable'`), depending on rustup state and prior
+   toolchain installs. When it does hard-error, it fires on
+   first `cargo` invocation and blocks both the hosted and
+   hardware paths. Fix once by installing the betrusted-io
+   Xous std bundle via xous-core's xtask **before** any other
+   cargo command in this workspace.
+
+   This step requires §1's `xous-core` clone to exist — so
+   complete §1 first, then come back here:
 
    ```sh
    cd ~/code/xas/xous-core
@@ -153,6 +157,12 @@ git clone https://github.com/tunnell/xous-app-signal.git
 # xous-core (kernel + services). The xous-app-signal branch
 # carries the net-service encoding fix and DNS CNAME fix described
 # in the README's Upstream patches section.
+#
+# Note: --depth 1 keeps the clone small (~250 MB vs ~2 GB full).
+# If you want to verify the branch's commit history matches the
+# table in §1's 'What each clone contributes' (e.g. that
+# `cfcc12eee` is in the history), drop --depth 1 here OR run
+# `git fetch --unshallow` after cloning.
 git clone --depth 1 -b xous-app-signal https://github.com/tunnell/xous-core.git
 
 # xous-app-signal's workspace Cargo.toml uses paths like
@@ -285,7 +295,7 @@ to overwrite an existing sysroot, e.g. after a Rust toolchain bump.
 To verify success:
 
 ```sh
-ls ~/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/riscv32imac-unknown-xous-elf/lib/ \
+ls "$(rustc --print sysroot)/lib/rustlib/riscv32imac-unknown-xous-elf/lib/" \
     | grep '^libstd-'
 ```
 
@@ -365,11 +375,16 @@ cat > xous-core/services/gam/src/apps.rs <<'EOF'
 #![cfg_attr(rustfmt, rustfmt_skip)]
 // Hand-written stand-in until xtask regenerates this file from
 // xous-core/apps/manifest.json on first `cargo xtask run` /
-// `app-image-xip` invocation.
+// `app-image-xip` invocation. Mirrors xtask's eventual output
+// for the xas entry (both the app name and its submenu) so
+// readers don't hit a missing-symbol error on launcher-submenu
+// code paths before xtask has run.
 pub const APP_NAME_XAS: &'static str = "Signal";
+pub const APP_MENU_0_XAS: &'static str = "Signal Submenu 0";
 
 pub const EXPECTED_APP_CONTEXTS: &[&'static str] = &[
     APP_NAME_XAS,
+    APP_MENU_0_XAS,
 ];
 EOF
 ```
@@ -462,10 +477,18 @@ bash tests/hosted/test_link_qr.sh
 ```
 
 End-to-end (kernel boot + drive + link URL emission) takes ~2 min
-on a fresh build. Exit codes: `0` PASS, `2` Xous never finished
-booting (raise `BOOT_TIMEOUT`), `3` Precursor X11 window not
-found, `4` link URL never emitted (raise `LINK_TIMEOUT` or set
-`KEEP_LOGS=1` and inspect `/tmp/xas-hosted-test.*`).
+on a fresh build (boot itself is typically well under 90 s — the
+defaults `BOOT_TIMEOUT=300` and `LINK_TIMEOUT=180` are deliberately
+generous, so a successful run usually finishes in roughly half the
+cap). Exit codes: `0` PASS, `2` Xous never finished booting (raise
+`BOOT_TIMEOUT`), `3` Precursor X11 window not found, `4` link URL
+never emitted (raise `LINK_TIMEOUT` or set `KEEP_LOGS=1` and
+inspect `/tmp/xas-hosted-test.*`).
+
+`KEEP_LOGS=1` also works on PASS — the preserved log directory is
+useful for verifying the boot/drive/link timeline (`xous.log` has
+the boot trace; `drive.log` has the keystroke driver's path) even
+when everything went right.
 
 `INSPECT_HOLD=NN` (seconds) keeps the kernel alive after the
 test passes, so you can scan the QR from a phone for an
@@ -697,11 +720,13 @@ grep -F 'Mirror code at byte 1' services/net/src/std_glue.rs   # expect: 1 hit
 grep -F '"xas":' apps/manifest.json   # expect: 1 hit
 ```
 
-A successful hardware build produces an image of size
-~12.89 MB (12,886,056 bytes give or take a few KB across
-toolchain bumps). md5sum is non-deterministic (timestamp
-embedded in the build) but the size should be within ~50 KB of
-that.
+**(Hardware path only.)** A successful hardware build produces an
+image of size ~12.89 MB (12,886,056 bytes give or take a few KB
+across toolchain bumps; verified at 12,931,112 bytes on a 2026-05
+fresh build). md5sum is non-deterministic (timestamp embedded in
+the build) but the size should be within ~50 KB of the baseline.
+Hosted-mode builds don't produce a `xous.img` — they produce a
+`target/release/xas` binary at ~58 MB.
 
 ---
 
