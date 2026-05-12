@@ -22,16 +22,16 @@
 use std::sync::{Arc, Mutex};
 
 use libsignal_service::transport::{BasicAuth, HeaderMap, HttpError, WebSocketChannels, WsFrame};
-use rustls::RootCertStore;
+use rustls::ClientConfig;
 use tungstenite::client::IntoClientRequest;
 use tungstenite::protocol::{CloseFrame, Message, WebSocket};
 
-use crate::tls::{RustlsStream, tls_connect};
+use crate::tls::{RustlsStream, tls_connect_with_config};
 
 const FRAME_CHANNEL_CAPACITY: usize = 16;
 
 pub(crate) async fn connect_websocket(
-    roots: RootCertStore,
+    config: Arc<ClientConfig>,
     url: url::Url,
     headers: HeaderMap,
     auth: Option<BasicAuth>,
@@ -46,7 +46,7 @@ pub(crate) async fn connect_websocket(
     std::thread::Builder::new()
         .name("xous-net-bridge-ws-setup".into())
         .spawn(move || {
-            let ws = match handshake(roots, url, headers, auth) {
+            let ws = match handshake(config, url, headers, auth) {
                 Ok(ws) => ws,
                 Err(e) => {
                     let _ = handshake_done_tx.send_blocking(Err(e));
@@ -96,7 +96,7 @@ pub(crate) async fn connect_websocket(
 }
 
 fn handshake(
-    roots: RootCertStore,
+    config: Arc<ClientConfig>,
     url: url::Url,
     headers: HeaderMap,
     auth: Option<BasicAuth>,
@@ -107,7 +107,7 @@ fn handshake(
         .to_string();
     let port = url.port_or_known_default().unwrap_or(443);
 
-    let stream = tls_connect(&host, port, roots, &[b"http/1.1"])
+    let stream = tls_connect_with_config(&host, port, config)
         .map_err(|e| HttpError::Network(format!("tls connect: {e}")))?;
 
     // Build a tungstenite ClientRequest; merge in headers/auth.

@@ -711,6 +711,23 @@ async fn manager_task(
     let mut pending_profile_fetches: Vec<(presage::libsignal_service::prelude::Uuid, [u8; 32])> = Vec::new();
     let mut fetched_or_failed: std::collections::HashSet<presage::libsignal_service::prelude::Uuid> =
         std::collections::HashSet::new();
+
+    // PLAN.md Stage -1 (refs xas#1): sends that exhaust the 6-attempt
+    // retry loop with a "websocket closing"-shaped error are deferred
+    // here instead of immediately surfacing as Event::SendError. The
+    // map is keyed by the message timestamp; the value is the deadline
+    // after which we give up and emit SendError. If a DELIVERY receipt
+    // arrives for that timestamp before the deadline, we remove the
+    // entry and emit Event::SendComplete instead — the recipient
+    // confirms the cipher actually landed despite the local error.
+    //
+    // Grace window of 30s is well above the worst-case observed
+    // pipeline (~4 min total but pipeline_ms per send ≪ that — the
+    // 4 min is dominated by the existing 62s retry-loop budget).
+    let mut pending_unconfirmed_sends: std::collections::HashMap<u64, std::time::Instant> =
+        std::collections::HashMap::new();
+    const PENDING_RECEIPT_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+
     // Cap on how many consecutive failures we tolerate before giving
     // up entirely. With backoff capped at 30s, this is roughly an
     // 8-minute window of constant retries before we surface a fatal
@@ -784,8 +801,14 @@ async fn manager_task(
             announced = true;
         }
 
-        // Pump items + send-cmds.
+        // Pump items + send-cmds + pending-send timeout sweep.
         let exit: InnerExit = loop {
+            // Stage -1 sweep: scan pending_unconfirmed_sends each
+            // iteration; emit SendError for any whose grace window
+            // expired. The 1s select! timeout below bounds how late
+            // these can fire.
+            sweep_expired_pending_sends(&mut pending_unconfirmed_sends, &event_tx).await;
+
             select! {
                 item = stream.next().fuse() => {
                     match item {
@@ -796,7 +819,13 @@ async fn manager_task(
                             // (when handle_send forces one) doesn't
                             // sleep at all.
                             consecutive_failures = 0;
-                            if !process_received(item, &store, &event_tx, &mut pending_profile_fetches).await {
+                            if !process_received(
+                                item,
+                                &store,
+                                &event_tx,
+                                &mut pending_profile_fetches,
+                                &mut pending_unconfirmed_sends,
+                            ).await {
                                 // event_tx closed — bail.
                                 return;
                             }
@@ -822,6 +851,10 @@ async fn manager_task(
                             break InnerExit::Shutdown;
                         }
                     }
+                }
+                _ = futures_timer::Delay::new(std::time::Duration::from_secs(1)).fuse() => {
+                    // Wake-up to re-run the pending-send sweep above.
+                    // No other state to touch here.
                 }
             }
         };
@@ -896,7 +929,14 @@ async fn manager_task(
         match exit {
             InnerExit::Send(send) => {
                 log::info!("worker: manager_task — invoking handle_send");
-                handle_send(&mut manager, send, &event_tx).await;
+                handle_send(
+                    &mut manager,
+                    send,
+                    &event_tx,
+                    &mut pending_unconfirmed_sends,
+                    PENDING_RECEIPT_GRACE,
+                )
+                .await;
                 log::info!("worker: manager_task — handle_send returned, re-opening stream");
                 // Keep consecutive_failures as is. If handle_send
                 // failed because the WS was already dying, the
@@ -933,6 +973,7 @@ async fn process_received(
     store: &PddbStore,
     event_tx: &Sender<Event>,
     pending_profile_fetches: &mut Vec<(presage::libsignal_service::prelude::Uuid, [u8; 32])>,
+    pending_unconfirmed_sends: &mut std::collections::HashMap<u64, std::time::Instant>,
 ) -> bool {
     use presage::libsignal_service::content::ContentBody;
     use presage::model::messages::Received;
@@ -959,6 +1000,33 @@ async fn process_received(
                     presage::libsignal_service::content::ContentBody::EditMessage(_) => "EditMessage",
                 }
             );
+            // PLAN.md Stage -1: peel off DELIVERY receipts here so
+            // they can confirm pending deferred sends. Other receipt
+            // types (READ, VIEWED) are not yet acted on; xas's UI
+            // doesn't surface read-state, so they fall through to the
+            // catch-all skip below.
+            if let ContentBody::ReceiptMessage(rm) = &content.body {
+                use presage::libsignal_service::proto::receipt_message::Type as RType;
+                let rtype = RType::try_from(rm.r#type.unwrap_or_default()).unwrap_or(RType::Delivery);
+                if rtype == RType::Delivery {
+                    for ts in &rm.timestamp {
+                        if pending_unconfirmed_sends.remove(ts).is_some() {
+                            log::info!(
+                                "worker/send: ts={} confirmed by DELIVERY receipt; emitting SendComplete",
+                                ts,
+                            );
+                            if event_tx
+                                .send(Event::SendComplete { timestamp: *ts })
+                                .await
+                                .is_err()
+                            {
+                                return false;
+                            }
+                        }
+                    }
+                }
+                return true;
+            }
             // Only surface text-bearing DataMessages for MVP.
             // Sync/receipt/typing messages have already been
             // absorbed by the store machinery presage runs
@@ -971,7 +1039,7 @@ async fn process_received(
                     .and_then(|s| s.message.as_ref())
                     .and_then(|dm| dm.body.clone())
                     .unwrap_or_default(),
-                _ => return true, // EditMessage / Receipt / Typing / Call — skip
+                _ => return true, // EditMessage / Typing / Call — skip
             };
             if body.is_empty() {
                 return true; // attachment- or reaction-only
@@ -1052,10 +1120,45 @@ async fn process_received(
 /// `Manager::send_message`. Always emits exactly one event:
 /// `SendComplete{timestamp}` on success, `SendError(reason)` on
 /// failure.
+/// PLAN.md Stage -1 helper: scan the deferred-send map for entries whose
+/// grace window expired without a delivery receipt; emit Event::SendError
+/// for each and remove from the map. Cheap (HashMap iteration); called
+/// every ~1s from manager_task's select! loop.
+async fn sweep_expired_pending_sends(
+    pending: &mut std::collections::HashMap<u64, std::time::Instant>,
+    event_tx: &Sender<Event>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let now = std::time::Instant::now();
+    let expired: Vec<u64> = pending
+        .iter()
+        .filter_map(|(ts, deadline)| if now >= *deadline { Some(*ts) } else { None })
+        .collect();
+    for ts in expired {
+        pending.remove(&ts);
+        log::info!(
+            "worker/send: pending ts={} grace expired with no delivery receipt; emitting SendError",
+            ts,
+        );
+        let _ = event_tx
+            .send(Event::SendError {
+                reason: "WebSocket closed during send and no delivery receipt arrived within \
+                         the grace window — recipient probably did not receive this message"
+                    .to_string(),
+                timestamp: Some(ts),
+            })
+            .await;
+    }
+}
+
 async fn handle_send(
     manager: &mut Manager<PddbStore, Registered>,
     send: InnerSend,
     event_tx: &Sender<Event>,
+    pending_unconfirmed_sends: &mut std::collections::HashMap<u64, std::time::Instant>,
+    pending_grace: std::time::Duration,
 ) {
     use futures::FutureExt;
     use presage::libsignal_service::content::ContentBody;
@@ -1190,11 +1293,21 @@ async fn handle_send(
         // inconsistent, but the alternative (manager_task dies, every
         // subsequent send returns "manager task died") is worse. The
         // surfaced panic message goes to the UI as a normal SendError.
+        let pipeline_start = std::time::Instant::now();
         let send_fut = std::panic::AssertUnwindSafe(
             manager.send_message(recipient.clone(), content_body.clone(), timestamp),
         );
         let outcome = send_fut.catch_unwind().await;
-        log::info!("worker/send: attempt {} returned", attempt);
+        let pipeline_ms = pipeline_start.elapsed().as_millis() as u64;
+        let result_kind = match &outcome {
+            Ok(Ok(())) => "ok",
+            Ok(Err(_)) => "err",
+            Err(_) => "panic",
+        };
+        log::info!(
+            "worker/send: attempt {} returned pipeline_ms={} result={}",
+            attempt, pipeline_ms, result_kind,
+        );
 
         match outcome {
             Ok(Ok(())) => {
@@ -1215,6 +1328,24 @@ async fn handle_send(
                     futures_timer::Delay::new(delay).await;
                     last_err = Some(msg);
                     continue;
+                }
+                // Stage -1 path: WS-closing-shaped errors after retry
+                // exhaustion go into the pending-receipt grace window.
+                // The cipher MAY have landed; we wait PENDING_RECEIPT_GRACE
+                // for a DELIVERY receipt to confirm before emitting
+                // SendError. Other error shapes (panic, identity
+                // mismatch, etc.) bypass the grace and surface
+                // immediately as before.
+                if retryable {
+                    let deadline = std::time::Instant::now() + pending_grace;
+                    pending_unconfirmed_sends.insert(timestamp, deadline);
+                    log::info!(
+                        "worker/send: ts={} retries exhausted with WsClosing-shaped error; \
+                         deferring SendError for {:?} pending delivery receipt",
+                        timestamp, pending_grace,
+                    );
+                    let _ = last_err.replace(msg);
+                    return;
                 }
                 let _ = event_tx
                     .send(Event::SendError {
@@ -1331,6 +1462,45 @@ mod tests {
         cmd_tx.send_blocking(Cmd::Shutdown).unwrap();
         let _ = event_rx.recv_blocking();
         handle.join().unwrap();
+    }
+
+    /// PLAN.md Stage -1 sweep helper: expired entries become
+    /// SendError; non-expired entries stay in the map. Verifies the
+    /// pure data-manipulation half of the deferred-send path; the
+    /// full DELIVERY-receipt round-trip needs an executor + mocked
+    /// manager and is not exercised here.
+    #[test]
+    fn sweep_expired_pending_sends_emits_send_error_for_expired_entries_only() {
+        use std::collections::HashMap;
+        use std::time::{Duration, Instant};
+
+        let (event_tx, event_rx) = async_channel::bounded::<Event>(8);
+        let mut pending: HashMap<u64, Instant> = HashMap::new();
+        let now = Instant::now();
+        pending.insert(100, now - Duration::from_secs(1)); // expired
+        pending.insert(200, now + Duration::from_secs(60)); // not yet
+        pending.insert(300, now - Duration::from_millis(1)); // expired
+
+        futures::executor::block_on(super::sweep_expired_pending_sends(
+            &mut pending,
+            &event_tx,
+        ));
+
+        // Two SendError events expected, for ts=100 and ts=300, in
+        // any order (HashMap iteration is unordered).
+        let mut got_ts: Vec<u64> = Vec::new();
+        while let Ok(e) = event_rx.try_recv() {
+            match e {
+                Event::SendError { timestamp: Some(ts), .. } => got_ts.push(ts),
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        got_ts.sort();
+        assert_eq!(got_ts, vec![100, 300]);
+        // ts=200 is still pending.
+        assert!(pending.contains_key(&200));
+        assert!(!pending.contains_key(&100));
+        assert!(!pending.contains_key(&300));
     }
 
     /// Dropping the cmd-channel sender (without sending Shutdown) is

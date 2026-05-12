@@ -19,22 +19,28 @@ use async_trait::async_trait;
 use libsignal_service::transport::{
     BasicAuth, HeaderMap, HttpClient, HttpError, HttpRequest, HttpResponse, WebSocketChannels,
 };
-use rustls::RootCertStore;
+use rustls::{ClientConfig, RootCertStore};
 
-use crate::tls::tls_connect;
+use crate::tls::{build_tls_config, tls_connect_with_config};
 
-/// Sync HTTP/1.1 client over our `tls_connect`. One-shot connection per
-/// request (`Connection: close`); no connection pool.
+/// Sync HTTP/1.1 client. One-shot connection per request (`Connection: close`);
+/// no connection pool — but the underlying `Arc<ClientConfig>` is shared
+/// across every HTTP and WebSocket connect, which keeps the rustls
+/// in-memory session-ticket cache alive across reconnects (TLS resumption).
 pub struct SyncHttpClient {
-    roots: Arc<RootCertStore>,
+    config: Arc<ClientConfig>,
     user_agent: String,
     timeout: std::time::Duration,
 }
 
 impl SyncHttpClient {
     pub fn new(roots: RootCertStore, user_agent: String) -> Self {
+        // Both `execute` (HTTP/1.1) and `connect_websocket` (which upgrades
+        // an HTTP/1.1 request) want ALPN "http/1.1", so a single shared
+        // config covers all transport in this client.
+        let config = build_tls_config(roots, &[b"http/1.1"]);
         Self {
-            roots: Arc::new(roots),
+            config,
             user_agent,
             timeout: std::time::Duration::from_secs(65),
         }
@@ -45,7 +51,7 @@ impl SyncHttpClient {
 impl HttpClient for SyncHttpClient {
     async fn execute(&self, req: HttpRequest) -> Result<HttpResponse, HttpError> {
         let (tx, rx) = async_channel::bounded(1);
-        let roots = (*self.roots).clone();
+        let config = Arc::clone(&self.config);
         let user_agent = self.user_agent.clone();
         let timeout = req.timeout.unwrap_or(self.timeout);
 
@@ -55,7 +61,7 @@ impl HttpClient for SyncHttpClient {
         std::thread::Builder::new()
             .name("xous-net-bridge-http".into())
             .spawn(move || {
-                let result = sync_execute(req, roots, &user_agent, timeout);
+                let result = sync_execute(req, config, &user_agent, timeout);
                 let _ = tx.send_blocking(result);
             })
             .map_err(|e| HttpError::Network(format!("thread spawn: {e}")))?;
@@ -71,14 +77,14 @@ impl HttpClient for SyncHttpClient {
         headers: HeaderMap,
         auth: Option<BasicAuth>,
     ) -> Result<WebSocketChannels, HttpError> {
-        crate::ws_pump::connect_websocket((*self.roots).clone(), url, headers, auth).await
+        crate::ws_pump::connect_websocket(Arc::clone(&self.config), url, headers, auth).await
     }
 }
 
 /// Run a single HTTP/1.1 request/response cycle synchronously.
 fn sync_execute(
     req: HttpRequest,
-    roots: RootCertStore,
+    config: Arc<ClientConfig>,
     user_agent: &str,
     _timeout: std::time::Duration,
 ) -> Result<HttpResponse, HttpError> {
@@ -93,7 +99,7 @@ fn sync_execute(
         None => req.url.path().to_string(),
     };
 
-    let mut stream = tls_connect(&host, port, roots, &[b"http/1.1"])
+    let mut stream = tls_connect_with_config(&host, port, config)
         .map_err(|e| HttpError::Network(format!("tls connect: {e}")))?;
     // Set a read timeout on the underlying TcpStream so a hung server
     // doesn't block the worker thread forever. rustls::StreamOwned exposes

@@ -12,6 +12,7 @@ pub mod ws_pump;
 
 pub use http::SyncHttpClient;
 pub use tls::{
-    RustlsStream, signal_production_roots, signal_staging_roots, tls_connect, webpki_roots,
+    RustlsStream, build_tls_config, signal_production_roots, signal_staging_roots, tls_connect,
+    tls_connect_with_config, webpki_roots,
 };
 pub use ws::ws_connect;
