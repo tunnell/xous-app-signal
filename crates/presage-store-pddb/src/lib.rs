@@ -29,6 +29,7 @@ use presage::model::identity::OnNewIdentity;
 
 mod backend_mock;
 mod backend_pddb;
+mod buffering_backend;
 mod content;
 mod error;
 mod protocol;
@@ -40,6 +41,7 @@ mod store;
 pub use backend_mock::MockBackend;
 #[cfg(feature = "pddb-backend")]
 pub use backend_pddb::PddbBackend;
+pub use buffering_backend::{BatchGuard, BufferingBackend};
 pub use error::Error;
 pub use protocol::{IdentityType, PddbProtocolStore};
 #[cfg(feature = "pddb-backend")]
@@ -79,6 +81,14 @@ pub trait KvBackend: Send + Sync + fmt::Debug {
 pub struct PddbStore {
     pub(crate) backend: Arc<dyn KvBackend>,
 
+    /// When the store was constructed with buffering enabled (via
+    /// `new_buffering` / `with_pddb_backend`), this is a direct
+    /// handle to the wrapper. Callers go through `begin_send_batch`
+    /// to start a batch scope. `None` for plain backends (most
+    /// tests, hosted mode); writes pass through unchanged in that
+    /// case.
+    pub(crate) buffering: Option<Arc<BufferingBackend>>,
+
     /// In-memory dirty-set cache. `store_session` writes here only;
     /// `flush_sessions` persists to the backend. Wrapped in `Mutex` so
     /// it stays `Send + Sync` even though the underlying `SessionRecord`
@@ -112,6 +122,35 @@ impl PddbStore {
     pub fn with_options(backend: Arc<dyn KvBackend>, trust_new_identities: OnNewIdentity) -> Self {
         Self {
             backend,
+            buffering: None,
+            session_cache: Arc::new(Mutex::new(HashMap::new())),
+            session_dirty: Arc::new(Mutex::new(HashSet::new())),
+            trust_new_identities,
+        }
+    }
+
+    /// Build a store with a `BufferingBackend` wrapping the inner
+    /// backend. `begin_send_batch` becomes meaningful.
+    ///
+    /// This is what `with_pddb_backend` uses by default — production
+    /// xas wants buffering enabled for send-time write coalescing.
+    /// Tests that want to exercise the same code path can also use
+    /// this constructor over any inner backend (typically
+    /// `MockBackend`).
+    pub fn new_buffering(inner: Arc<dyn KvBackend>) -> Self {
+        Self::new_buffering_with_options(inner, OnNewIdentity::Trust)
+    }
+
+    /// Same as `new_buffering` but with an explicit trust policy.
+    pub fn new_buffering_with_options(
+        inner: Arc<dyn KvBackend>,
+        trust_new_identities: OnNewIdentity,
+    ) -> Self {
+        let buffering = Arc::new(BufferingBackend::new(inner));
+        let backend: Arc<dyn KvBackend> = buffering.clone();
+        Self {
+            backend,
+            buffering: Some(buffering),
             session_cache: Arc::new(Mutex::new(HashMap::new())),
             session_dirty: Arc::new(Mutex::new(HashSet::new())),
             trust_new_identities,
@@ -133,10 +172,39 @@ impl PddbStore {
     /// `is_mounted()` before issuing operations that need the store,
     /// or for tolerating per-op `NotMounted` errors during the boot
     /// window.
+    ///
+    /// Wraps the real `PddbBackend` in a `BufferingBackend` so the
+    /// store supports send-time write coalescing via
+    /// `begin_send_batch`.
     #[cfg(feature = "pddb-backend")]
     pub fn with_pddb_backend() -> Result<Self, Error> {
         let backend = backend_pddb::PddbBackend::connect()?;
-        Ok(Self::new(Arc::new(backend)))
+        Ok(Self::new_buffering(Arc::new(backend)))
+    }
+
+    /// Open a send-time batch scope. Writes issued through this
+    /// store between `begin_send_batch` and the returned guard's
+    /// `commit()` (or abort-on-Drop) are buffered in memory and
+    /// only flushed to the inner backend on commit.
+    ///
+    /// Returns `Ok(None)` if the store was constructed without
+    /// buffering (e.g. `PddbStore::new(Arc::new(MockBackend::new()))`).
+    /// Caller code can treat `None` as a no-op: writes simply pass
+    /// through unchanged. This makes the call site safe to add
+    /// unconditionally.
+    ///
+    /// Returns `Err` if a batch is already in flight on this store.
+    pub fn begin_send_batch(&self) -> Result<Option<BatchGuard<'_>>, Error> {
+        match self.buffering.as_deref() {
+            Some(b) => b.begin_batch().map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// Return `true` if this store wraps a `BufferingBackend` and
+    /// has an open batch.
+    pub fn is_send_batching(&self) -> bool {
+        self.buffering.as_deref().map(|b| b.is_batching()).unwrap_or(false)
     }
 
     /// Number of entries currently in the session cache (any state —
@@ -223,6 +291,7 @@ impl fmt::Debug for PddbStore {
         f.debug_struct("PddbStore")
             .field("session_cache_len", &self.session_cache_len())
             .field("session_dirty_len", &self.session_dirty_len())
+            .field("send_batching", &self.is_send_batching())
             .field("trust_new_identities", &self.trust_new_identities)
             .finish_non_exhaustive()
     }
@@ -1015,5 +1084,160 @@ mod tests {
             );
             assert_eq!(store.session_cache_len(), 0);
         });
+    }
+
+    // ------------------------------------------------------------------
+    // BufferingBackend integration via PddbStore::new_buffering
+    // ------------------------------------------------------------------
+
+    /// A PddbStore built via `new_buffering` behaves identically to one
+    /// built via `new` when no batch is open — writes pass through.
+    #[test]
+    fn buffering_store_passthrough_when_no_batch() {
+        use presage::libsignal_service::protocol::IdentityKeyPair;
+        let store = PddbStore::new_buffering(Arc::new(MockBackend::new()));
+        let mut rng = rand::rng();
+        let aci_kp = IdentityKeyPair::generate(&mut rng);
+        block_on(async {
+            store.set_aci_identity_key_pair(aci_kp).await.unwrap();
+            assert!(store.backend.get("signal.state", "aci_identity_key_pair").unwrap().is_some());
+        });
+    }
+
+    /// Inside a batch, Store-trait writes (which all go through
+    /// `backend.put` eventually) get buffered. The inner backend
+    /// remains unchanged until commit.
+    #[test]
+    fn buffering_store_writes_buffered_during_batch() {
+        use presage::libsignal_service::protocol::IdentityKeyPair;
+        let store = PddbStore::new_buffering(Arc::new(MockBackend::new()));
+        let mut rng = rand::rng();
+        let aci_kp = IdentityKeyPair::generate(&mut rng);
+
+        block_on(async {
+            // Seed inner with a sentinel via direct (no-batch) put.
+            store.backend.put("signal.state", "sentinel", b"baseline").unwrap();
+
+            let guard = store.begin_send_batch().unwrap().expect("buffering");
+            assert!(store.is_send_batching());
+
+            // A real Store-trait write inside the batch.
+            store.set_aci_identity_key_pair(aci_kp).await.unwrap();
+            assert!(guard.buffered_len() >= 1);
+
+            // Inner is unchanged for the buffered key — we can verify
+            // by aborting and reading through the (un-batched) path.
+            // The sentinel stays put either way.
+            drop(guard); // abort
+            assert!(!store.is_send_batching());
+
+            // The identity key was discarded by the abort.
+            assert!(
+                store
+                    .backend
+                    .get("signal.state", "aci_identity_key_pair")
+                    .unwrap()
+                    .is_none()
+            );
+            // Sentinel still present.
+            assert_eq!(
+                store.backend.get("signal.state", "sentinel").unwrap().as_deref(),
+                Some(b"baseline".as_slice())
+            );
+        });
+    }
+
+    /// Commit flushes the batch's buffered writes to the inner
+    /// backend. Subsequent reads see them.
+    #[test]
+    fn buffering_store_commit_persists_writes() {
+        use presage::libsignal_service::protocol::IdentityKeyPair;
+        let store = PddbStore::new_buffering(Arc::new(MockBackend::new()));
+        let mut rng = rand::rng();
+        let aci_kp = IdentityKeyPair::generate(&mut rng);
+
+        block_on(async {
+            let guard = store.begin_send_batch().unwrap().expect("buffering");
+            store.set_aci_identity_key_pair(aci_kp).await.unwrap();
+            let n = guard.commit().unwrap();
+            assert!(n >= 1);
+            assert!(!store.is_send_batching());
+
+            // Now visible in inner backend.
+            assert!(
+                store
+                    .backend
+                    .get("signal.state", "aci_identity_key_pair")
+                    .unwrap()
+                    .is_some()
+            );
+        });
+    }
+
+    /// Reads through the same store during a batch see the buffered
+    /// writes (read-through). The send-time path needs this so
+    /// `is_trusted_identity` consults a freshly-buffered identity.
+    #[test]
+    fn buffering_store_read_through_during_batch() {
+        use presage::libsignal_service::protocol::{
+            Aci, IdentityKey, IdentityKeyPair, IdentityKeyStore, ProtocolAddress,
+        };
+        let mut store = PddbStore::new_buffering(Arc::new(MockBackend::new()));
+        let mut rng = rand::rng();
+        let local_kp = IdentityKeyPair::generate(&mut rng);
+        let peer_kp = IdentityKeyPair::generate(&mut rng);
+
+        block_on(async {
+            store.set_aci_identity_key_pair(local_kp).await.unwrap();
+            store
+                .save_registration_data(&fixture_registration())
+                .await
+                .unwrap();
+
+            let peer_addr = ProtocolAddress::new(
+                Aci::from_uuid_bytes(
+                    Uuid::from_str("00000000-0000-4000-8000-0000000000ab")
+                        .unwrap()
+                        .into_bytes(),
+                )
+                .service_id_string(),
+                1u32.try_into().unwrap(),
+            );
+
+            // Inside a batch, save_identity buffers; then get_identity
+            // (also via the protocol store) should see the buffered
+            // value via read-through.
+            let guard = store.begin_send_batch().unwrap().expect("buffering");
+            let mut aci = store.aci_protocol_store();
+            let peer_id: IdentityKey = *peer_kp.identity_key();
+            aci.save_identity(&peer_addr, &peer_id).await.unwrap();
+            let read_back = aci.get_identity(&peer_addr).await.unwrap();
+            assert_eq!(read_back.as_ref(), Some(&peer_id));
+            guard.commit().unwrap();
+
+            // After commit, still readable.
+            let aci2 = store.aci_protocol_store();
+            let read_back = aci2.get_identity(&peer_addr).await.unwrap();
+            assert_eq!(read_back.as_ref(), Some(&peer_id));
+        });
+    }
+
+    /// A second `begin_send_batch` while one is already open returns
+    /// Err so we don't accidentally interleave batches.
+    #[test]
+    fn buffering_store_rejects_nested_batches() {
+        let store = PddbStore::new_buffering(Arc::new(MockBackend::new()));
+        let _guard = store.begin_send_batch().unwrap().expect("buffering");
+        assert!(store.begin_send_batch().is_err());
+    }
+
+    /// A store built via `with_mock_backend` (no buffering) returns
+    /// `Ok(None)` from `begin_send_batch` — the call site is safe
+    /// to add unconditionally.
+    #[test]
+    fn non_buffering_store_returns_none() {
+        let store = PddbStore::with_mock_backend();
+        assert!(matches!(store.begin_send_batch(), Ok(None)));
+        assert!(!store.is_send_batching());
     }
 }
