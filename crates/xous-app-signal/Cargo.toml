@@ -47,6 +47,19 @@ probe-pddb-real = ["pddb-real"]
 # compiles for rv32 and works under the real xous async runtime.
 probe-send-batch = []
 
+# A/B comparison probe for measuring the bulk-write win on hardware.
+# Runs two passes against a mounted PDDB:
+#   Path A: N individual `put()` calls (existing client-side path).
+#   Path B: one `put_batch()` call carrying N entries (new Opcode::WriteKeyBatch).
+# Logs wall-clock for each path and the ratio. Requires PDDB to be
+# mounted — the probe skips itself if `is_mounted()` returns false
+# (e.g. in Renode, where the rootkeys gate prevents mount).
+#
+# Build for hardware:
+#   cargo build --target=riscv32imac-unknown-xous-elf --release \
+#               -p xous-app-signal --features pddb-real,precursor,probe-bulk-ab
+probe-bulk-ab = ["pddb-real"]
+
 # Hardware auto-link probe.
 # When enabled (rv32-xous only), main() fires Cmd::LinkDevice after
 # worker spawn and renders a QR code on the LCD via xous-modals-ipc

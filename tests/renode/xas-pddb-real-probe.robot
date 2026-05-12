@@ -67,3 +67,12 @@ Should Round-Trip A Key Through Real PDDB Backend
     Wait For Line On Uart    probe-pddb-real: bulk_write
     # done banner
     Wait For Line On Uart    probe-pddb-real: probe done
+    # When also built with `probe-bulk-ab`, the next probe is the A/B
+    # comparison harness. In Renode PDDB is never mounted so it
+    # skips itself with a deterministic log line — we just want to
+    # confirm rv32 doesn't crash on entry. Hardware runs (on a
+    # mounted device) emit the actual timing.
+    #
+    # If the build doesn't include `probe-bulk-ab` this line never
+    # fires; comment it out for that case.
+    Wait For Line On Uart    probe-bulk-ab: probe done

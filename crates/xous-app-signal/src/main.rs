@@ -158,6 +158,9 @@ fn main() -> std::io::Result<()> {
     #[cfg(all(feature = "probe-send-batch", target_os = "xous"))]
     probe_send_batch();
 
+    #[cfg(all(feature = "probe-bulk-ab", target_os = "xous"))]
+    probe_bulk_ab();
+
     // PDDB put-truncate smoke test (refs #14). Runtime-gated; exits
     // 0 PASS / 1 FAIL so a shell wrapper can assert the regression.
     #[cfg(feature = "pddb-real")]
@@ -623,6 +626,155 @@ fn probe_send_batch() {
     log::info!("probe-send-batch: abort path OK");
 
     log::info!("probe-send-batch: probe done in {:?}", start.elapsed());
+}
+
+/// A/B comparison probe for measuring the `WriteKeyBatch` win on
+/// hardware. Skipped if PDDB isn't mounted (e.g. Renode without a
+/// rootkeys + password modal dance).
+///
+/// Methodology:
+/// - Path A: N individual `backend.put(...)` calls. Goes through
+///   the per-key wire path: delete_key + open(create_all) + write.
+///   On the bulk-write branch this is still the path that real send
+///   code follows when batching isn't active.
+/// - Path B: one `backend.put_batch(...)` carrying N entries. Single
+///   IPC, single trailing basis sync server-side.
+///
+/// Both paths write into the `xas.bulk_ab_probe` dict, which is
+/// `delete_dict`'d at the start and end of the probe so consecutive
+/// runs see the same state. Order: cleanup → A → cleanup → B →
+/// cleanup → log ratio.
+///
+/// Payload size and entry count are tuned to the cold-send shape:
+/// 3 entries × 200 B by default, matching the order-of-magnitude
+/// of `save_identity (~33B) + sender_certificate (~300B) +
+/// save_message (~200-500B)`. Override the count via the
+/// `XAS_BULK_AB_N` env var if you want to see scaling.
+///
+/// UART output, in order:
+///   probe-bulk-ab: starting
+///   probe-bulk-ab: connected mounted={true|false}
+///   (if not mounted) probe-bulk-ab: skipping — PDDB not mounted
+///   probe-bulk-ab: PathA N x put took {us}us total (~{us}us/put)
+///   probe-bulk-ab: PathB 1 x put_batch({N}) took {us}us total
+///                  (~{us}us/entry)
+///   probe-bulk-ab: ratio path_a/path_b = {n.nn}x
+///   probe-bulk-ab: probe done
+#[cfg(all(feature = "probe-bulk-ab", target_os = "xous"))]
+fn probe_bulk_ab() {
+    use std::time::Instant;
+
+    use presage_store_pddb::{KvBackend, PddbBackend};
+
+    log::info!("probe-bulk-ab: starting");
+
+    let backend = match PddbBackend::connect() {
+        Ok(b) => b,
+        Err(e) => {
+            log::warn!("probe-bulk-ab: connect FAIL: {}", e);
+            return;
+        }
+    };
+    let mounted = backend.is_mounted();
+    log::info!("probe-bulk-ab: connected mounted={}", mounted);
+    if !mounted {
+        log::info!("probe-bulk-ab: skipping — PDDB not mounted");
+        log::info!("probe-bulk-ab: probe done");
+        return;
+    }
+
+    let dict = "xas.bulk_ab_probe";
+
+    // Number of entries per pass. Hardware send-time analog: 3 keys
+    // per cold send. Override via env if you want scaling data.
+    let n: usize = std::env::var("XAS_BULK_AB_N")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3);
+    if n == 0 || n > 16 {
+        log::warn!("probe-bulk-ab: invalid N={}; using 3", n);
+    }
+    let n = n.clamp(1, 16);
+
+    // 200-byte payload matches the median cold-send write size.
+    let payload = vec![0xAB_u8; 200];
+    let keys: Vec<String> = (0..n).map(|i| format!("k{:02}", i)).collect();
+
+    // --- Cleanup any leftover state from a prior run.
+    if let Err(e) = backend.delete_dict(dict) {
+        log::info!("probe-bulk-ab: pre-cleanup delete_dict err (ignored): {}", e);
+    }
+
+    // --- Path A: N individual puts.
+    let phase = Instant::now();
+    let mut a_ok = true;
+    for key in &keys {
+        if let Err(e) = backend.put(dict, key, &payload) {
+            log::warn!("probe-bulk-ab: PathA put({}) FAIL: {}", key, e);
+            a_ok = false;
+            break;
+        }
+    }
+    let path_a = phase.elapsed();
+    if a_ok {
+        let total_us = path_a.as_micros();
+        let per_us = if n > 0 { total_us / n as u128 } else { 0 };
+        log::info!(
+            "probe-bulk-ab: PathA {} x put took {}us total (~{}us/put)",
+            n,
+            total_us,
+            per_us
+        );
+    }
+
+    // Cleanup before Path B so it's not paying for re-allocation
+    // of pages already-used by Path A's writes.
+    if let Err(e) = backend.delete_dict(dict) {
+        log::info!("probe-bulk-ab: mid-cleanup delete_dict err (ignored): {}", e);
+    }
+
+    // --- Path B: one put_batch with N entries.
+    let entries: Vec<(&str, &str, &[u8])> = keys
+        .iter()
+        .map(|k| (dict, k.as_str(), payload.as_slice()))
+        .collect();
+    let phase = Instant::now();
+    let b_ok = match backend.put_batch(&entries) {
+        Ok(()) => true,
+        Err(e) => {
+            log::warn!("probe-bulk-ab: PathB put_batch FAIL: {}", e);
+            false
+        }
+    };
+    let path_b = phase.elapsed();
+    if b_ok {
+        let total_us = path_b.as_micros();
+        let per_us = if n > 0 { total_us / n as u128 } else { 0 };
+        log::info!(
+            "probe-bulk-ab: PathB 1 x put_batch({}) took {}us total (~{}us/entry)",
+            n,
+            total_us,
+            per_us
+        );
+    }
+
+    // --- Post-cleanup so the device is left clean.
+    if let Err(e) = backend.delete_dict(dict) {
+        log::info!("probe-bulk-ab: post-cleanup delete_dict err (ignored): {}", e);
+    }
+
+    // --- Ratio.
+    if a_ok && b_ok && path_b.as_micros() > 0 {
+        let ratio = path_a.as_micros() as f64 / path_b.as_micros() as f64;
+        log::info!(
+            "probe-bulk-ab: ratio path_a/path_b = {:.2}x (higher = bulk-write is faster)",
+            ratio
+        );
+    } else {
+        log::info!("probe-bulk-ab: ratio skipped (one or both paths failed)");
+    }
+
+    log::info!("probe-bulk-ab: probe done");
 }
 
 /// Hardware auto-link probe.
