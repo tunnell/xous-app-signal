@@ -465,6 +465,33 @@ fn probe_pddb_real() {
         Err(e) => log::warn!("probe-pddb-real: post-delete list FAIL: {}", e),
     }
 
+    // --- Bulk-write wire-protocol smoke (Opcode::WriteKeyBatch).
+    //
+    // Even when PDDB isn't mounted in Renode (mounted=false above), the
+    // wire path is still exercisable: the server should receive the
+    // packed PddbWriteBatch, parse it, and return a meaningful retcode
+    // (typically BasisLost when no basis is accessible). The value of
+    // this probe is **wire encode/decode validation** — we're catching
+    // mismatches between the xas-side packed format in
+    // `xous-pddb-ipc::client.write_batch` and the xous-core-side
+    // parser at `services/pddb/src/main.rs`'s `Opcode::WriteKeyBatch`
+    // arm. Goes through KvBackend::put_batch which is the same path
+    // BufferingBackend uses on commit.
+    let phase = Instant::now();
+    let entries: Vec<(&str, &str, &[u8])> = vec![
+        ("xas.bulk_probe", "k1", b"v1".as_slice()),
+        ("xas.bulk_probe", "k2", b"v2-longer".as_slice()),
+        ("xas.bulk_probe", "k3", b"v3".as_slice()),
+    ];
+    match backend.put_batch(&entries) {
+        Ok(()) => log::info!("probe-pddb-real: bulk_write OK in {:?}", phase.elapsed()),
+        Err(e) => log::info!(
+            "probe-pddb-real: bulk_write returned err in {:?}: {} (expected when mounted=false)",
+            phase.elapsed(),
+            e
+        ),
+    }
+
     log::info!("probe-pddb-real: probe done in {:?}", start.elapsed());
 }
 

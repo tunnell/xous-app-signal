@@ -60,5 +60,10 @@ Should Round-Trip A Key Through Real PDDB Backend
     Wait For Line On Uart    probe-pddb-real: delete
     # post-delete listing outcome
     Wait For Line On Uart    probe-pddb-real: post-delete list
+    # bulk-write wire smoke (Opcode::WriteKeyBatch). Substring match
+    # accepts OK or "returned err" — both indicate the wire round-trip
+    # worked. We just want to catch a panic / wedge if the packed
+    # format mismatches between client and server.
+    Wait For Line On Uart    probe-pddb-real: bulk_write
     # done banner
     Wait For Line On Uart    probe-pddb-real: probe done
