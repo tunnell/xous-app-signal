@@ -1433,12 +1433,44 @@ async fn handle_send(
         std::time::Duration::from_secs(secs)
     }
 
+    // Clone the store handle so we can open a send-time batch
+    // alongside the `&mut manager` borrow needed for `send_message`.
+    // The clone is shallow (Arc-based) — it shares the same
+    // `BufferingBackend` so begin_send_batch on the clone toggles
+    // the same buffer state the Store-trait impls reach through
+    // `manager.store().backend`.
+    let store_for_batch = manager.store().clone();
+
     let mut last_err: Option<String> = None;
     for attempt in 1..=SEND_MAX_ATTEMPTS {
         log::info!(
             "worker/send: attempt {}/{} ts={}",
             attempt, SEND_MAX_ATTEMPTS, timestamp,
         );
+
+        // Open a send-time write batch. Each attempt gets its own
+        // batch scope; on retry the previous attempt's guard has
+        // already dropped (abort = no replay).
+        //
+        // `begin_send_batch` returns `Ok(None)` for stores built
+        // without buffering (e.g. the MockBackend used in some
+        // hosted tests); in that case writes pass through as
+        // before. Treat begin errors as a hard failure — they only
+        // happen if a nested batch is requested, which is a logic
+        // bug worth surfacing.
+        let batch_guard = match store_for_batch.begin_send_batch() {
+            Ok(g) => g,
+            Err(e) => {
+                log::error!("worker/send: begin_send_batch failed: {}", e);
+                let _ = event_tx
+                    .send(Event::SendError {
+                        reason: format!("internal: begin_send_batch: {e}"),
+                        timestamp: Some(timestamp),
+                    })
+                    .await;
+                return;
+            }
+        };
 
         // catch_unwind so a panic inside libsignal/presage's send path
         // doesn't kill manager_task. AssertUnwindSafe is needed because
@@ -1465,6 +1497,29 @@ async fn handle_send(
 
         match outcome {
             Ok(Ok(())) => {
+                // Commit the batched writes before signaling
+                // SendComplete. Also flush sessions so the
+                // ratchet step that pairs with the just-sent
+                // message lands durably with the other writes —
+                // otherwise it waits for the next
+                // `Received::QueueEmpty` (see flush_sessions site
+                // earlier in this file), opening a wider crash
+                // window between wire-send and durability.
+                if let Some(g) = batch_guard {
+                    match g.commit() {
+                        Ok(n) => log::info!(
+                            "worker/send: batch committed ts={} (n={})",
+                            timestamp, n
+                        ),
+                        Err(e) => log::warn!(
+                            "worker/send: batch commit failed ts={}: {}",
+                            timestamp, e
+                        ),
+                    }
+                }
+                if let Err(e) = store_for_batch.flush_sessions() {
+                    log::warn!("worker/send: flush_sessions after batch failed: {}", e);
+                }
                 log::info!("worker/send: SendComplete ts={} (attempt {})", timestamp, attempt);
                 let _ = event_tx.send(Event::SendComplete { timestamp }).await;
                 return;
