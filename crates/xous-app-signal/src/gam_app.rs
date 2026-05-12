@@ -304,21 +304,14 @@ impl App {
             Screen::Linking => write!(
                 tv.text,
                 "Linking device...\n\n\
-                 Connecting to Signal's\n\
-                 servers and requesting\n\
-                 a provisioning URL.\n\n\
-                 The Signal server's\n\
-                 certificate is verified\n\
-                 against Signal's own\n\
-                 pinned Certificate\n\
-                 Authority. The public\n\
-                 web certificate bundle\n\
-                 on your device is not\n\
-                 trusted for this.\n\n\
-                 Linking takes a few\n\
-                 minutes after you scan\n\
-                 the QR. Don't\n\
-                 power-cycle.\n\n\
+                 Connecting to Signal's servers and requesting a \
+                 provisioning URL.\n\n\
+                 The Signal server's certificate is verified against \
+                 Signal's own pinned Certificate Authority. The public \
+                 web certificate bundle on your device is not trusted \
+                 for this.\n\n\
+                 Linking takes a few minutes after you scan the QR. \
+                 Don't power-cycle.\n\n\
                  Press Backspace to cancel.\n\n\
                  (Please wait.)"
             )
