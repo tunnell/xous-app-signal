@@ -530,6 +530,63 @@ contact-name resolution, the stdin UI state machine, and link/
 send/receive event dispatch. Should all pass green. (Verified
 2026-05: `test result: ok. 53 passed`.)
 
+### 2.7 Renode test environment gotchas
+
+If you're running the robot-framework tests under renode
+(`xas-smoke.robot`, `xas-pddb-real-probe.robot`, etc.), three
+pitfalls the wrapper script does not paper over:
+
+**(a) `xas-smoke.resc` hardcodes `$xous_core_root`.** The
+`.resc` file resolves the xous-core checkout via a literal path
+near the top of the script; the wrapper does not export or
+override that variable. If your `xous-core` lives anywhere
+other than the hardcoded path, renode loads no symbols and
+every assertion that depends on them fails in confusing ways.
+Either edit `$xous_core_root` in the `.resc` to your local
+layout, or pass `-e '$xous_core_root = @<path>'` ahead of
+`include @<resc>` in the wrapper.
+
+**(b) Robot tests need a pre-built `xous.img` + `loader.bin`.**
+The wrapper does not build the kernel image; it expects the
+artifacts to already exist. Build them yourself:
+
+```sh
+cd ~/code/xas/xous-core
+cargo xtask app-image xas:/path/to/xas/target/release/xas \
+    --git-describe v0.9.21-0-g0000000
+```
+
+`--git-describe` is **mandatory on forks**. The xtask runs
+`git describe --tags` to embed a version string into the image
+header, and a fork branch generally has no reachable tag — the
+xtask aborts (or emits a kernel whose embedded version is the
+empty string and trips the bootloader's sanity check). The
+exact value doesn't matter so long as it parses; the literal
+`v0.9.21-0-g0000000` above matches upstream's format and is
+what Track F verified against.
+
+**(c) `xas-pddb-real-probe.robot` needs two extra build flags.**
+This test exercises the real PDDB backend instead of the
+in-memory shim, and the wrapper sets neither flag the run
+needs to terminate:
+
+```sh
+# xas binary
+cargo build --release --features probe-pddb-real
+
+# kernel image
+cargo xtask app-image xas:... \
+    --feature pddb/autobasis \
+    --git-describe v0.9.21-0-g0000000
+```
+
+Without `pddb/autobasis` the first-boot path waits for a
+user-typed password to unlock the system basis; renode does
+not inject keystrokes on that screen, so the test hangs until
+the wrapper's outer timeout fires. Without `probe-pddb-real`
+xas takes the in-memory shim path, never touches the real
+PDDB, and the test is silently a no-op even when it "passes."
+
 ---
 
 ## 3. Hardware path (Precursor PVT2)
