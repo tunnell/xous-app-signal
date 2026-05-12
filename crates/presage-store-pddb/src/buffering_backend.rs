@@ -123,6 +123,12 @@ impl BufferingBackend {
 
     /// Internal: drain the buffer and replay to the inner backend.
     /// Called by `BatchGuard::commit`.
+    ///
+    /// Puts and deletes are grouped: puts go through `inner.put_batch`
+    /// in a single call (one server-side sync for PddbBackend);
+    /// deletes are issued individually. Within the puts batch the
+    /// order of replay is unspecified — the buffered set is a
+    /// HashMap.
     fn commit_internal(&self) -> Result<usize, Error> {
         // Take ownership of the buffer contents so other operations
         // (which check the flag) see an empty buffer immediately.
@@ -131,29 +137,51 @@ impl BufferingBackend {
                 self.buffer.lock().map_err(|_| Error::backend("buffer mutex poisoned"))?;
             std::mem::take(&mut *guard)
         };
-        let count = entries.len();
-        // Replay before clearing the flag — a read that races
-        // against the replay should see the post-replay state via
-        // inner, not an empty buffer-overlaid view.
-        let mut first_err: Option<Error> = None;
+        let total_count = entries.len();
+
+        // Split puts vs deletes. Hold onto the owned `(String, String,
+        // Vec<u8>)` triples so the `&str` / `&[u8]` views into
+        // `put_views` stay valid for the put_batch call.
+        let mut puts: Vec<(String, String, Vec<u8>)> = Vec::new();
+        let mut deletes: Vec<(String, String)> = Vec::new();
         for ((dict, key), entry) in entries {
-            let res = match entry {
-                BufferEntry::Put(bytes) => self.inner.put(&dict, &key, &bytes),
-                BufferEntry::Delete => self.inner.delete(&dict, &key),
-            };
-            if let Err(e) = res {
-                // Keep going to drain the rest, but remember the
-                // first failure to surface to the caller.
+            match entry {
+                BufferEntry::Put(bytes) => puts.push((dict, key, bytes)),
+                BufferEntry::Delete => deletes.push((dict, key)),
+            }
+        }
+
+        let mut first_err: Option<Error> = None;
+
+        // Puts via the bulk path. Backends without a native bulk
+        // opcode fall back to the default put-loop (see KvBackend
+        // trait); PddbBackend issues one IPC + one server-side sync.
+        if !puts.is_empty() {
+            let put_views: Vec<(&str, &str, &[u8])> = puts
+                .iter()
+                .map(|(d, k, v)| (d.as_str(), k.as_str(), v.as_slice()))
+                .collect();
+            if let Err(e) = self.inner.put_batch(&put_views) {
+                first_err = Some(e);
+            }
+        }
+
+        // Deletes individually. Could add a delete_batch analog if a
+        // workload ever needs it; the send hot path doesn't issue
+        // deletes during a batch, so this is fine.
+        for (dict, key) in deletes {
+            if let Err(e) = self.inner.delete(&dict, &key) {
                 if first_err.is_none() {
                     first_err = Some(e);
                 }
             }
         }
+
         // Clear the flag last so any racing read sees inner with the
         // replayed state, not an empty buffer.
         self.batching.store(false, Ordering::Release);
         match first_err {
-            None => Ok(count),
+            None => Ok(total_count),
             Some(e) => Err(e),
         }
     }
@@ -413,5 +441,107 @@ mod tests {
         let n = guard.commit().unwrap();
         assert_eq!(n, 1); // only the latest replayed
         assert_eq!(b.get("d", "k").unwrap().as_deref(), Some(b"v3".as_slice()));
+    }
+
+    /// Counting wrapper that tracks individual `put` vs batched
+    /// `put_batch` calls. Lets us assert that `commit` exercises the
+    /// bulk path, not the per-key loop.
+    #[derive(Debug)]
+    struct CountingBackend {
+        inner: Arc<MockBackend>,
+        puts: std::sync::atomic::AtomicUsize,
+        batches: std::sync::atomic::AtomicUsize,
+        batch_total_entries: std::sync::atomic::AtomicUsize,
+    }
+
+    impl CountingBackend {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                inner: Arc::new(MockBackend::new()),
+                puts: Default::default(),
+                batches: Default::default(),
+                batch_total_entries: Default::default(),
+            })
+        }
+        fn puts(&self) -> usize {
+            self.puts.load(std::sync::atomic::Ordering::Acquire)
+        }
+        fn batches(&self) -> usize {
+            self.batches.load(std::sync::atomic::Ordering::Acquire)
+        }
+        fn batch_total(&self) -> usize {
+            self.batch_total_entries
+                .load(std::sync::atomic::Ordering::Acquire)
+        }
+    }
+
+    impl KvBackend for CountingBackend {
+        fn get(&self, dict: &str, key: &str) -> Result<Option<Vec<u8>>, Error> {
+            self.inner.get(dict, key)
+        }
+        fn put(&self, dict: &str, key: &str, value: &[u8]) -> Result<(), Error> {
+            self.puts
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            self.inner.put(dict, key, value)
+        }
+        fn put_batch(&self, entries: &[(&str, &str, &[u8])]) -> Result<(), Error> {
+            self.batches
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            self.batch_total_entries
+                .fetch_add(entries.len(), std::sync::atomic::Ordering::AcqRel);
+            // Don't fall through to default impl (which calls put);
+            // exercise the bulk path semantics by writing through
+            // the inner mock directly.
+            for (d, k, v) in entries {
+                self.inner.put(d, k, v)?;
+            }
+            Ok(())
+        }
+        fn delete(&self, dict: &str, key: &str) -> Result<(), Error> {
+            self.inner.delete(dict, key)
+        }
+        fn delete_dict(&self, dict: &str) -> Result<(), Error> {
+            self.inner.delete_dict(dict)
+        }
+        fn list_keys(&self, dict: &str) -> Result<Vec<String>, Error> {
+            self.inner.list_keys(dict)
+        }
+    }
+
+    /// On commit, multiple buffered puts should be flushed via a
+    /// single `put_batch` call — not N individual `put` calls. This is
+    /// the load-bearing assertion: it's the difference between phase 1
+    /// (per-write savings) and Option B (per-batch savings).
+    #[test]
+    fn commit_uses_put_batch_not_per_put_loop() {
+        let counting = CountingBackend::new();
+        let bb = BufferingBackend::new(counting.clone());
+
+        let guard = bb.begin_batch().unwrap();
+        bb.put("d", "k1", b"v1").unwrap();
+        bb.put("d", "k2", b"v2").unwrap();
+        bb.put("d", "k3", b"v3").unwrap();
+        let n = guard.commit().unwrap();
+        assert_eq!(n, 3);
+
+        // Exactly one batched call, three entries inside it.
+        assert_eq!(counting.batches(), 1);
+        assert_eq!(counting.batch_total(), 3);
+        // Zero individual put() calls during commit.
+        assert_eq!(counting.puts(), 0);
+    }
+
+    /// Pre-batch put (direct, no scope) passes through to `put`, not
+    /// `put_batch`. Validates the "transparent when not batching"
+    /// property at the abstraction boundary.
+    #[test]
+    fn unbatched_put_uses_put_not_put_batch() {
+        let counting = CountingBackend::new();
+        let bb = BufferingBackend::new(counting.clone());
+
+        bb.put("d", "k", b"v").unwrap();
+
+        assert_eq!(counting.batches(), 0);
+        assert_eq!(counting.puts(), 1);
     }
 }

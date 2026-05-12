@@ -59,6 +59,27 @@ pub use put_truncate_smoke::{smoke_put_truncates, SmokeResult};
 pub trait KvBackend: Send + Sync + fmt::Debug {
     fn get(&self, dict: &str, key: &str) -> Result<Option<Vec<u8>>, Error>;
     fn put(&self, dict: &str, key: &str, value: &[u8]) -> Result<(), Error>;
+
+    /// Bulk write: apply N `(dict, key, value)` writes with **one**
+    /// sync at the end (if the backend supports it natively). The
+    /// default impl loops over `put` for backends without a native
+    /// bulk path (MockBackend, future test fixtures, etc.).
+    ///
+    /// `PddbBackend` overrides this to invoke the PDDB
+    /// `Opcode::WriteKeyBatch` opcode, which collapses the N
+    /// per-`WriteKey` server-side basis syncs into one — the actual
+    /// order-of-magnitude saving over per-key put loops.
+    ///
+    /// Not atomic across entries: if entry N fails, entries 0..N
+    /// have already been applied. For PddbBackend the trailing sync
+    /// still runs server-side, so partial state is durable.
+    fn put_batch(&self, entries: &[(&str, &str, &[u8])]) -> Result<(), Error> {
+        for (dict, key, value) in entries {
+            self.put(dict, key, value)?;
+        }
+        Ok(())
+    }
+
     fn delete(&self, dict: &str, key: &str) -> Result<(), Error>;
     fn delete_dict(&self, dict: &str) -> Result<(), Error>;
     fn list_keys(&self, dict: &str) -> Result<Vec<String>, Error>;

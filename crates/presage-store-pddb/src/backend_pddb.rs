@@ -137,6 +137,20 @@ impl KvBackend for PddbBackend {
         Ok(())
     }
 
+    fn put_batch(&self, entries: &[(&str, &str, &[u8])]) -> Result<(), Error> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let guard = self.lock()?;
+        // Single IPC, single trailing basis sync server-side. The
+        // upstream `Opcode::WriteKeyBatch` handler applies each entry
+        // with `truncate=true` so the `delete_key` prelude we'd
+        // otherwise need for #14 is unnecessary on the batch path.
+        guard
+            .write_batch(entries)
+            .map_err(|e| map_ipc_err(e, "write_batch"))
+    }
+
     fn delete(&self, dict: &str, key: &str) -> Result<(), Error> {
         let guard = self.lock()?;
         match guard.delete_key(dict, key) {
