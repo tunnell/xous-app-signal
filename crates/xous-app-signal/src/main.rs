@@ -155,6 +155,38 @@ fn main() -> std::io::Result<()> {
     #[cfg(all(feature = "probe-pddb-real", target_os = "xous"))]
     probe_pddb_real();
 
+    // PDDB put-truncate smoke test (refs #14). Runtime-gated; exits
+    // 0 PASS / 1 FAIL so a shell wrapper can assert the regression.
+    #[cfg(feature = "pddb-real")]
+    if std::env::var("XAS_PDDB_TRUNCATE_TEST").is_ok() {
+        let backend = match presage_store_pddb::PddbBackend::connect() {
+            Ok(b) => b,
+            Err(e) => {
+                log::error!("XAS_PDDB_TRUNCATE_TEST: connect: {}", e);
+                std::process::exit(1);
+            }
+        };
+        if !backend.is_mounted() {
+            match backend.try_mount() {
+                Ok(true) => {}
+                Ok(false) => {
+                    log::error!("XAS_PDDB_TRUNCATE_TEST: try_mount declined");
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    log::error!("XAS_PDDB_TRUNCATE_TEST: try_mount: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        let result = presage_store_pddb::smoke_put_truncates(&backend);
+        log::info!("XAS_PDDB_TRUNCATE_TEST: {:?}", result);
+        match result {
+            presage_store_pddb::SmokeResult::Pass => std::process::exit(0),
+            _ => std::process::exit(1),
+        }
+    }
+
     // The auto-link feature drives the link flow + QR modal
     // on real hardware. When enabled, we *replace* the regular UI
     // loop — the auto-link probe is the UI for this build mode. On

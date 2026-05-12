@@ -23,6 +23,10 @@ testing approaches.
 | File | Purpose |
 |---|---|
 | `test_link_qr.sh` | Headless smoke test: boots hosted, drives launcher to xas link screen, gates on the provisioning URL appearing in the kernel log. The cheapest end-to-end check. |
+| `test_send_receive.sh` | Full send/receive integration test against `signal-cli`. Six phases: PDDB-truncate guard (refs #14), boot + automated link via `signal-cli addDevice`, receive 5 messages, idle for one server-side reauth cycle, post-idle receive proof. Per-phase exit codes (0 PASS, 2 #14 regression, 3 link, 4 recv, 5 idle, 6 post-idle). Needs `signal-cli` registered on **both** `TEST_PEER_NUMBER` and `TEST_XAS_NUMBER` so it can play sender AND primary-that-approves-the-link. Phase 4 (send-from-xas) deferred — needs a compose keystroke driver. |
+| `test_signal_cli_echo.sh` | Phase 0: signal-cli bidirectional echo. Catches bad account state BEFORE xas testing. NL→US + US→NL, each timed; PASS if <10 s per direction. Exit codes 0 (both), 1 (only NL→US), 2 (only US→NL), 3 (neither). Halt the rest of the pipeline if this fails. |
+| `test_xas_round_trip.py` | xas-side round-trip after Phase 0 PASS. At launch, removes any pre-existing linked devices from the xas primary (clean state per run). Phase 1 auto-link via `signal-cli addDevice`, auto-dismisses the QR modal via `XSendEvent` so `gam_app` drains `Event::LinkComplete`. Round 1: peer→xas + xas reply ×2. Round 2: xas→peer + peer reply ×2. Each step timed; summary at exit. xas-side sends prompt the maintainer to type into the thread; timing anchors on `worker/send: handle_send entered`. |
+| `test_xas_round_trip_pcap.py` | Wraps `test_xas_round_trip.py` + concurrent `tcpdump` capture filtered to `.signal.org` IPs on :443. Pcap archived alongside the inner test's logs. Reports TCP-level census (SYN/FIN/RST count) at exit. |
 | `drive_link.py` | Helper used by `test_link_qr.sh` to script keystrokes into the minifb window. |
 | `scan_receive.sh` | Boots hosted with a longer hold so you can scan the QR from your phone and verify a receive end-to-end. |
 | `test_helpers.sh` | Shared bash helpers (sourced by the other scripts). |

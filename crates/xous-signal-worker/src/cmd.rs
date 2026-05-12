@@ -266,6 +266,37 @@ pub enum Event {
     /// to `Screen::Menu` with `MenuItem::Link`.
     LoggedOut,
 
+    /// Server-forced auth expiry: Signal sent WS close code 4401
+    /// ("Reauthentication required") and our credential-refresh
+    /// path failed to recover (N consecutive 403s on the refreshed
+    /// WS). Emitted by `manager_task` after the reauth retry budget
+    /// is exhausted. UI mirrors the `LoggedOut` reset but surfaces
+    /// the reason as a banner so the user understands they need to
+    /// re-link rather than thinking the device is generally broken.
+    /// See #13 for the underlying bug. The String is a short
+    /// human-readable reason (typically the last 403 response body
+    /// or a synthesized "reauthentication failed after N retries").
+    SignalAuthExpired(String),
+
+    /// Server-forced displacement: Signal sent WS close code 4409
+    /// ("Connected elsewhere"). This fires when a different
+    /// authenticated WS for the same (accountIdentifier, deviceId)
+    /// pair connects to the server — Signal-Server's
+    /// `ConflictingMessageConsumerException` displaces the older
+    /// listener. Common scenario: another xas instance, or this
+    /// same xas's previous WS that got displaced by a fresh
+    /// reconnect while the server's slot hadn't cleared yet.
+    /// Emitted by `manager_task` when the receive stream sees
+    /// 4409 — treated as terminal rather than retried, because
+    /// auto-reconnect would just self-displace again. UI mirrors
+    /// the `LoggedOut` reset with a banner explaining that another
+    /// device or app instance took over. User re-links to use this
+    /// device. See #1 for the underlying bug. The String is a
+    /// short human-readable reason for diagnostics (typically
+    /// "Server reported 4409 'Connected elsewhere' — another
+    /// device with this Signal account is active.").
+    SignalConflictingDevice(String),
+
     /// `Cmd::ResolveUsername` finished. Result is `Some(aci)` if the
     /// username resolved (UI opens a Thread for that uuid),
     /// `None` if no such username exists, or

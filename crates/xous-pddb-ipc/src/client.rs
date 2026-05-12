@@ -55,6 +55,27 @@ impl PddbClient {
         }
     }
 
+    /// Trigger an interactive mount: pops the gam password modal,
+    /// waits for the user to enter the password, then mounts. Blocks
+    /// until the mount succeeds (`Ok(true)`) or the server declines
+    /// (`Ok(false)` — e.g. wrong password, forced abort).
+    ///
+    /// Server returns `Scalar2(retcode, failcount)` where `retcode == 0`
+    /// means success (mounted, or already mounted) — see
+    /// `services/pddb/src/main.rs::Opcode::TryMount`.
+    pub fn try_mount(&self) -> Result<bool, Error> {
+        let resp = send_message(
+            self.main_conn,
+            Message::new_blocking_scalar(Opcode::TryMount.to_usize().unwrap(), 0, 0, 0, 0),
+        )
+        .map_err(|e| Error::new(ErrorKind::Ipc, format!("TryMount: {:?}", e)))?;
+        match resp {
+            xous::Result::Scalar2(retcode, _) => Ok(retcode == 0),
+            xous::Result::Scalar1(retcode) => Ok(retcode == 0),
+            other => Err(Error::new(ErrorKind::Ipc, format!("TryMount: {:?}", other))),
+        }
+    }
+
     /// Open (and optionally create) a `(dict, key)` pair, returning
     /// a streaming `KeyHandle` whose `Read`/`Write` impls round-trip
     /// `PddbBuf` pages.

@@ -32,6 +32,8 @@ mod backend_pddb;
 mod content;
 mod error;
 mod protocol;
+#[cfg(feature = "pddb-backend")]
+mod put_truncate_smoke;
 mod state;
 mod store;
 
@@ -40,6 +42,8 @@ pub use backend_mock::MockBackend;
 pub use backend_pddb::PddbBackend;
 pub use error::Error;
 pub use protocol::{IdentityType, PddbProtocolStore};
+#[cfg(feature = "pddb-backend")]
+pub use put_truncate_smoke::{smoke_put_truncates, SmokeResult};
 
 /// Internal KV abstraction used by all `PddbStore` trait impls.
 ///

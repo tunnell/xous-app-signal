@@ -304,21 +304,14 @@ impl App {
             Screen::Linking => write!(
                 tv.text,
                 "Linking device...\n\n\
-                 Connecting to Signal's\n\
-                 servers and requesting\n\
-                 a provisioning URL.\n\n\
-                 The Signal server's\n\
-                 certificate is verified\n\
-                 against Signal's own\n\
-                 pinned Certificate\n\
-                 Authority. The public\n\
-                 web certificate bundle\n\
-                 on your device is not\n\
-                 trusted for this.\n\n\
-                 Linking takes a few\n\
-                 minutes after you scan\n\
-                 the QR. Don't\n\
-                 power-cycle.\n\n\
+                 Connecting to Signal's servers and requesting a \
+                 provisioning URL.\n\n\
+                 The Signal server's certificate is verified against \
+                 Signal's own pinned Certificate Authority. The public \
+                 web certificate bundle on your device is not trusted \
+                 for this.\n\n\
+                 Linking takes a few minutes after you scan the QR. \
+                 Don't power-cycle.\n\n\
                  Press Backspace to cancel.\n\n\
                  (Please wait.)"
             )
@@ -1608,6 +1601,56 @@ fn handle_worker_event(
             app.account_device_name = None;
             app.account_aci = None;
             app.account_phone = None;
+            app.screen = Screen::Menu;
+            app.selected = MenuItem::Link;
+            let _ = app.render();
+        }
+        Event::SignalAuthExpired(reason) => {
+            log::warn!("xas/gam_app: SignalAuthExpired: {}", reason);
+            // Mirrors LoggedOut, but the reset is involuntary:
+            // server-forced WS 4401 + failed reauth (see #13). The
+            // banner tells the user why their app suddenly looks
+            // unlinked, so they know to re-link rather than thinking
+            // the device is generally broken.
+            app.linked = false;
+            app.messages.clear();
+            app.dialogues.clear();
+            app.home_focus = 0;
+            app.compose_buffer.clear();
+            app.linking_in_progress = false;
+            app.account_device_name = None;
+            app.account_aci = None;
+            app.account_phone = None;
+            app.last_status = format!(
+                "Signal authentication expired:\n{}\n\nPlease re-link.",
+                reason
+            );
+            app.screen = Screen::Menu;
+            app.selected = MenuItem::Link;
+            let _ = app.render();
+        }
+        Event::SignalConflictingDevice(reason) => {
+            log::warn!("xas/gam_app: SignalConflictingDevice: {}", reason);
+            // Mirrors LoggedOut + SignalAuthExpired, but the trigger
+            // is server-forced WS 4409 "Connected elsewhere" — another
+            // authenticated WS for the same (account, deviceId) pair
+            // displaced ours. Auto-reconnect would self-displace, so
+            // the worker treats this as terminal. The banner tells
+            // the user a different app instance is active and they
+            // need to re-link this device to use it.
+            app.linked = false;
+            app.messages.clear();
+            app.dialogues.clear();
+            app.home_focus = 0;
+            app.compose_buffer.clear();
+            app.linking_in_progress = false;
+            app.account_device_name = None;
+            app.account_aci = None;
+            app.account_phone = None;
+            app.last_status = format!(
+                "Another device took over:\n{}\n\nPlease re-link.",
+                reason
+            );
             app.screen = Screen::Menu;
             app.selected = MenuItem::Link;
             let _ = app.render();

@@ -87,22 +87,19 @@ def main():
     press(dpy, win, root, kc_down, 0.3, "Down → xas (only app bundled)")
     press(dpy, win, root, kc_home, 2.0, "Home → launch xas")
 
-    # Step 2: xas Menu → Link selected → Enter to open device-name modal.
-    # Cursor starts on Link in pre-link Menu, so just Enter selects.
+    # Step 2: xas Menu → Link selected. This triggers start_link_flow,
+    # which opens the device-name TextEntry modal. The previous
+    # version of this script also sent an Enter to accept the modal
+    # default — racy: the modal hadn't always rendered yet when the
+    # Enter arrived, so the keypress fell on the still-active
+    # Screen::Menu and the modal stayed up indefinitely. The test
+    # wrapper now drives that Enter under a retry loop anchored on
+    # `worker: Cmd::LinkDevice received`, so we hand off here.
     print("=== xas Menu → Link ===")
     press(dpy, win, root, kc_return, 1.0, "Enter → Link selected")
 
-    # Step 3: device-name modal accepts default ("xas").
-    # The TextEntry modal has the field pre-filled; Enter alone
-    # commits it.
-    print("=== accept device name ===")
-    press(dpy, win, root, kc_return, 1.0, "Enter → accept device name")
-
-    # At this point Cmd::LinkDevice has been sent. The worker is
-    # connecting to chat.signal.org; expect Event::LinkUrl within
-    # ~5–15s. The test wrapper polls the kernel log; this script
-    # exits 0 here.
-    print("done — driver returns; wrapper polls log for URL emission")
+    print("done — driver returns; wrapper accepts device-name modal "
+          "via retry-Enter loop")
 
 
 if __name__ == "__main__":

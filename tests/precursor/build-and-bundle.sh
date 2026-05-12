@@ -56,15 +56,17 @@ fi
 
 echo "==> xas built: $XAS_BIN ($(du -h "$XAS_BIN" | cut -f1))"
 
-# Step 2: bundle into a xous.img alongside vault. Matches §3.2 of
-# BUILDING.md exactly. Note `xas:$XAS_BIN` (with the `xas:` prefix) —
-# without it, xtask's CrateSpec parser records `name = None` and never
-# adds xas to app_names.
+# Step 2: bundle into a xous.img alongside vault + transientdisk.
+# `xas:$XAS_BIN` (with the `xas:` prefix) is required — without it,
+# xtask's CrateSpec parser records `name = None` and never adds xas
+# to app_names. `vault` and `transientdisk` are co-resident apps
+# matched by manifest.json entries on the xous-core fork.
 echo "==> Bundling kernel image (cargo xtask app-image-xip)"
 cd "$XOUS_CORE_DIR"
 cargo xtask app-image-xip \
     "xas:$XAS_BIN" \
     vault \
+    transientdisk \
     --kernel-feature big-heap \
     --gdb-stub \
     --git-describe "$GIT_DESCRIBE" \

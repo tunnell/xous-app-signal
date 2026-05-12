@@ -56,3 +56,9 @@ path = "examples/https_get.rs"
 [[example]]
 name = "signal_ws_keepalive"
 path = "examples/signal_ws_keepalive.rs"
+
+[dev-dependencies]
+# rcgen is used only by tests/tls_resumption.rs to mint a self-signed
+# cert for the in-process rustls server. 0.13.x emits rustls-pki-types
+# 1.x which matches the version pulled in by rustls 0.22.2.
+rcgen = "0.13"

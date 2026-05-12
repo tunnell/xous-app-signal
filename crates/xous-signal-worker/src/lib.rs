@@ -700,6 +700,18 @@ async fn manager_task(
     // None counts as a failure (we made no real progress).
     let mut consecutive_failures: u32 = 0;
 
+    // Bug B (issue #13): when the previous identified WS closed with
+    // code 4401 ("Reauthentication required") AND the immediate
+    // reconnect handshake returns HTTP 403, count those specifically.
+    // After `MAX_REAUTH_403S` in a row we treat it as terminal and
+    // emit `Event::SignalAuthExpired` — the c4b8fc8 UI handler resets
+    // to the pre-link Menu with a banner. The hosted run on
+    // 2026-05-11 captured 9+ consecutive 403s without recovery in the
+    // 5-minute window, so a low threshold beats waiting minutes for
+    // a never-arriving success. Reset to 0 on a successful reconnect
+    // and on real stream progress (mirrors `consecutive_failures`).
+    let mut consecutive_reauth_403s: u32 = 0;
+
     // First-touch profile-fetch queue. process_received pushes
     // (aci_uuid, profile_key_bytes) for any inbound message whose
     // sender wasn't in the contacts store but whose DataMessage
@@ -711,6 +723,23 @@ async fn manager_task(
     let mut pending_profile_fetches: Vec<(presage::libsignal_service::prelude::Uuid, [u8; 32])> = Vec::new();
     let mut fetched_or_failed: std::collections::HashSet<presage::libsignal_service::prelude::Uuid> =
         std::collections::HashSet::new();
+
+    // PLAN.md Stage -1 (refs xas#1): sends that exhaust the 6-attempt
+    // retry loop with a "websocket closing"-shaped error are deferred
+    // here instead of immediately surfacing as Event::SendError. The
+    // map is keyed by the message timestamp; the value is the deadline
+    // after which we give up and emit SendError. If a DELIVERY receipt
+    // arrives for that timestamp before the deadline, we remove the
+    // entry and emit Event::SendComplete instead — the recipient
+    // confirms the cipher actually landed despite the local error.
+    //
+    // Grace window of 30s is well above the worst-case observed
+    // pipeline (~4 min total but pipeline_ms per send ≪ that — the
+    // 4 min is dominated by the existing 62s retry-loop budget).
+    let mut pending_unconfirmed_sends: std::collections::HashMap<u64, std::time::Instant> =
+        std::collections::HashMap::new();
+    const PENDING_RECEIPT_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+
     // Cap on how many consecutive failures we tolerate before giving
     // up entirely. With backoff capped at 30s, this is roughly an
     // 8-minute window of constant retries before we surface a fatal
@@ -719,6 +748,34 @@ async fn manager_task(
     // failure that persists past this is something we genuinely
     // can't paper over.
     const MAX_CONSECUTIVE_FAILURES: u32 = 20;
+
+    // Bug B (issue #13): cap on 4401-then-403 sequences before we
+    // surface `Event::SignalAuthExpired`. 3 is intentionally low —
+    // hosted evidence shows that once this storm starts it doesn't
+    // recover within the user's patience window. Better to prompt
+    // re-link early than to spin silently for minutes.
+    const MAX_REAUTH_403S: u32 = 3;
+
+    // Bug B settling delay: on top of the normal exponential backoff,
+    // wait an extra 10s after a 4401 close before reconnecting. The
+    // hypothesized cause of the 4401→403 storm is the same
+    // server-side `(account, deviceId)` listener-slot eviction race
+    // that drives Bug A's 4409; giving the eviction time to complete
+    // before reopening is the cheapest mitigation. 10s is a starting
+    // value — if the hosted-verification packet capture shows the
+    // 403s still firing inside this window, bump to 30s.
+    const REAUTH_SETTLING_DELAY_MS: u64 = 10_000;
+
+    // Bug A (issue #1): server-side `(account, deviceId)` listener-slot
+    // eviction is asynchronous. When our WS closes (e.g. 1001 idle) and
+    // we reopen too quickly, the server's slot still holds the previous
+    // WS's listener and the new connection's auth handshake racing
+    // against the eviction can trigger displacement (4409) of our own
+    // previous WS. A small throttle on every non-zero-close-code
+    // reconnect gives the server time to clear the slot. 1 s is the
+    // starting heuristic; the hosted packet-capture pass will measure
+    // the actual eviction window and the maintainer may tune later.
+    const RECONNECT_THROTTLE_MS: u64 = 1_000;
 
     log::info!("worker: manager_task entered");
 
@@ -730,11 +787,41 @@ async fn manager_task(
         if consecutive_failures > 0 {
             // 1500 = 1s in ms with 1.5^0; the f64 path is fine in a
             // backoff context — we don't need millisecond accuracy.
-            let backoff_ms =
+            let base_backoff_ms =
                 (1000.0 * 1.5_f64.powi(consecutive_failures as i32 - 1)).min(30_000.0) as u64;
+
+            // Close-code-aware extra delay. Read once per iteration so
+            // the value can't shift mid-`select!`. The slot retains the
+            // last-closed WS until a successful reconnect replaces it
+            // (see `Manager::last_identified_close_code` docstring), so
+            // a streak of failed reconnects all see the same prior
+            // close code.
+            let prev_close = manager.last_identified_close_code().await;
+            let extra_delay_ms: u64 = match prev_close {
+                // Bug B (issue #13): 4401 "Reauthentication required".
+                // Add a settling delay so server-side (account,
+                // deviceId) listener-slot eviction completes before
+                // we reconnect.
+                Some(4401) => REAUTH_SETTLING_DELAY_MS,
+                // Bug A (issue #1): 4409 "Connected elsewhere" should
+                // not normally appear here — the err-arm below treats
+                // it as terminal and emits SignalConflictingDevice
+                // before we reach this backoff. Defensive throttle
+                // in case the err-arm policy is ever loosened.
+                Some(4409) => RECONNECT_THROTTLE_MS,
+                // 1001 idle close: small throttle to let the server's
+                // listener-slot eviction complete before our reconnect
+                // can race it. Same root cause as Bug A.
+                Some(1001) => RECONNECT_THROTTLE_MS,
+                // Any other close code or no prior close: existing
+                // exponential backoff only, no extra delay.
+                _ => 0,
+            };
+            let backoff_ms = base_backoff_ms + extra_delay_ms;
+
             log::info!(
-                "worker: manager_task — backoff {}ms before re-open (consecutive_failures={})",
-                backoff_ms, consecutive_failures,
+                "worker: manager_task — backoff {}ms before re-open (consecutive_failures={}, prev_close={:?}, extra_delay_ms={})",
+                backoff_ms, consecutive_failures, prev_close, extra_delay_ms,
             );
             futures_timer::Delay::new(std::time::Duration::from_millis(backoff_ms)).await;
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
@@ -761,12 +848,93 @@ async fn manager_task(
             }
             Err(e) => {
                 consecutive_failures = consecutive_failures.saturating_add(1);
+                let err_str = e.to_string();
                 log::warn!(
                     "worker: manager_task — receive_messages err (failure #{}): {}",
-                    consecutive_failures, e,
+                    consecutive_failures, err_str,
                 );
+
+                // Fetch the previous WS's close code once; reused by
+                // both the 4409 (Bug A) and 4401-403 (Bug B) checks
+                // below. Reads the slot of the most recently closed
+                // identified WS — see Manager::last_identified_close_code
+                // docstring for why this returns the *previous* WS's
+                // code after a failed reconnect.
+                let prev_close = manager.last_identified_close_code().await;
+
+                // Bug A (issue #1): if the previous identified WS
+                // was closed by the server with 4409 "Connected
+                // elsewhere", another authenticated WS for the same
+                // (account, deviceId) pair displaced ours. Auto-
+                // reconnecting would just self-displace again (the
+                // RECONNECT_THROTTLE_MS above gives the eviction
+                // time to complete, but if 4409 still surfaces here
+                // that means a *different* device — or our own
+                // race-prone reconnect — is genuinely interfering).
+                // Treat as terminal; emit SignalConflictingDevice and
+                // exit manager_task. The c4b8fc8/8ce9b9e UI handler
+                // resets to pre-link Menu with the banner.
+                if matches!(prev_close, Some(4409)) {
+                    log::warn!(
+                        "worker: manager_task — previous WS closed with 4409 \
+                         (Connected elsewhere); treating as terminal and emitting \
+                         Event::SignalConflictingDevice (issue #1 Bug A)",
+                    );
+                    let _ = event_tx
+                        .send(Event::SignalConflictingDevice(format!(
+                            "Server reported 4409 'Connected elsewhere' — another \
+                             device or app instance with this Signal account is \
+                             active. Receive-stream error: {}",
+                            err_str,
+                        )))
+                        .await;
+                    return;
+                }
+
+                // Bug B (issue #13): if the previous identified WS
+                // was closed by the server with code 4401 ("Reauth
+                // required") AND this fresh handshake came back as
+                // HTTP 403 Forbidden, count it specifically. After
+                // MAX_REAUTH_403S in a row, treat as terminal and
+                // surface SignalAuthExpired — the c4b8fc8 UI handler
+                // resets to pre-link Menu with a banner.
+                //
+                // 403 substring is a deliberate stringly-typed check:
+                // the error path is `xous-net-bridge` -> tungstenite
+                // -> libsignal-service-rs HttpTransport wrapping. The
+                // string "403 Forbidden" is the stable terminator
+                // (RFC 7231) in our formatter; a more typed approach
+                // would need cross-crate enums plumbed through
+                // ServiceError, which is out of scope for Stage I.
+                if matches!(prev_close, Some(4401)) && err_str.contains("403 Forbidden") {
+                    consecutive_reauth_403s = consecutive_reauth_403s.saturating_add(1);
+                    log::warn!(
+                        "worker: manager_task — 4401-then-403 #{}/{} (issue #13 Bug B)",
+                        consecutive_reauth_403s, MAX_REAUTH_403S,
+                    );
+                    if consecutive_reauth_403s >= MAX_REAUTH_403S {
+                        log::error!(
+                            "worker: manager_task — Signal auth permanently expired \
+                             (close code 4401 followed by {} consecutive 403s); \
+                             emitting Event::SignalAuthExpired",
+                            consecutive_reauth_403s,
+                        );
+                        let _ = event_tx
+                            .send(Event::SignalAuthExpired(format!(
+                                "Server requested reauthentication (code 4401); \
+                                 refreshed handshake rejected with HTTP 403 after \
+                                 {} retries.",
+                                consecutive_reauth_403s,
+                            )))
+                            .await;
+                        return;
+                    }
+                }
+
                 // Surface only the first error in a streak so the UI
-                // shows one banner per outage, not N.
+                // shows one banner per outage, not N. (SignalAuthExpired
+                // above is the exception — that's a terminal event, not
+                // a transient error banner.)
                 if consecutive_failures == 1 {
                     let _ = event_tx
                         .send(Event::ReceiveError(format!("receive_messages: {e}")))
@@ -784,8 +952,14 @@ async fn manager_task(
             announced = true;
         }
 
-        // Pump items + send-cmds.
+        // Pump items + send-cmds + pending-send timeout sweep.
         let exit: InnerExit = loop {
+            // Stage -1 sweep: scan pending_unconfirmed_sends each
+            // iteration; emit SendError for any whose grace window
+            // expired. The 1s select! timeout below bounds how late
+            // these can fire.
+            sweep_expired_pending_sends(&mut pending_unconfirmed_sends, &event_tx).await;
+
             select! {
                 item = stream.next().fuse() => {
                     match item {
@@ -794,9 +968,18 @@ async fn manager_task(
                             // Real progress on this stream — clear
                             // the failure counter so the next reopen
                             // (when handle_send forces one) doesn't
-                            // sleep at all.
+                            // sleep at all. Bug B (#13): also clear
+                            // the 4401-then-403 counter, since real
+                            // progress proves the auth path recovered.
                             consecutive_failures = 0;
-                            if !process_received(item, &store, &event_tx, &mut pending_profile_fetches).await {
+                            consecutive_reauth_403s = 0;
+                            if !process_received(
+                                item,
+                                &store,
+                                &event_tx,
+                                &mut pending_profile_fetches,
+                                &mut pending_unconfirmed_sends,
+                            ).await {
                                 // event_tx closed — bail.
                                 return;
                             }
@@ -822,6 +1005,10 @@ async fn manager_task(
                             break InnerExit::Shutdown;
                         }
                     }
+                }
+                _ = futures_timer::Delay::new(std::time::Duration::from_secs(1)).fuse() => {
+                    // Wake-up to re-run the pending-send sweep above.
+                    // No other state to touch here.
                 }
             }
         };
@@ -896,7 +1083,14 @@ async fn manager_task(
         match exit {
             InnerExit::Send(send) => {
                 log::info!("worker: manager_task — invoking handle_send");
-                handle_send(&mut manager, send, &event_tx).await;
+                handle_send(
+                    &mut manager,
+                    send,
+                    &event_tx,
+                    &mut pending_unconfirmed_sends,
+                    PENDING_RECEIPT_GRACE,
+                )
+                .await;
                 log::info!("worker: manager_task — handle_send returned, re-opening stream");
                 // Keep consecutive_failures as is. If handle_send
                 // failed because the WS was already dying, the
@@ -933,6 +1127,7 @@ async fn process_received(
     store: &PddbStore,
     event_tx: &Sender<Event>,
     pending_profile_fetches: &mut Vec<(presage::libsignal_service::prelude::Uuid, [u8; 32])>,
+    pending_unconfirmed_sends: &mut std::collections::HashMap<u64, std::time::Instant>,
 ) -> bool {
     use presage::libsignal_service::content::ContentBody;
     use presage::model::messages::Received;
@@ -959,6 +1154,33 @@ async fn process_received(
                     presage::libsignal_service::content::ContentBody::EditMessage(_) => "EditMessage",
                 }
             );
+            // PLAN.md Stage -1: peel off DELIVERY receipts here so
+            // they can confirm pending deferred sends. Other receipt
+            // types (READ, VIEWED) are not yet acted on; xas's UI
+            // doesn't surface read-state, so they fall through to the
+            // catch-all skip below.
+            if let ContentBody::ReceiptMessage(rm) = &content.body {
+                use presage::libsignal_service::proto::receipt_message::Type as RType;
+                let rtype = RType::try_from(rm.r#type.unwrap_or_default()).unwrap_or(RType::Delivery);
+                if rtype == RType::Delivery {
+                    for ts in &rm.timestamp {
+                        if pending_unconfirmed_sends.remove(ts).is_some() {
+                            log::info!(
+                                "worker/send: ts={} confirmed by DELIVERY receipt; emitting SendComplete",
+                                ts,
+                            );
+                            if event_tx
+                                .send(Event::SendComplete { timestamp: *ts })
+                                .await
+                                .is_err()
+                            {
+                                return false;
+                            }
+                        }
+                    }
+                }
+                return true;
+            }
             // Only surface text-bearing DataMessages for MVP.
             // Sync/receipt/typing messages have already been
             // absorbed by the store machinery presage runs
@@ -971,7 +1193,7 @@ async fn process_received(
                     .and_then(|s| s.message.as_ref())
                     .and_then(|dm| dm.body.clone())
                     .unwrap_or_default(),
-                _ => return true, // EditMessage / Receipt / Typing / Call — skip
+                _ => return true, // EditMessage / Typing / Call — skip
             };
             if body.is_empty() {
                 return true; // attachment- or reaction-only
@@ -1052,10 +1274,45 @@ async fn process_received(
 /// `Manager::send_message`. Always emits exactly one event:
 /// `SendComplete{timestamp}` on success, `SendError(reason)` on
 /// failure.
+/// PLAN.md Stage -1 helper: scan the deferred-send map for entries whose
+/// grace window expired without a delivery receipt; emit Event::SendError
+/// for each and remove from the map. Cheap (HashMap iteration); called
+/// every ~1s from manager_task's select! loop.
+async fn sweep_expired_pending_sends(
+    pending: &mut std::collections::HashMap<u64, std::time::Instant>,
+    event_tx: &Sender<Event>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let now = std::time::Instant::now();
+    let expired: Vec<u64> = pending
+        .iter()
+        .filter_map(|(ts, deadline)| if now >= *deadline { Some(*ts) } else { None })
+        .collect();
+    for ts in expired {
+        pending.remove(&ts);
+        log::info!(
+            "worker/send: pending ts={} grace expired with no delivery receipt; emitting SendError",
+            ts,
+        );
+        let _ = event_tx
+            .send(Event::SendError {
+                reason: "WebSocket closed during send and no delivery receipt arrived within \
+                         the grace window — recipient probably did not receive this message"
+                    .to_string(),
+                timestamp: Some(ts),
+            })
+            .await;
+    }
+}
+
 async fn handle_send(
     manager: &mut Manager<PddbStore, Registered>,
     send: InnerSend,
     event_tx: &Sender<Event>,
+    pending_unconfirmed_sends: &mut std::collections::HashMap<u64, std::time::Instant>,
+    pending_grace: std::time::Duration,
 ) {
     use futures::FutureExt;
     use presage::libsignal_service::content::ContentBody;
@@ -1190,11 +1447,21 @@ async fn handle_send(
         // inconsistent, but the alternative (manager_task dies, every
         // subsequent send returns "manager task died") is worse. The
         // surfaced panic message goes to the UI as a normal SendError.
+        let pipeline_start = std::time::Instant::now();
         let send_fut = std::panic::AssertUnwindSafe(
             manager.send_message(recipient.clone(), content_body.clone(), timestamp),
         );
         let outcome = send_fut.catch_unwind().await;
-        log::info!("worker/send: attempt {} returned", attempt);
+        let pipeline_ms = pipeline_start.elapsed().as_millis() as u64;
+        let result_kind = match &outcome {
+            Ok(Ok(())) => "ok",
+            Ok(Err(_)) => "err",
+            Err(_) => "panic",
+        };
+        log::info!(
+            "worker/send: attempt {} returned pipeline_ms={} result={}",
+            attempt, pipeline_ms, result_kind,
+        );
 
         match outcome {
             Ok(Ok(())) => {
@@ -1215,6 +1482,24 @@ async fn handle_send(
                     futures_timer::Delay::new(delay).await;
                     last_err = Some(msg);
                     continue;
+                }
+                // Stage -1 path: WS-closing-shaped errors after retry
+                // exhaustion go into the pending-receipt grace window.
+                // The cipher MAY have landed; we wait PENDING_RECEIPT_GRACE
+                // for a DELIVERY receipt to confirm before emitting
+                // SendError. Other error shapes (panic, identity
+                // mismatch, etc.) bypass the grace and surface
+                // immediately as before.
+                if retryable {
+                    let deadline = std::time::Instant::now() + pending_grace;
+                    pending_unconfirmed_sends.insert(timestamp, deadline);
+                    log::info!(
+                        "worker/send: ts={} retries exhausted with WsClosing-shaped error; \
+                         deferring SendError for {:?} pending delivery receipt",
+                        timestamp, pending_grace,
+                    );
+                    let _ = last_err.replace(msg);
+                    return;
                 }
                 let _ = event_tx
                     .send(Event::SendError {
@@ -1331,6 +1616,45 @@ mod tests {
         cmd_tx.send_blocking(Cmd::Shutdown).unwrap();
         let _ = event_rx.recv_blocking();
         handle.join().unwrap();
+    }
+
+    /// PLAN.md Stage -1 sweep helper: expired entries become
+    /// SendError; non-expired entries stay in the map. Verifies the
+    /// pure data-manipulation half of the deferred-send path; the
+    /// full DELIVERY-receipt round-trip needs an executor + mocked
+    /// manager and is not exercised here.
+    #[test]
+    fn sweep_expired_pending_sends_emits_send_error_for_expired_entries_only() {
+        use std::collections::HashMap;
+        use std::time::{Duration, Instant};
+
+        let (event_tx, event_rx) = async_channel::bounded::<Event>(8);
+        let mut pending: HashMap<u64, Instant> = HashMap::new();
+        let now = Instant::now();
+        pending.insert(100, now - Duration::from_secs(1)); // expired
+        pending.insert(200, now + Duration::from_secs(60)); // not yet
+        pending.insert(300, now - Duration::from_millis(1)); // expired
+
+        futures::executor::block_on(super::sweep_expired_pending_sends(
+            &mut pending,
+            &event_tx,
+        ));
+
+        // Two SendError events expected, for ts=100 and ts=300, in
+        // any order (HashMap iteration is unordered).
+        let mut got_ts: Vec<u64> = Vec::new();
+        while let Ok(e) = event_rx.try_recv() {
+            match e {
+                Event::SendError { timestamp: Some(ts), .. } => got_ts.push(ts),
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        got_ts.sort();
+        assert_eq!(got_ts, vec![100, 300]);
+        // ts=200 is still pending.
+        assert!(pending.contains_key(&200));
+        assert!(!pending.contains_key(&100));
+        assert!(!pending.contains_key(&300));
     }
 
     /// Dropping the cmd-channel sender (without sending Shutdown) is
