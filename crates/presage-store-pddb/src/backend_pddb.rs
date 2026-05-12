@@ -9,9 +9,11 @@
 //! - `get` opens with `create_dict=false, create_key=false` and
 //!   reads the whole key into a Vec<u8>. Returns `Ok(None)` on
 //!   `NotFound`, the bytes on `Ok`, error otherwise.
-//! - `put` opens with `create_dict=true, create_key=true`, writes
-//!   the value, calls `flush_writes` to commit. Releases the handle
-//!   on Drop.
+//! - `put` opens with `create_dict=true, create_key=true` and writes
+//!   the value. No client-side `flush_writes`: the PDDB server's
+//!   `Opcode::WriteKey` handler already calls `basis_cache.sync(...)`
+//!   on every write (see body for the line-cite), so `WriteKeyFlush`
+//!   is redundant. Releases the handle on Drop.
 //! - `delete` and `delete_dict` are direct opcodes; `NotFound` on
 //!   delete is mapped to `Ok(())` (idempotent).
 //! - `list_keys` calls `KeyCountInDict` + `ListKeyV2` chain, returns
@@ -121,8 +123,17 @@ impl KvBackend for PddbBackend {
         let mut handle = guard
             .open(dict, key, OpenOptions::create_all())
             .map_err(|e| map_ipc_err(e, "open for write"))?;
+        // Note: no explicit `handle.flush()` here. The PDDB server's
+        // `Opcode::WriteKey` handler at xous-core/services/pddb/src/
+        // main.rs:2293-2294 already calls `basis_cache.sync(...)` after
+        // every key_update with the comment "for now, do an expensive
+        // sync operation after every write to ensure data integrity",
+        // so data is durable on WriteKey return. A client-side
+        // `handle.flush()` issues `Opcode::WriteKeyFlush` whose handler
+        // (main.rs:2313-2329) also calls `basis_cache.sync(...)` — a
+        // redundant multi-basis sync per put. Dropping it saves 1 IPC
+        // and 1 basis sync per logical write.
         handle.write_all(value).map_err(|e| Error::backend(format!("write: {}", e)))?;
-        handle.flush().map_err(|e| Error::backend(format!("flush: {}", e)))?;
         Ok(())
     }
 
