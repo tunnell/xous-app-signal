@@ -1434,8 +1434,15 @@ impl<S: Store> Manager<S, Registered> {
             self.state
                 .service_configuration()
                 .unidentified_sender_trust_roots,
+            // service_id_string() emits "<uuid>" for ACI and
+            // "PNI:<uuid>" for PNI. libsignal_service::cipher reparses
+            // local_address.name() via parse_from_service_id_string()
+            // to derive local_service — a bare UUID is treated as ACI
+            // by default, so a PNI cipher built from pni.to_string()
+            // misclassifies itself and rejects PNI-addressed envelopes
+            // with "mismatching destination service id".
             ProtocolAddress::new(
-                self.state.data.service_ids.aci.to_string(),
+                self.state.data.service_ids.aci().service_id_string(),
                 self.state.device_id(),
             ),
         )
@@ -1448,7 +1455,7 @@ impl<S: Store> Manager<S, Registered> {
                 .service_configuration()
                 .unidentified_sender_trust_roots,
             ProtocolAddress::new(
-                self.state.data.service_ids.pni.to_string(),
+                self.state.data.service_ids.pni().service_id_string(),
                 self.state.device_id(),
             ),
         )

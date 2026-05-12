@@ -75,6 +75,16 @@ impl PddbBackend {
         }
     }
 
+    /// Trigger an interactive mount. Blocks until the user enters
+    /// the password and the mount completes, or the server returns
+    /// non-OK. Use this from test paths that need a guaranteed-mounted
+    /// PDDB before issuing put/get.
+    #[allow(dead_code)]
+    pub fn try_mount(&self) -> Result<bool, Error> {
+        let guard = self.lock()?;
+        guard.try_mount().map_err(|e| map_ipc_err(e, "try_mount"))
+    }
+
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, PddbClient>, Error> {
         self.client
             .lock()
@@ -97,6 +107,17 @@ impl KvBackend for PddbBackend {
 
     fn put(&self, dict: &str, key: &str, value: &[u8]) -> Result<(), Error> {
         let guard = self.lock()?;
+        // Refs #14: xous-core PDDB's `WriteKey` opcode passes
+        // `truncate=false` to `key_update`, so overwriting an
+        // existing larger key leaves the trailing bytes intact and
+        // `get` returns them concatenated to the new value. Delete
+        // first to force a fresh allocation. NotFound on a never-
+        // -written key is normal — ignore.
+        match guard.delete_key(dict, key) {
+            Ok(()) => {}
+            Err(e) if e.kind == IpcErrorKind::NotFound => {}
+            Err(e) => return Err(map_ipc_err(e, "put: pre-delete")),
+        }
         let mut handle = guard
             .open(dict, key, OpenOptions::create_all())
             .map_err(|e| map_ipc_err(e, "open for write"))?;

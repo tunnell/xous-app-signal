@@ -27,6 +27,7 @@ pub type ApiToken = [u32; 3];
 #[repr(u32)]
 pub enum Opcode {
     IsMounted = 0,
+    TryMount = 1,
     DeleteKey = 8,
     DeleteDict = 9,
     KeyAttributes = 10,
