@@ -39,6 +39,14 @@ probe-pddb = []
 pddb-real = ["presage-store-pddb/pddb-backend"]
 probe-pddb-real = ["pddb-real"]
 
+# Probe that exercises `BufferingBackend` + `BatchGuard` against a
+# `MockBackend` (no real PDDB required). Drives a synthetic
+# "send-shaped" sequence — multiple writes through Store traits
+# wrapped in a batch scope — and logs UART lines for the
+# `xas-send-batch.robot` Renode test. Validates the abstraction
+# compiles for rv32 and works under the real xous async runtime.
+probe-send-batch = []
+
 # Hardware auto-link probe.
 # When enabled (rv32-xous only), main() fires Cmd::LinkDevice after
 # worker spawn and renders a QR code on the LCD via xous-modals-ipc
