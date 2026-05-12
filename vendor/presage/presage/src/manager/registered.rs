@@ -273,6 +273,30 @@ impl<S: Store> Manager<S, Registered> {
         }
     }
 
+    /// Returns the close-frame code observed on the currently-cached
+    /// identified WebSocket, or `None` if no WS has been opened yet or
+    /// the current WS is still open.
+    ///
+    /// **What "currently-cached" means for retry-decision logic:** the
+    /// slot reads as the *previous* identified WS after a `replace()`
+    /// failure — `identified_websocket()` only calls `replace()` on a
+    /// successful `ws()` handshake, so if a reconnect handshake fails
+    /// (e.g. with HTTP 403), the slot still holds the just-closed WS
+    /// from before the failed reconnect attempt. That's exactly what
+    /// callers want for retry-decision logic: they see the close code
+    /// that triggered the reconnect, not zero from a brand-new WS
+    /// that never made it onto the wire.
+    ///
+    /// Added for xas issue #13 (Bug B): after `receive_messages()`
+    /// returns a transport error, the worker reads this to distinguish
+    /// `4401 "Reauthentication required"` (apply a settling delay then
+    /// re-test; emit `Event::SignalAuthExpired` after N terminal 403s)
+    /// from `1001` idle closes and `4409` (issue #1 Bug A).
+    pub async fn last_identified_close_code(&self) -> Option<u16> {
+        let ws_guard = self.state.identified_websocket.lock().await;
+        ws_guard.as_ref().and_then(|ws| ws.last_close_code())
+    }
+
     /// Request the primary device to encrypt & send all of its contacts.
     ///
     /// **Note**: If successful, the contacts are not yet received and stored, but will only be

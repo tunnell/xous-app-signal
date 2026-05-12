@@ -700,6 +700,18 @@ async fn manager_task(
     // None counts as a failure (we made no real progress).
     let mut consecutive_failures: u32 = 0;
 
+    // Bug B (issue #13): when the previous identified WS closed with
+    // code 4401 ("Reauthentication required") AND the immediate
+    // reconnect handshake returns HTTP 403, count those specifically.
+    // After `MAX_REAUTH_403S` in a row we treat it as terminal and
+    // emit `Event::SignalAuthExpired` — the c4b8fc8 UI handler resets
+    // to the pre-link Menu with a banner. The hosted run on
+    // 2026-05-11 captured 9+ consecutive 403s without recovery in the
+    // 5-minute window, so a low threshold beats waiting minutes for
+    // a never-arriving success. Reset to 0 on a successful reconnect
+    // and on real stream progress (mirrors `consecutive_failures`).
+    let mut consecutive_reauth_403s: u32 = 0;
+
     // First-touch profile-fetch queue. process_received pushes
     // (aci_uuid, profile_key_bytes) for any inbound message whose
     // sender wasn't in the contacts store but whose DataMessage
@@ -737,6 +749,34 @@ async fn manager_task(
     // can't paper over.
     const MAX_CONSECUTIVE_FAILURES: u32 = 20;
 
+    // Bug B (issue #13): cap on 4401-then-403 sequences before we
+    // surface `Event::SignalAuthExpired`. 3 is intentionally low —
+    // hosted evidence shows that once this storm starts it doesn't
+    // recover within the user's patience window. Better to prompt
+    // re-link early than to spin silently for minutes.
+    const MAX_REAUTH_403S: u32 = 3;
+
+    // Bug B settling delay: on top of the normal exponential backoff,
+    // wait an extra 10s after a 4401 close before reconnecting. The
+    // hypothesized cause of the 4401→403 storm is the same
+    // server-side `(account, deviceId)` listener-slot eviction race
+    // that drives Bug A's 4409; giving the eviction time to complete
+    // before reopening is the cheapest mitigation. 10s is a starting
+    // value — if the hosted-verification packet capture shows the
+    // 403s still firing inside this window, bump to 30s.
+    const REAUTH_SETTLING_DELAY_MS: u64 = 10_000;
+
+    // Bug A (issue #1): server-side `(account, deviceId)` listener-slot
+    // eviction is asynchronous. When our WS closes (e.g. 1001 idle) and
+    // we reopen too quickly, the server's slot still holds the previous
+    // WS's listener and the new connection's auth handshake racing
+    // against the eviction can trigger displacement (4409) of our own
+    // previous WS. A small throttle on every non-zero-close-code
+    // reconnect gives the server time to clear the slot. 1 s is the
+    // starting heuristic; the hosted packet-capture pass will measure
+    // the actual eviction window and the maintainer may tune later.
+    const RECONNECT_THROTTLE_MS: u64 = 1_000;
+
     log::info!("worker: manager_task entered");
 
     'outer: loop {
@@ -747,11 +787,41 @@ async fn manager_task(
         if consecutive_failures > 0 {
             // 1500 = 1s in ms with 1.5^0; the f64 path is fine in a
             // backoff context — we don't need millisecond accuracy.
-            let backoff_ms =
+            let base_backoff_ms =
                 (1000.0 * 1.5_f64.powi(consecutive_failures as i32 - 1)).min(30_000.0) as u64;
+
+            // Close-code-aware extra delay. Read once per iteration so
+            // the value can't shift mid-`select!`. The slot retains the
+            // last-closed WS until a successful reconnect replaces it
+            // (see `Manager::last_identified_close_code` docstring), so
+            // a streak of failed reconnects all see the same prior
+            // close code.
+            let prev_close = manager.last_identified_close_code().await;
+            let extra_delay_ms: u64 = match prev_close {
+                // Bug B (issue #13): 4401 "Reauthentication required".
+                // Add a settling delay so server-side (account,
+                // deviceId) listener-slot eviction completes before
+                // we reconnect.
+                Some(4401) => REAUTH_SETTLING_DELAY_MS,
+                // Bug A (issue #1): 4409 "Connected elsewhere" should
+                // not normally appear here — the err-arm below treats
+                // it as terminal and emits SignalConflictingDevice
+                // before we reach this backoff. Defensive throttle
+                // in case the err-arm policy is ever loosened.
+                Some(4409) => RECONNECT_THROTTLE_MS,
+                // 1001 idle close: small throttle to let the server's
+                // listener-slot eviction complete before our reconnect
+                // can race it. Same root cause as Bug A.
+                Some(1001) => RECONNECT_THROTTLE_MS,
+                // Any other close code or no prior close: existing
+                // exponential backoff only, no extra delay.
+                _ => 0,
+            };
+            let backoff_ms = base_backoff_ms + extra_delay_ms;
+
             log::info!(
-                "worker: manager_task — backoff {}ms before re-open (consecutive_failures={})",
-                backoff_ms, consecutive_failures,
+                "worker: manager_task — backoff {}ms before re-open (consecutive_failures={}, prev_close={:?}, extra_delay_ms={})",
+                backoff_ms, consecutive_failures, prev_close, extra_delay_ms,
             );
             futures_timer::Delay::new(std::time::Duration::from_millis(backoff_ms)).await;
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
@@ -778,12 +848,93 @@ async fn manager_task(
             }
             Err(e) => {
                 consecutive_failures = consecutive_failures.saturating_add(1);
+                let err_str = e.to_string();
                 log::warn!(
                     "worker: manager_task — receive_messages err (failure #{}): {}",
-                    consecutive_failures, e,
+                    consecutive_failures, err_str,
                 );
+
+                // Fetch the previous WS's close code once; reused by
+                // both the 4409 (Bug A) and 4401-403 (Bug B) checks
+                // below. Reads the slot of the most recently closed
+                // identified WS — see Manager::last_identified_close_code
+                // docstring for why this returns the *previous* WS's
+                // code after a failed reconnect.
+                let prev_close = manager.last_identified_close_code().await;
+
+                // Bug A (issue #1): if the previous identified WS
+                // was closed by the server with 4409 "Connected
+                // elsewhere", another authenticated WS for the same
+                // (account, deviceId) pair displaced ours. Auto-
+                // reconnecting would just self-displace again (the
+                // RECONNECT_THROTTLE_MS above gives the eviction
+                // time to complete, but if 4409 still surfaces here
+                // that means a *different* device — or our own
+                // race-prone reconnect — is genuinely interfering).
+                // Treat as terminal; emit SignalConflictingDevice and
+                // exit manager_task. The c4b8fc8/8ce9b9e UI handler
+                // resets to pre-link Menu with the banner.
+                if matches!(prev_close, Some(4409)) {
+                    log::warn!(
+                        "worker: manager_task — previous WS closed with 4409 \
+                         (Connected elsewhere); treating as terminal and emitting \
+                         Event::SignalConflictingDevice (issue #1 Bug A)",
+                    );
+                    let _ = event_tx
+                        .send(Event::SignalConflictingDevice(format!(
+                            "Server reported 4409 'Connected elsewhere' — another \
+                             device or app instance with this Signal account is \
+                             active. Receive-stream error: {}",
+                            err_str,
+                        )))
+                        .await;
+                    return;
+                }
+
+                // Bug B (issue #13): if the previous identified WS
+                // was closed by the server with code 4401 ("Reauth
+                // required") AND this fresh handshake came back as
+                // HTTP 403 Forbidden, count it specifically. After
+                // MAX_REAUTH_403S in a row, treat as terminal and
+                // surface SignalAuthExpired — the c4b8fc8 UI handler
+                // resets to pre-link Menu with a banner.
+                //
+                // 403 substring is a deliberate stringly-typed check:
+                // the error path is `xous-net-bridge` -> tungstenite
+                // -> libsignal-service-rs HttpTransport wrapping. The
+                // string "403 Forbidden" is the stable terminator
+                // (RFC 7231) in our formatter; a more typed approach
+                // would need cross-crate enums plumbed through
+                // ServiceError, which is out of scope for Stage I.
+                if matches!(prev_close, Some(4401)) && err_str.contains("403 Forbidden") {
+                    consecutive_reauth_403s = consecutive_reauth_403s.saturating_add(1);
+                    log::warn!(
+                        "worker: manager_task — 4401-then-403 #{}/{} (issue #13 Bug B)",
+                        consecutive_reauth_403s, MAX_REAUTH_403S,
+                    );
+                    if consecutive_reauth_403s >= MAX_REAUTH_403S {
+                        log::error!(
+                            "worker: manager_task — Signal auth permanently expired \
+                             (close code 4401 followed by {} consecutive 403s); \
+                             emitting Event::SignalAuthExpired",
+                            consecutive_reauth_403s,
+                        );
+                        let _ = event_tx
+                            .send(Event::SignalAuthExpired(format!(
+                                "Server requested reauthentication (code 4401); \
+                                 refreshed handshake rejected with HTTP 403 after \
+                                 {} retries.",
+                                consecutive_reauth_403s,
+                            )))
+                            .await;
+                        return;
+                    }
+                }
+
                 // Surface only the first error in a streak so the UI
-                // shows one banner per outage, not N.
+                // shows one banner per outage, not N. (SignalAuthExpired
+                // above is the exception — that's a terminal event, not
+                // a transient error banner.)
                 if consecutive_failures == 1 {
                     let _ = event_tx
                         .send(Event::ReceiveError(format!("receive_messages: {e}")))
@@ -817,8 +968,11 @@ async fn manager_task(
                             // Real progress on this stream — clear
                             // the failure counter so the next reopen
                             // (when handle_send forces one) doesn't
-                            // sleep at all.
+                            // sleep at all. Bug B (#13): also clear
+                            // the 4401-then-403 counter, since real
+                            // progress proves the auth path recovered.
                             consecutive_failures = 0;
+                            consecutive_reauth_403s = 0;
                             if !process_received(
                                 item,
                                 &store,

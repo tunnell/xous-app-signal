@@ -1612,6 +1612,56 @@ fn handle_worker_event(
             app.selected = MenuItem::Link;
             let _ = app.render();
         }
+        Event::SignalAuthExpired(reason) => {
+            log::warn!("xas/gam_app: SignalAuthExpired: {}", reason);
+            // Mirrors LoggedOut, but the reset is involuntary:
+            // server-forced WS 4401 + failed reauth (see #13). The
+            // banner tells the user why their app suddenly looks
+            // unlinked, so they know to re-link rather than thinking
+            // the device is generally broken.
+            app.linked = false;
+            app.messages.clear();
+            app.dialogues.clear();
+            app.home_focus = 0;
+            app.compose_buffer.clear();
+            app.linking_in_progress = false;
+            app.account_device_name = None;
+            app.account_aci = None;
+            app.account_phone = None;
+            app.last_status = format!(
+                "Signal authentication expired:\n{}\n\nPlease re-link.",
+                reason
+            );
+            app.screen = Screen::Menu;
+            app.selected = MenuItem::Link;
+            let _ = app.render();
+        }
+        Event::SignalConflictingDevice(reason) => {
+            log::warn!("xas/gam_app: SignalConflictingDevice: {}", reason);
+            // Mirrors LoggedOut + SignalAuthExpired, but the trigger
+            // is server-forced WS 4409 "Connected elsewhere" — another
+            // authenticated WS for the same (account, deviceId) pair
+            // displaced ours. Auto-reconnect would self-displace, so
+            // the worker treats this as terminal. The banner tells
+            // the user a different app instance is active and they
+            // need to re-link this device to use it.
+            app.linked = false;
+            app.messages.clear();
+            app.dialogues.clear();
+            app.home_focus = 0;
+            app.compose_buffer.clear();
+            app.linking_in_progress = false;
+            app.account_device_name = None;
+            app.account_aci = None;
+            app.account_phone = None;
+            app.last_status = format!(
+                "Another device took over:\n{}\n\nPlease re-link.",
+                reason
+            );
+            app.screen = Screen::Menu;
+            app.selected = MenuItem::Link;
+            let _ = app.render();
+        }
         Event::UsernameResolveResult(result) => {
             log::info!("xas/gam_app: UsernameResolveResult: {:?}", result);
             // The Cmd::ResolveUsername caller stores its pending state
