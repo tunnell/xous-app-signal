@@ -76,6 +76,16 @@ fn parse_pem_roots(pem: &[u8]) -> io::Result<RootCertStore> {
 /// build the config once via [`build_tls_config`] and reuse the resulting
 /// `Arc<ClientConfig>` so the in-memory session-ticket cache survives
 /// across reconnects (this is what enables TLS 1.3 PSK resumption).
+///
+/// The TLS handshake is driven to completion here, before the function
+/// returns. Previously it was lazy (rustls completed it on the caller's
+/// first I/O via `StreamOwned`), but the iter-1 instrumentation could
+/// not measure handshake cost in isolation — so iter-3 needs to see the
+/// handshake as its own distinct phase. All current callers issue I/O
+/// immediately after this returns, so making it eager changes no
+/// observable behavior; it just relocates the wall-clock cost (and the
+/// failure mode for handshake errors) from the caller's first read/write
+/// to this function.
 pub fn tls_connect_with_config(
     host: &str,
     port: u16,
@@ -91,16 +101,8 @@ pub fn tls_connect_with_config(
 
     let sock = TcpStream::connect((host, port))?;
     let setup_ms = t_start.elapsed().as_millis() as u64;
-    // Lazy TLS handshake: rustls completes the handshake on first I/O via
-    // StreamOwned. setup_ms covers ClientConnection setup + TCP connect.
-    // Full handshake cost shows up in the caller's first read/write; the
-    // pipeline_ms log inside the worker captures the end-to-end cost.
     tracing::info!(host, port, setup_ms, "tls_connect: setup-phase complete");
-    tracing::info!(
-        "perf/net: tls_connect exit host={} port={} server_name_ms={} client_conn_ms={} tcp_ms={} setup_total_ms={} (full handshake fires on caller's first read/write)",
-        host, port, _perf_sn_ms, _perf_conn_ms - _perf_sn_ms,
-        setup_ms - _perf_conn_ms, setup_ms
-    );
+
     // Short TCP read timeout. WebSocket users (`ws_pump.rs::reader_loop`)
     // hold a mutex across the blocking `WebSocket::read()`; without a
     // timeout, the reader would block forever waiting for an inbound
@@ -111,7 +113,61 @@ pub fn tls_connect_with_config(
     // `Err(WouldBlock|TimedOut)` periodically; the reader catches that
     // and re-loops, briefly releasing the mutex.
     sock.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
-    Ok(StreamOwned::new(conn, sock))
+
+    let mut stream = StreamOwned::new(conn, sock);
+
+    // Drive the handshake to completion. On TLS 1.3 PSK resumption rustls
+    // performs ~1 RTT of symmetric crypto + HKDF; on a full handshake it
+    // does ECDHE + cert verification, which on rv32 with software crypto
+    // is roughly an order of magnitude more wall-time. Logging
+    // handshake_ms is therefore enough to distinguish the two even
+    // without a direct "was resumed" flag (rustls 0.22 does not expose
+    // one publicly).
+    let hs_start = std::time::Instant::now();
+    if let Err(e) = stream.conn.complete_io(&mut stream.sock) {
+        tracing::info!(
+            "perf/net: tls_connect handshake_error host={} port={} setup_total_ms={} handshake_ms={} err={}",
+            host, port, setup_ms, hs_start.elapsed().as_millis() as u64, e
+        );
+        return Err(e);
+    }
+    let handshake_ms = hs_start.elapsed().as_millis() as u64;
+
+    let proto = stream
+        .conn
+        .protocol_version()
+        .map(|v| format!("{:?}", v))
+        .unwrap_or_else(|| "?".to_string());
+    let cipher = stream
+        .conn
+        .negotiated_cipher_suite()
+        .map(|s| format!("{:?}", s.suite()))
+        .unwrap_or_else(|| "?".to_string());
+    // peer_certificates() is the closest public signal in rustls 0.22 for
+    // resumption: on a TLS 1.3 PSK resumption the server skips the
+    // Certificate message, so this is `None` (or empty). On a full
+    // handshake it carries the chain rustls just validated. iter-3
+    // empirical validation against chat.signal.org will confirm the
+    // mapping holds for our cipher/curve negotiation.
+    let peer_certs = stream
+        .conn
+        .peer_certificates()
+        .map(|c| c.len())
+        .unwrap_or(0);
+    tracing::info!(
+        "perf/net: tls_connect exit host={} port={} server_name_ms={} client_conn_ms={} tcp_ms={} setup_total_ms={} handshake_ms={} proto={} cipher={} peer_certs={}",
+        host, port,
+        _perf_sn_ms,
+        _perf_conn_ms - _perf_sn_ms,
+        setup_ms - _perf_conn_ms,
+        setup_ms,
+        handshake_ms,
+        proto,
+        cipher,
+        peer_certs
+    );
+
+    Ok(stream)
 }
 
 /// Convenience wrapper for one-shot callers (examples, tests). Builds a
