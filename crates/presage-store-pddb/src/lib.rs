@@ -255,7 +255,9 @@ impl PddbStore {
     /// calling twice in a row is cheap (second call sees an empty
     /// dirty set).
     pub fn flush_sessions(&self) -> Result<usize, Error> {
-        use protocol::session_store::SessionBundle;
+        use protocol::session_store::{
+            SessionBundle, backend_get_session_bundle, backend_put_session_bundle,
+        };
 
         let mut dirty = self
             .session_dirty
@@ -295,12 +297,12 @@ impl PddbStore {
             // the dirty changes. Devices not touched in this flush
             // pass their bytes through unchanged.
             let mut bundle: SessionBundle =
-                backend_get_json(&*self.backend, &dict, &name)?.unwrap_or_default();
+                backend_get_session_bundle(&*self.backend, &dict, &name)?.unwrap_or_default();
             for (device_id, ser) in entries {
                 bundle.insert(device_id, ser);
                 written += 1;
             }
-            backend_put_json(&*self.backend, &dict, &name, &bundle)?;
+            backend_put_session_bundle(&*self.backend, &dict, &name, &bundle)?;
         }
         dirty.clear();
         Ok(written)
