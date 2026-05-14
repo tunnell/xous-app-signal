@@ -14,3 +14,13 @@ logs/
 report.html
 robot_output.xml
 snapshots/
+
+# xas-mcp local config (sample is `tools/mcp-server/.env.example`).
+tools/mcp-server/.env
+# Python build / cache artefacts under the MCP server.
+tools/mcp-server/**/__pycache__/
+tools/mcp-server/**/*.egg-info/
+tools/mcp-server/build/
+tools/mcp-server/.pytest_cache/
+tools/mcp-server/.mypy_cache/
+tools/mcp-server/.ruff_cache/

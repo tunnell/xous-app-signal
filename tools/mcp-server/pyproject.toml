@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xas-mcp"
+version = "0.1.0"
+description = "MCP server wrapping xas testing infrastructure (build, flash, UART, hosted/renode tests) for Precursor PVT2 hardware."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "AGPL-3.0-or-later" }
+authors = [
+    { name = "tunnell" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = [
+    # Official MCP Python SDK; ships FastMCP under `mcp.server.fastmcp`.
+    "mcp>=1.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "pytest-mock>=3",
+    "ruff>=0.4",
+    "mypy>=1.8",
+]
+
+[project.scripts]
+# Each CLI is also addressable as `python -m xas_mcp.cli.<name>`; the
+# console-script entries below are convenience shortcuts.
+xas-mcp-server = "xas_mcp.server:main"
+xas-build-and-bundle = "xas_mcp.cli.build_and_bundle:main"
+xas-flash-via-pi = "xas_mcp.cli.flash_via_pi:main"
+xas-flash-direct = "xas_mcp.cli.flash_direct:main"
+xas-flash-status = "xas_mcp.cli.flash_status:main"
+xas-watch-uart = "xas_mcp.cli.watch_uart:main"
+xas-run-renode-tests = "xas_mcp.cli.run_renode_tests:main"
+xas-test-link-qr = "xas_mcp.cli.test_link_qr:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+strict = true
+python_version = "3.10"
+files = ["src/xas_mcp"]
+mypy_path = "src"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
