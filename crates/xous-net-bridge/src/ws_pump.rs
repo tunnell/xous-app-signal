@@ -292,10 +292,18 @@ fn writer_loop(ws: Arc<Mutex<WebSocket<RustlsStream>>>, rx: async_channel::Recei
                 );
             }
             Err(e) => {
-                tracing::warn!(frame_count, kind, ?e, "ws writer: send failed, exiting");
+                // Distinguish OS-level write-timeout (i.e. `set_write_timeout`
+                // firing on the inner TCP socket — refs #16) from protocol
+                // errors so future hardware traces can grep for write-timeout
+                // firings.
+                let write_timed_out = matches!(&e,
+                    tungstenite::Error::Io(io_err)
+                        if io_err.kind() == std::io::ErrorKind::TimedOut
+                            || io_err.kind() == std::io::ErrorKind::WouldBlock);
+                tracing::warn!(frame_count, kind, ?e, write_timed_out, "ws writer: send failed, exiting");
                 tracing::info!(
-                    "perf/net: ws send_err kind={} payload_len={} send_ms={} err={:?}",
-                    kind, payload_len, _perf_send_ms, e
+                    "perf/net: ws send_err kind={} payload_len={} send_ms={} write_timed_out={} err={:?}",
+                    kind, payload_len, _perf_send_ms, write_timed_out, e
                 );
                 break;
             }

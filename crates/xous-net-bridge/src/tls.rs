@@ -111,6 +111,9 @@ pub fn tls_connect_with_config(
     // `Err(WouldBlock|TimedOut)` periodically; the reader catches that
     // and re-loops, briefly releasing the mutex.
     sock.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+    // Bound writer's TCP retransmit budget; without this, a server-initiated
+    // Close mid-write blocks ~89 s on hardware. Refs #16.
+    sock.set_write_timeout(Some(std::time::Duration::from_secs(30)))?;
     Ok(StreamOwned::new(conn, sock))
 }
 

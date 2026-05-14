@@ -117,6 +117,11 @@ fn sync_execute(
     if let Err(e) = stream.sock.set_read_timeout(Some(_timeout)) {
         tracing::debug!("could not set read timeout: {e}");
     }
+    // Bound writer's TCP retransmit budget; without this, a server-initiated
+    // Close mid-write blocks ~89 s on hardware. Refs #16.
+    if let Err(e) = stream.sock.set_write_timeout(Some(_timeout)) {
+        tracing::debug!("could not set write timeout: {e}");
+    }
 
     // Construct the request bytes.
     let mut request = Vec::with_capacity(256);
