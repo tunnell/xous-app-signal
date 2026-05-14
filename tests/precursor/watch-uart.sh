@@ -1,48 +1,20 @@
 #!/usr/bin/env bash
-# Tail the UART log captured by a long-running screen session on the Pi.
+# Thin shim. Real logic in
+# tools/mcp-server/src/xas_mcp/cli/watch_uart.py.
 #
-# Prerequisites:
-#   - PI_HOST set
-#   - A screen session named 'uart' already running on the Pi against
-#     the UART tty (e.g., /dev/ttyAMA0) writing to $PI_UART_LOG.
-#     Set this up once on the Pi:
-#       mkdir -p ~/uart-logs
-#       screen -dmS uart -L -Logfile ~/uart-logs/precursor-uart.log /dev/ttyAMA0 115200
-#
-# Env vars (defaults shown):
-#   PI_HOST=         (required)
-#   PI_UART_LOG=~/uart-logs/precursor-uart.log
-#   FOLLOW=1         (1 = tail -f, 0 = print last 200 lines and exit)
+# Behavior matches the old standalone script. Default = stream live
+# (Ctrl-C to stop). For the old `FOLLOW=0` one-shot mode, pass
+# `--lines 200` (or any N). New: `--perf` parses iter-1
+# instrumentation lines into structured rows.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-PI_UART_LOG="${PI_UART_LOG:-~/uart-logs/precursor-uart.log}"
-FOLLOW="${FOLLOW:-1}"
-
-if [[ -z "${PI_HOST:-}" ]]; then
-    echo "ERROR: PI_HOST not set." >&2
-    echo "  export PI_HOST=pi@10.0.0.42" >&2
-    exit 1
+# Honor the old FOLLOW=0 env var convention.
+extra=()
+if [[ "${FOLLOW:-1}" == "0" ]]; then
+    extra=("--lines" "200")
 fi
 
-# Confirm screen session is alive.
-if ! ssh "$PI_HOST" 'screen -ls | grep -q "\.uart"'; then
-    echo "WARNING: no screen session named 'uart' on $PI_HOST." >&2
-    echo "  Start one with:" >&2
-    echo "    ssh $PI_HOST 'mkdir -p ~/uart-logs && screen -dmS uart -L -Logfile ~/uart-logs/precursor-uart.log /dev/ttyAMA0 115200'" >&2
-    echo "  Continuing — will tail the log file if it exists." >&2
-fi
-
-if ! ssh "$PI_HOST" "test -f $PI_UART_LOG"; then
-    echo "ERROR: $PI_UART_LOG does not exist on $PI_HOST." >&2
-    echo "  The screen session is probably not writing to where this script expects." >&2
-    echo "  Override with:  PI_UART_LOG=/some/other/path bash tests/precursor/watch-uart.sh" >&2
-    exit 1
-fi
-
-if [[ "$FOLLOW" == "1" ]]; then
-    echo "==> tailing $PI_HOST:$PI_UART_LOG (Ctrl-C to stop)"
-    ssh "$PI_HOST" "tail -F $PI_UART_LOG"
-else
-    echo "==> last 200 lines of $PI_HOST:$PI_UART_LOG"
-    ssh "$PI_HOST" "tail -200 $PI_UART_LOG"
-fi
+exec env PYTHONPATH="$REPO_ROOT/tools/mcp-server/src${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m xas_mcp.cli.watch_uart "${extra[@]}" "$@"
