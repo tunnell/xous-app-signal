@@ -1322,6 +1322,9 @@ async fn handle_send(
     use presage::store::ContentsStore;
 
     let timestamp = send.timestamp;
+    let _perf_handle_send_start = std::time::Instant::now();
+    log::info!("perf/cold-send: START ts={} body_len={}", timestamp, send.body.len());
+    log::info!("perf/send: handle_send entry ts={} body_len={}", timestamp, send.body.len());
     log::info!(
         "worker/send: handle_send entered; recipient_raw={:?} body_len={} ts={}",
         send.recipient,
@@ -1480,11 +1483,21 @@ async fn handle_send(
         // subsequent send returns "manager task died") is worse. The
         // surfaced panic message goes to the UI as a normal SendError.
         let pipeline_start = std::time::Instant::now();
+        log::info!(
+            "perf/send: batch_scope_enter ts={} attempt={} buffered={}",
+            timestamp, attempt,
+            batch_guard.as_ref().map(|g| g.buffered_len()).unwrap_or(0)
+        );
         let send_fut = std::panic::AssertUnwindSafe(
             manager.send_message(recipient.clone(), content_body.clone(), timestamp),
         );
         let outcome = send_fut.catch_unwind().await;
         let pipeline_ms = pipeline_start.elapsed().as_millis() as u64;
+        log::info!(
+            "perf/send: manager.send_message returned ts={} attempt={} pipeline_ms={} result={:?}",
+            timestamp, attempt, pipeline_ms,
+            match &outcome { Ok(Ok(())) => "ok", Ok(Err(_)) => "err", Err(_) => "panic" }
+        );
         let result_kind = match &outcome {
             Ok(Ok(())) => "ok",
             Ok(Err(_)) => "err",
@@ -1505,6 +1518,8 @@ async fn handle_send(
                 // `Received::QueueEmpty` (see flush_sessions site
                 // earlier in this file), opening a wider crash
                 // window between wire-send and durability.
+                let _perf_pre_commit = std::time::Instant::now();
+                let _perf_buffered_at_commit = batch_guard.as_ref().map(|g| g.buffered_len()).unwrap_or(0);
                 if let Some(g) = batch_guard {
                     match g.commit() {
                         Ok(n) => log::info!(
@@ -1517,10 +1532,22 @@ async fn handle_send(
                         ),
                     }
                 }
+                let _perf_commit_ms = _perf_pre_commit.elapsed().as_millis();
+                let _perf_pre_flush = std::time::Instant::now();
                 if let Err(e) = store_for_batch.flush_sessions() {
                     log::warn!("worker/send: flush_sessions after batch failed: {}", e);
                 }
+                let _perf_flush_ms = _perf_pre_flush.elapsed().as_millis();
+                log::info!(
+                    "perf/send: batch_scope_commit ts={} attempt={} buffered_at_commit={} commit_ms={} flush_sessions_ms={}",
+                    timestamp, attempt, _perf_buffered_at_commit,
+                    _perf_commit_ms, _perf_flush_ms
+                );
                 log::info!("worker/send: SendComplete ts={} (attempt {})", timestamp, attempt);
+                log::info!(
+                    "perf/cold-send: END ts={} attempt={} handle_send_total_ms={}",
+                    timestamp, attempt, _perf_handle_send_start.elapsed().as_millis()
+                );
                 let _ = event_tx.send(Event::SendComplete { timestamp }).await;
                 return;
             }

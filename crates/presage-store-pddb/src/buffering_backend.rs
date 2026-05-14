@@ -116,7 +116,10 @@ impl BufferingBackend {
     pub fn begin_batch(&self) -> Result<BatchGuard<'_>, Error> {
         // Compare-and-swap: only succeed if no batch is active.
         match self.batching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => Ok(BatchGuard { backend: self, committed: false }),
+            Ok(_) => {
+                tracing::info!("perf/store: BufferingBackend::begin_batch opened");
+                Ok(BatchGuard { backend: self, committed: false })
+            }
             Err(_) => Err(Error::backend("batch already in flight on this backend")),
         }
     }
@@ -130,6 +133,7 @@ impl BufferingBackend {
     /// order of replay is unspecified — the buffered set is a
     /// HashMap.
     fn commit_internal(&self) -> Result<usize, Error> {
+        let _perf_start = std::time::Instant::now();
         // Take ownership of the buffer contents so other operations
         // (which check the flag) see an empty buffer immediately.
         let entries = {
@@ -151,6 +155,8 @@ impl BufferingBackend {
             }
         }
 
+        let _perf_puts = puts.len();
+        let _perf_deletes = deletes.len();
         let mut first_err: Option<Error> = None;
 
         // Puts via the bulk path. Backends without a native bulk
@@ -180,6 +186,11 @@ impl BufferingBackend {
         // Clear the flag last so any racing read sees inner with the
         // replayed state, not an empty buffer.
         self.batching.store(false, Ordering::Release);
+        tracing::info!(
+            "perf/store: BufferingBackend::commit n_entries={} (puts={}, deletes={}) ms={}",
+            total_count, _perf_puts, _perf_deletes,
+            _perf_start.elapsed().as_millis()
+        );
         match first_err {
             None => Ok(total_count),
             Some(e) => Err(e),
@@ -189,10 +200,15 @@ impl BufferingBackend {
     /// Internal: abort the batch — discard the buffer, clear the
     /// flag. Called by `BatchGuard::Drop` when not committed.
     fn abort_internal(&self) {
+        let _perf_buffered_count = self.buffer.lock().map(|g| g.len()).unwrap_or(0);
         if let Ok(mut guard) = self.buffer.lock() {
             guard.clear();
         }
         self.batching.store(false, Ordering::Release);
+        tracing::info!(
+            "perf/store: BufferingBackend::abort discarded={} (no replay)",
+            _perf_buffered_count
+        );
     }
 }
 

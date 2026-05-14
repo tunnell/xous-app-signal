@@ -88,6 +88,7 @@ fn sync_execute(
     user_agent: &str,
     _timeout: std::time::Duration,
 ) -> Result<HttpResponse, HttpError> {
+    let _perf_start = std::time::Instant::now();
     let host = req
         .url
         .host_str()
@@ -98,9 +99,18 @@ fn sync_execute(
         Some(q) => format!("{}?{}", req.url.path(), q),
         None => req.url.path().to_string(),
     };
+    let _perf_method = req.method.as_str().to_string();
+    let _perf_url = format!("{}", req.url);
+    let _perf_body_len = req.body.as_deref().map(|b| b.len()).unwrap_or(0);
+    tracing::info!(
+        "perf/net: http_req entry method={} url={} body_len={}",
+        _perf_method, _perf_url, _perf_body_len
+    );
 
+    let _perf_pre_tls = std::time::Instant::now();
     let mut stream = tls_connect_with_config(&host, port, config)
         .map_err(|e| HttpError::Network(format!("tls connect: {e}")))?;
+    let _perf_tls_ms = _perf_pre_tls.elapsed().as_millis();
     // Set a read timeout on the underlying TcpStream so a hung server
     // doesn't block the worker thread forever. rustls::StreamOwned exposes
     // `.sock` as the inner Read+Write stream.
@@ -140,20 +150,36 @@ fn sync_execute(
     request.extend_from_slice(b"\r\n");
     request.extend_from_slice(body);
 
+    let _perf_pre_write = std::time::Instant::now();
     stream
         .write_all(&request)
         .map_err(|e| HttpError::Network(format!("write: {e}")))?;
     stream
         .flush()
         .map_err(|e| HttpError::Network(format!("flush: {e}")))?;
+    let _perf_write_ms = _perf_pre_write.elapsed().as_millis();
 
     // Read until EOF (since we sent Connection: close).
+    let _perf_pre_read = std::time::Instant::now();
     let mut raw = Vec::with_capacity(4096);
     stream
         .read_to_end(&mut raw)
         .map_err(|e| HttpError::Network(format!("read: {e}")))?;
+    let _perf_read_ms = _perf_pre_read.elapsed().as_millis();
 
-    parse_http_response(&raw)
+    let resp = parse_http_response(&raw);
+    let (_perf_status, _perf_resp_body_len) = match &resp {
+        Ok(r) => (r.status.as_u16(), r.body.len()),
+        Err(_) => (0u16, 0usize),
+    };
+    tracing::info!(
+        "perf/net: http_req exit method={} url={} req_body_len={} status={} resp_body_len={} tls_ms={} write_ms={} read_ms={} total_ms={}",
+        _perf_method, _perf_url, _perf_body_len,
+        _perf_status, _perf_resp_body_len,
+        _perf_tls_ms, _perf_write_ms, _perf_read_ms,
+        _perf_start.elapsed().as_millis()
+    );
+    resp
 }
 
 /// Parse a raw HTTP/1.1 response. Handles `Content-Length`-bounded bodies

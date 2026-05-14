@@ -82,9 +82,12 @@ pub fn tls_connect_with_config(
     config: Arc<ClientConfig>,
 ) -> io::Result<RustlsStream> {
     let t_start = std::time::Instant::now();
+    tracing::info!("perf/net: tls_connect entry host={} port={}", host, port);
     let server_name = ServerName::try_from(host.to_string())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let _perf_sn_ms = t_start.elapsed().as_millis() as u64;
     let conn = ClientConnection::new(config, server_name).map_err(io::Error::other)?;
+    let _perf_conn_ms = t_start.elapsed().as_millis() as u64;
 
     let sock = TcpStream::connect((host, port))?;
     let setup_ms = t_start.elapsed().as_millis() as u64;
@@ -93,6 +96,11 @@ pub fn tls_connect_with_config(
     // Full handshake cost shows up in the caller's first read/write; the
     // pipeline_ms log inside the worker captures the end-to-end cost.
     tracing::info!(host, port, setup_ms, "tls_connect: setup-phase complete");
+    tracing::info!(
+        "perf/net: tls_connect exit host={} port={} server_name_ms={} client_conn_ms={} tcp_ms={} setup_total_ms={} (full handshake fires on caller's first read/write)",
+        host, port, _perf_sn_ms, _perf_conn_ms - _perf_sn_ms,
+        setup_ms - _perf_conn_ms, setup_ms
+    );
     // Short TCP read timeout. WebSocket users (`ws_pump.rs::reader_loop`)
     // hold a mutex across the blocking `WebSocket::read()`; without a
     // timeout, the reader would block forever waiting for an inbound
