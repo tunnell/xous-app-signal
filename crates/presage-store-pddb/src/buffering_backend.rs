@@ -158,17 +158,43 @@ impl BufferingBackend {
         let _perf_puts = puts.len();
         let _perf_deletes = deletes.len();
         let mut first_err: Option<Error> = None;
+        let mut put_batch_fell_back = false;
 
         // Puts via the bulk path. Backends without a native bulk
         // opcode fall back to the default put-loop (see KvBackend
         // trait); PddbBackend issues one IPC + one server-side sync.
+        //
+        // If `put_batch` fails — the PDDB batch IPC caps the packed
+        // payload at `MAX_PDDB_WRITE_BATCH_LEN` (3800 bytes), so a
+        // single large buffered entry can push the whole batch over
+        // the limit — fall back to per-entry `inner.put`. We've
+        // already drained `self.buffer` via `mem::take` above, so
+        // *some* path must replay these entries or the data is lost.
+        // Per-entry put is slower (each call may chunk into multiple
+        // `Opcode::WriteKey` IPCs and pays its own basis sync) but
+        // it's correct and individual puts have no aggregate size
+        // limit. The original batch error is logged but not
+        // surfaced; if any per-entry put also fails, that error
+        // becomes `first_err`.
         if !puts.is_empty() {
             let put_views: Vec<(&str, &str, &[u8])> = puts
                 .iter()
                 .map(|(d, k, v)| (d.as_str(), k.as_str(), v.as_slice()))
                 .collect();
-            if let Err(e) = self.inner.put_batch(&put_views) {
-                first_err = Some(e);
+            if let Err(batch_err) = self.inner.put_batch(&put_views) {
+                put_batch_fell_back = true;
+                tracing::warn!(
+                    "perf/store: BufferingBackend::commit put_batch failed ({}), \
+                     falling back to per-entry inner.put for {} entries",
+                    batch_err, puts.len()
+                );
+                for (dict, key, value) in &puts {
+                    if let Err(e) = self.inner.put(dict, key, value) {
+                        if first_err.is_none() {
+                            first_err = Some(e);
+                        }
+                    }
+                }
             }
         }
 
@@ -187,8 +213,8 @@ impl BufferingBackend {
         // replayed state, not an empty buffer.
         self.batching.store(false, Ordering::Release);
         tracing::info!(
-            "perf/store: BufferingBackend::commit n_entries={} (puts={}, deletes={}) ms={}",
-            total_count, _perf_puts, _perf_deletes,
+            "perf/store: BufferingBackend::commit n_entries={} (puts={}, deletes={}) put_batch_fell_back={} ms={}",
+            total_count, _perf_puts, _perf_deletes, put_batch_fell_back,
             _perf_start.elapsed().as_millis()
         );
         match first_err {
@@ -461,13 +487,16 @@ mod tests {
 
     /// Counting wrapper that tracks individual `put` vs batched
     /// `put_batch` calls. Lets us assert that `commit` exercises the
-    /// bulk path, not the per-key loop.
+    /// bulk path, not the per-key loop. When `fail_batch` is set,
+    /// `put_batch` returns an error without persisting anything, so a
+    /// test can drive the `commit_internal` fallback path.
     #[derive(Debug)]
     struct CountingBackend {
         inner: Arc<MockBackend>,
         puts: std::sync::atomic::AtomicUsize,
         batches: std::sync::atomic::AtomicUsize,
         batch_total_entries: std::sync::atomic::AtomicUsize,
+        fail_batch: std::sync::atomic::AtomicBool,
     }
 
     impl CountingBackend {
@@ -477,6 +506,7 @@ mod tests {
                 puts: Default::default(),
                 batches: Default::default(),
                 batch_total_entries: Default::default(),
+                fail_batch: Default::default(),
             })
         }
         fn puts(&self) -> usize {
@@ -488,6 +518,10 @@ mod tests {
         fn batch_total(&self) -> usize {
             self.batch_total_entries
                 .load(std::sync::atomic::Ordering::Acquire)
+        }
+        fn set_fail_batch(&self, fail: bool) {
+            self.fail_batch
+                .store(fail, std::sync::atomic::Ordering::Release);
         }
     }
 
@@ -505,6 +539,12 @@ mod tests {
                 .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
             self.batch_total_entries
                 .fetch_add(entries.len(), std::sync::atomic::Ordering::AcqRel);
+            if self.fail_batch.load(std::sync::atomic::Ordering::Acquire) {
+                // Mimic the PDDB IPC "batch exceeds MAX_PDDB_WRITE_BATCH_LEN; split"
+                // path: return without writing anything so the
+                // BufferingBackend has to recover via per-entry put.
+                return Err(Error::backend("simulated batch-size overflow"));
+            }
             // Don't fall through to default impl (which calls put);
             // exercise the bulk path semantics by writing through
             // the inner mock directly.
@@ -559,5 +599,33 @@ mod tests {
 
         assert_eq!(counting.batches(), 0);
         assert_eq!(counting.puts(), 1);
+    }
+
+    /// When `put_batch` fails (e.g. the PDDB
+    /// `MAX_PDDB_WRITE_BATCH_LEN` cap is exceeded), the buffer has
+    /// already been drained — `commit_internal` must replay the
+    /// drained entries via per-entry `put` so the data lands on disk
+    /// instead of being lost. The commit then reports success.
+    #[test]
+    fn commit_falls_back_to_per_put_when_put_batch_fails() {
+        let counting = CountingBackend::new();
+        counting.set_fail_batch(true);
+        let bb = BufferingBackend::new(counting.clone());
+
+        let guard = bb.begin_batch().unwrap();
+        bb.put("d", "k1", b"v1").unwrap();
+        bb.put("d", "k2", b"v2").unwrap();
+        bb.put("d", "k3", b"v3").unwrap();
+        let n = guard.commit().expect("commit must succeed via fallback");
+        assert_eq!(n, 3, "commit returns total entry count even on fallback");
+
+        // put_batch was called once and failed.
+        assert_eq!(counting.batches(), 1);
+        // Three fallback per-entry puts followed.
+        assert_eq!(counting.puts(), 3);
+        // Inner data is durable.
+        assert_eq!(counting.inner.get("d", "k1").unwrap().as_deref(), Some(b"v1".as_slice()));
+        assert_eq!(counting.inner.get("d", "k2").unwrap().as_deref(), Some(b"v2".as_slice()));
+        assert_eq!(counting.inner.get("d", "k3").unwrap().as_deref(), Some(b"v3".as_slice()));
     }
 }

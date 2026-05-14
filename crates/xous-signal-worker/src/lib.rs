@@ -1510,20 +1510,43 @@ async fn handle_send(
 
         match outcome {
             Ok(Ok(())) => {
-                // Commit the batched writes before signaling
-                // SendComplete. Also flush sessions so the
-                // ratchet step that pairs with the just-sent
-                // message lands durably with the other writes —
-                // otherwise it waits for the next
-                // `Received::QueueEmpty` (see flush_sessions site
-                // earlier in this file), opening a wider crash
-                // window between wire-send and durability.
+                // Flush sessions FIRST, then commit the batch. The
+                // BufferingBackend that sits in front of PddbBackend
+                // (for `pddb-real` builds) intercepts `put` while a
+                // batch is open, so calling `flush_sessions` here
+                // routes its read-modify-write through the same
+                // buffer as the other in-flight writes. Commit then
+                // replays everything via a single
+                // `inner.put_batch` — which the upstream PDDB packs
+                // into one `Opcode::WriteKeyBatch` IPC with one
+                // trailing basis sync.
+                //
+                // Before this reorder, `flush_sessions` ran after
+                // `commit()`, so its writes went directly through
+                // `PddbBackend::put` and got chunked into N
+                // `Opcode::WriteKey` IPCs (one per ≤4072-byte
+                // KeyHandle::write chunk; refs #21 for the iter-2
+                // UART evidence). The ratchet bundle is the
+                // largest single write per send, so this is the
+                // load-bearing reorder.
+                //
+                // Order still puts the durability barrier before
+                // `SendComplete` is emitted, matching the previous
+                // semantics: the ratchet step that pairs with the
+                // just-sent message remains durable before the UI
+                // is told the send succeeded.
+                let _perf_pre_flush = std::time::Instant::now();
+                if let Err(e) = store_for_batch.flush_sessions() {
+                    log::warn!("worker/send: flush_sessions inside batch failed: {}", e);
+                }
+                let _perf_flush_ms = _perf_pre_flush.elapsed().as_millis();
+
                 let _perf_pre_commit = std::time::Instant::now();
                 let _perf_buffered_at_commit = batch_guard.as_ref().map(|g| g.buffered_len()).unwrap_or(0);
                 if let Some(g) = batch_guard {
                     match g.commit() {
                         Ok(n) => log::info!(
-                            "worker/send: batch committed ts={} (n={})",
+                            "worker/send: batch committed (sessions inside) ts={} (n={})",
                             timestamp, n
                         ),
                         Err(e) => log::warn!(
@@ -1533,15 +1556,10 @@ async fn handle_send(
                     }
                 }
                 let _perf_commit_ms = _perf_pre_commit.elapsed().as_millis();
-                let _perf_pre_flush = std::time::Instant::now();
-                if let Err(e) = store_for_batch.flush_sessions() {
-                    log::warn!("worker/send: flush_sessions after batch failed: {}", e);
-                }
-                let _perf_flush_ms = _perf_pre_flush.elapsed().as_millis();
                 log::info!(
-                    "perf/send: batch_scope_commit ts={} attempt={} buffered_at_commit={} commit_ms={} flush_sessions_ms={}",
+                    "perf/send: batch_scope_commit ts={} attempt={} buffered_at_commit={} flush_sessions_ms={} commit_ms={}",
                     timestamp, attempt, _perf_buffered_at_commit,
-                    _perf_commit_ms, _perf_flush_ms
+                    _perf_flush_ms, _perf_commit_ms
                 );
                 log::info!("worker/send: SendComplete ts={} (attempt {})", timestamp, attempt);
                 log::info!(
