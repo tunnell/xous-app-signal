@@ -22,9 +22,22 @@ tests/precursor/
 └── watch-uart.sh        ← tail the captured UART log on the Pi
 ```
 
-All scripts are environment-variable driven. Defaults are at the
-top of each script. None of them write outside their own target
-directory or the Pi's `~/xous-flash/` folder.
+> **Note**: each `.sh` here is now a thin shim that execs the
+> corresponding Python entry point under
+> [`tools/mcp-server/`](../../tools/mcp-server/). Behaviour is
+> identical and every env var these scripts honoured still works.
+> The Python entry points are also addressable as
+> `python -m xas_mcp.cli.<name>` and (most importantly) drivable by
+> MCP-aware tools. The Pi-rig flash now wraps `usb_update.py` in a
+> screen-detached + nohup, so an SSH disconnect can't kill a flash
+> mid-write — that was the longstanding gap in the bash version.
+
+All scripts are environment-variable driven; the same set of env
+vars works against either the bash shim or the underlying Python
+CLI. Defaults are documented in
+[`tools/mcp-server/.env.example`](../../tools/mcp-server/.env.example).
+None of them write outside their own target directory or the Pi's
+`~/xous-flash/` folder.
 
 For the faster testing approaches, see [`../hosted/`](../hosted/)
 (Xous emulator on Linux — seconds per cycle) and the unit test

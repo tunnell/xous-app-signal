@@ -605,14 +605,19 @@ in one shot — flashing in §3.3 is separate):
 ```sh
 cd ~/code/xas/xous-app-signal
 bash tests/precursor/build-and-bundle.sh
+# equivalent: python -m xas_mcp.cli.build_and_bundle
 ```
 
-The script invokes `cargo xtask app-image-xip` with the same
-flags documented in §3.2 (xas + vault, `--kernel-feature
-big-heap`, `--gdb-stub`, SoC version pins). Override the SoC
-version via `GIT_DESCRIBE`/`GIT_REV` env vars if your device
-reports a different one (`lsusb -v | grep iSerial` while in
-loader mode).
+The script is a thin shim around
+`tools/mcp-server/src/xas_mcp/cli/build_and_bundle.py`; agents can
+also drive the equivalent operation via MCP (see
+[`tools/mcp-server/README.md`](tools/mcp-server/README.md)). It
+invokes `cargo xtask app-image-xip` with the same flags documented
+in §3.2 (xas + vault, `--kernel-feature big-heap`, `--gdb-stub`,
+SoC version pins). Override the SoC version via
+`GIT_DESCRIBE`/`GIT_REV` env vars (or `--git-describe`/`--git-rev`
+flags) if your device reports a different one
+(`lsusb -v | grep iSerial` while in loader mode).
 
 If you only want the rv32 binary (no kernel image), the
 underlying `cargo build` is:
@@ -673,6 +678,15 @@ target dir, not `xous-app-signal/target/...` — the preceding
 The `xous-core/tools/usb_update.py` script speaks to the
 Precursor's loader-mode USB endpoint (USB ID `1209:5bf0`) and
 writes the kernel partition. The flash takes ~25 min.
+
+> **Note**: both `tests/precursor/flash-via-pi.sh` and
+> `tests/precursor/flash-direct.sh` are now thin shims around the
+> Python tools in `tools/mcp-server/`. Behaviour is identical (same
+> env vars, same exit codes), with one upgrade: the Pi-rig path
+> wraps `usb_update.py` in a detached `screen` + `nohup`, so an SSH
+> disconnect or local Ctrl-C cannot interrupt the write. Agents can
+> also drive these operations via MCP — see
+> [`tools/mcp-server/README.md`](tools/mcp-server/README.md).
 
 #### Option A: Pi-hosted flash (recommended)
 
