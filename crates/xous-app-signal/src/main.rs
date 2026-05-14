@@ -152,14 +152,22 @@ fn main() -> std::io::Result<()> {
     #[cfg(all(feature = "probe-pddb", target_os = "xous"))]
     probe_pddb();
 
-    #[cfg(all(feature = "probe-pddb-real", target_os = "xous"))]
-    probe_pddb_real();
-
     #[cfg(all(feature = "probe-send-batch", target_os = "xous"))]
     probe_send_batch();
 
-    #[cfg(all(feature = "probe-bulk-ab", target_os = "xous"))]
-    probe_bulk_ab();
+    // NOTE: the former `probe-pddb-real` and `probe-bulk-ab` auto-fire
+    // probes have been removed. Hitting `presage_store_pddb::PddbBackend::
+    // connect()` immediately after `run_signal_worker()` raced with
+    // xous-names server registration during boot and produced a
+    // `ServerNotFound` cascade in unrelated services (llio, trng,
+    // modals, susres) on Precursor PVT2 hardware, eventually crashing
+    // the boot with a watchdog reboot loop. Hardware evidence:
+    // 2026-05-13. xous-names itself documents this race —
+    // `api/xous-api-names/src/lib.rs:124`.
+    //
+    // The bulk-write A/B benchmark now lives in shellchat as `pddb
+    // bulk_probe [N]`, exercised by the user AFTER PIN entry and PDDB
+    // mount. See research/2026-05-14-shellchat-probe-results.md.
 
     // PDDB put-truncate smoke test (refs #14). Runtime-gated; exits
     // 0 PASS / 1 FAIL so a shell wrapper can assert the regression.
@@ -394,109 +402,6 @@ fn probe_pddb() {
     log::info!("probe-pddb: probe done in {:?}", start.elapsed());
 }
 
-/// Put/get/list/delete/list cycle against the real PDDB-backed
-/// `KvBackend`. Verifies the buffered IPC path (the `lend_mut`
-/// calls that the scalar-only `probe-pddb` couldn't exercise)
-/// actually works on the wire.
-///
-/// Requires the image to be built with `pddb/autobasis` so PDDB is
-/// pre-mounted on boot — otherwise every op returns `NotMounted`
-/// and we just log that finding.
-///
-/// All outcomes are logged through `xous-api-log`; the Robot test
-/// at `tests/renode/xas-pddb-real-probe.robot` waits on each line.
-#[cfg(all(feature = "probe-pddb-real", target_os = "xous"))]
-fn probe_pddb_real() {
-    use std::time::Instant;
-
-    log::info!("probe-pddb-real: starting put/get/delete cycle");
-    let start = Instant::now();
-
-    let backend = match presage_store_pddb::PddbBackend::connect() {
-        Ok(b) => b,
-        Err(e) => {
-            log::warn!("probe-pddb-real: connect FAIL: {}", e);
-            return;
-        }
-    };
-    log::info!("probe-pddb-real: connected in {:?}, mounted={}", start.elapsed(), backend.is_mounted());
-
-    use presage_store_pddb::KvBackend;
-    let dict = "xas.probe";
-    let key = "hello";
-    let value: &[u8] = b"world";
-
-    // Keep going even if individual ops fail. The failure mode
-    // itself is informative (which is what the probe is for);
-    // aborting early masks downstream IPC behavior we want to see.
-    let phase = Instant::now();
-    match backend.put(dict, key, value) {
-        Ok(()) => log::info!("probe-pddb-real: put OK in {:?}", phase.elapsed()),
-        Err(e) => log::warn!("probe-pddb-real: put FAIL after {:?}: {}", phase.elapsed(), e),
-    }
-
-    let phase = Instant::now();
-    match backend.get(dict, key) {
-        Ok(Some(v)) => log::info!(
-            "probe-pddb-real: get OK len={} match={} in {:?}",
-            v.len(),
-            v == value,
-            phase.elapsed()
-        ),
-        Ok(None) => log::warn!("probe-pddb-real: get returned None unexpectedly"),
-        Err(e) => log::warn!("probe-pddb-real: get FAIL: {}", e),
-    }
-
-    let phase = Instant::now();
-    match backend.list_keys(dict) {
-        Ok(keys) => log::info!("probe-pddb-real: list_keys OK {:?} in {:?}", keys, phase.elapsed()),
-        Err(e) => log::warn!("probe-pddb-real: list_keys FAIL: {}", e),
-    }
-
-    let phase = Instant::now();
-    match backend.delete(dict, key) {
-        Ok(()) => log::info!("probe-pddb-real: delete OK in {:?}", phase.elapsed()),
-        Err(e) => log::warn!("probe-pddb-real: delete FAIL: {}", e),
-    }
-
-    let phase = Instant::now();
-    match backend.list_keys(dict) {
-        Ok(keys) if keys.is_empty() => {
-            log::info!("probe-pddb-real: post-delete list empty in {:?}", phase.elapsed());
-        }
-        Ok(keys) => log::warn!("probe-pddb-real: post-delete list still has {:?}", keys),
-        Err(e) => log::warn!("probe-pddb-real: post-delete list FAIL: {}", e),
-    }
-
-    // --- Bulk-write wire-protocol smoke (Opcode::WriteKeyBatch).
-    //
-    // Even when PDDB isn't mounted in Renode (mounted=false above), the
-    // wire path is still exercisable: the server should receive the
-    // packed PddbWriteBatch, parse it, and return a meaningful retcode
-    // (typically BasisLost when no basis is accessible). The value of
-    // this probe is **wire encode/decode validation** — we're catching
-    // mismatches between the xas-side packed format in
-    // `xous-pddb-ipc::client.write_batch` and the xous-core-side
-    // parser at `services/pddb/src/main.rs`'s `Opcode::WriteKeyBatch`
-    // arm. Goes through KvBackend::put_batch which is the same path
-    // BufferingBackend uses on commit.
-    let phase = Instant::now();
-    let entries: Vec<(&str, &str, &[u8])> = vec![
-        ("xas.bulk_probe", "k1", b"v1".as_slice()),
-        ("xas.bulk_probe", "k2", b"v2-longer".as_slice()),
-        ("xas.bulk_probe", "k3", b"v3".as_slice()),
-    ];
-    match backend.put_batch(&entries) {
-        Ok(()) => log::info!("probe-pddb-real: bulk_write OK in {:?}", phase.elapsed()),
-        Err(e) => log::info!(
-            "probe-pddb-real: bulk_write returned err in {:?}: {} (expected when mounted=false)",
-            phase.elapsed(),
-            e
-        ),
-    }
-
-    log::info!("probe-pddb-real: probe done in {:?}", start.elapsed());
-}
 
 /// Exercise `BufferingBackend` + `BatchGuard` against a fresh
 /// `MockBackend` and log UART lines for the `xas-send-batch.robot`
@@ -628,154 +533,6 @@ fn probe_send_batch() {
     log::info!("probe-send-batch: probe done in {:?}", start.elapsed());
 }
 
-/// A/B comparison probe for measuring the `WriteKeyBatch` win on
-/// hardware. Skipped if PDDB isn't mounted (e.g. Renode without a
-/// rootkeys + password modal dance).
-///
-/// Methodology:
-/// - Path A: N individual `backend.put(...)` calls. Goes through
-///   the per-key wire path: delete_key + open(create_all) + write.
-///   On the bulk-write branch this is still the path that real send
-///   code follows when batching isn't active.
-/// - Path B: one `backend.put_batch(...)` carrying N entries. Single
-///   IPC, single trailing basis sync server-side.
-///
-/// Both paths write into the `xas.bulk_ab_probe` dict, which is
-/// `delete_dict`'d at the start and end of the probe so consecutive
-/// runs see the same state. Order: cleanup → A → cleanup → B →
-/// cleanup → log ratio.
-///
-/// Payload size and entry count are tuned to the cold-send shape:
-/// 3 entries × 200 B by default, matching the order-of-magnitude
-/// of `save_identity (~33B) + sender_certificate (~300B) +
-/// save_message (~200-500B)`. Override the count via the
-/// `XAS_BULK_AB_N` env var if you want to see scaling.
-///
-/// UART output, in order:
-///   probe-bulk-ab: starting
-///   probe-bulk-ab: connected mounted={true|false}
-///   (if not mounted) probe-bulk-ab: skipping — PDDB not mounted
-///   probe-bulk-ab: PathA N x put took {us}us total (~{us}us/put)
-///   probe-bulk-ab: PathB 1 x put_batch({N}) took {us}us total
-///                  (~{us}us/entry)
-///   probe-bulk-ab: ratio path_a/path_b = {n.nn}x
-///   probe-bulk-ab: probe done
-#[cfg(all(feature = "probe-bulk-ab", target_os = "xous"))]
-fn probe_bulk_ab() {
-    use std::time::Instant;
-
-    use presage_store_pddb::{KvBackend, PddbBackend};
-
-    log::info!("probe-bulk-ab: starting");
-
-    let backend = match PddbBackend::connect() {
-        Ok(b) => b,
-        Err(e) => {
-            log::warn!("probe-bulk-ab: connect FAIL: {}", e);
-            return;
-        }
-    };
-    let mounted = backend.is_mounted();
-    log::info!("probe-bulk-ab: connected mounted={}", mounted);
-    if !mounted {
-        log::info!("probe-bulk-ab: skipping — PDDB not mounted");
-        log::info!("probe-bulk-ab: probe done");
-        return;
-    }
-
-    let dict = "xas.bulk_ab_probe";
-
-    // Number of entries per pass. Hardware send-time analog: 3 keys
-    // per cold send. Override via env if you want scaling data.
-    let n: usize = std::env::var("XAS_BULK_AB_N")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(3);
-    if n == 0 || n > 16 {
-        log::warn!("probe-bulk-ab: invalid N={}; using 3", n);
-    }
-    let n = n.clamp(1, 16);
-
-    // 200-byte payload matches the median cold-send write size.
-    let payload = vec![0xAB_u8; 200];
-    let keys: Vec<String> = (0..n).map(|i| format!("k{:02}", i)).collect();
-
-    // --- Cleanup any leftover state from a prior run.
-    if let Err(e) = backend.delete_dict(dict) {
-        log::info!("probe-bulk-ab: pre-cleanup delete_dict err (ignored): {}", e);
-    }
-
-    // --- Path A: N individual puts.
-    let phase = Instant::now();
-    let mut a_ok = true;
-    for key in &keys {
-        if let Err(e) = backend.put(dict, key, &payload) {
-            log::warn!("probe-bulk-ab: PathA put({}) FAIL: {}", key, e);
-            a_ok = false;
-            break;
-        }
-    }
-    let path_a = phase.elapsed();
-    if a_ok {
-        let total_us = path_a.as_micros();
-        let per_us = if n > 0 { total_us / n as u128 } else { 0 };
-        log::info!(
-            "probe-bulk-ab: PathA {} x put took {}us total (~{}us/put)",
-            n,
-            total_us,
-            per_us
-        );
-    }
-
-    // Cleanup before Path B so it's not paying for re-allocation
-    // of pages already-used by Path A's writes.
-    if let Err(e) = backend.delete_dict(dict) {
-        log::info!("probe-bulk-ab: mid-cleanup delete_dict err (ignored): {}", e);
-    }
-
-    // --- Path B: one put_batch with N entries.
-    let entries: Vec<(&str, &str, &[u8])> = keys
-        .iter()
-        .map(|k| (dict, k.as_str(), payload.as_slice()))
-        .collect();
-    let phase = Instant::now();
-    let b_ok = match backend.put_batch(&entries) {
-        Ok(()) => true,
-        Err(e) => {
-            log::warn!("probe-bulk-ab: PathB put_batch FAIL: {}", e);
-            false
-        }
-    };
-    let path_b = phase.elapsed();
-    if b_ok {
-        let total_us = path_b.as_micros();
-        let per_us = if n > 0 { total_us / n as u128 } else { 0 };
-        log::info!(
-            "probe-bulk-ab: PathB 1 x put_batch({}) took {}us total (~{}us/entry)",
-            n,
-            total_us,
-            per_us
-        );
-    }
-
-    // --- Post-cleanup so the device is left clean.
-    if let Err(e) = backend.delete_dict(dict) {
-        log::info!("probe-bulk-ab: post-cleanup delete_dict err (ignored): {}", e);
-    }
-
-    // --- Ratio.
-    if a_ok && b_ok && path_b.as_micros() > 0 {
-        let ratio = path_a.as_micros() as f64 / path_b.as_micros() as f64;
-        log::info!(
-            "probe-bulk-ab: ratio path_a/path_b = {:.2}x (higher = bulk-write is faster)",
-            ratio
-        );
-    } else {
-        log::info!("probe-bulk-ab: ratio skipped (one or both paths failed)");
-    }
-
-    log::info!("probe-bulk-ab: probe done");
-}
 
 /// Hardware auto-link probe.
 ///
