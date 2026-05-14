@@ -1,0 +1,1646 @@
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/Cargo.toml /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/Cargo.toml
+--- /tmp/libsignal-upstream/Cargo.toml	2026-05-14 15:45:54.111248213 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/Cargo.toml	2026-05-10 19:08:47.864156095 +0200
+@@ -41,13 +41,37 @@
+ uuid = { version = "1", features = ["serde"] }
+ 
+ # http
+-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls-manual-roots", "stream"] }
+-reqwest-websocket = { version = "0.4.2", features = ["json"] }
++# Stage 6.1: add explicit `http` dep for the type-only Method/StatusCode/header
++# references that used to flow through reqwest's re-exports. Same crate either
++# way — `reqwest::Method` and `http::Method` are literally the same type.
++http = "1"
++# Stage 6.1 phase 3b: reqwest + reqwest-websocket removed. Replaced by the
++# transport::HttpClient trait + RequestBuilder / HttpResponse types defined
++# in src/transport.rs; impl provided by xous-net-bridge::SyncHttpClient.
+ 
+ tracing = { version = "0.1", features = ["log"] }
+ tracing-futures = "0.2"
+ 
+-tokio = { version = "1.0", features = ["macros"] }
++# Stage 6.5 verification (2026-05-06): tokio was previously declared
++# here as a normal dep — left over from upstream's `#[tokio::test]`
++# annotations on async tests. After the Stage 6 transport replacement
++# every src/ file mentioning `tokio` does so only in comments
++# (transport.rs:326, websocket/mod.rs:233, push_service/mod.rs:141).
++# Dropping the normal dep saves ~300 KB of dep-graph size and removes
++# the only Stage 6.5 cargo-tree match for the C-runtime regex; see
++# stage/REPORT-6.5.md.
++
++# Stage 6.1: replaces tokio::time::interval_at in src/websocket/mod.rs.
++# futures-timer is sync at the leaf (single OS-thread parker) but
++# integrates with futures::select! the same way tokio's Interval does.
++futures-timer = { git = "https://github.com/async-rs/futures-timer", rev = "07dbe53" }
++
++# Stage 6.1 phase 3c: async-channel for the WebSocket frame channels in
++# transport::WebSocketChannels. The WS pump impl in xous-net-bridge runs
++# on a sync worker thread; async-channel has both sync (send_blocking /
++# recv_blocking) and async (send / recv) APIs, so the channel pair
++# bridges the sync↔async boundary without an intermediate translation.
++async-channel = { git = "https://github.com/smol-rs/async-channel", rev = "35a63c4" }
+ 
+ [build-dependencies]
+ prost-build = "0.13"
+@@ -57,9 +81,14 @@
+ tokio = { version = "1.0", features = ["macros", "rt"] }
+ 
+ [features]
+-default = ["cdsi"]
++# Stage 6 (Xous fork): CDSI disabled by default. CDSI transitively pulls
++# boring-sys (BoringSSL) which doesn't target rv32-xous and needs libclang
++# at host build time. Per docs/REPORT.md Decision 5.
++default = []
+ phonenumber = ["dep:phonenumber"]
+ cdsi = ["dep:libsignal-net", "dep:libsignal-net-infra"]
+ 
+-[patch.crates-io]
+-curve25519-dalek = { git = 'https://github.com/signalapp/curve25519-dalek', tag = 'signal-curve25519-4.1.3' }
++# (Originally a `[patch.crates-io]` block redirecting curve25519-dalek lived
++# here. The redirect is done at the workspace root in xous-app-signal/Cargo.toml
++# so this vendored copy doesn't need its own. Removed entirely because cargo
++# warns on a non-root [patch] section even when it's empty.)
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/account_manager.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/account_manager.rs
+--- /tmp/libsignal-upstream/src/account_manager.rs	2026-05-14 15:45:54.106295587 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/account_manager.rs	2026-05-07 19:18:21.796288299 +0200
+@@ -1,7 +1,7 @@
+ use base64::prelude::*;
++use http::Method;
+ use libsignal_core::{DeviceId, E164};
+ use rand::{CryptoRng, Rng};
+-use reqwest::Method;
+ use std::collections::HashMap;
+ use std::convert::{TryFrom, TryInto};
+ 
+@@ -30,7 +30,7 @@
+ use crate::proto::{DeviceName, SyncMessage};
+ use crate::provisioning::generate_registration_id;
+ use crate::push_service::{
+-    AvatarWrite, HttpAuthOverride, ReqwestExt, DEFAULT_DEVICE_ID,
++    AvatarWrite, HttpAuthOverride, HttpResponseExt, DEFAULT_DEVICE_ID,
+ };
+ use crate::sender::OutgoingPushMessage;
+ use crate::service_address::ServiceIdExt;
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/groups_v2/manager.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/groups_v2/manager.rs
+--- /tmp/libsignal-upstream/src/groups_v2/manager.rs	2026-05-14 15:45:54.106778113 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/groups_v2/manager.rs	2026-05-07 19:18:21.796645219 +0200
+@@ -8,7 +8,7 @@
+     },
+     prelude::{PushService, ServiceError},
+     proto::GroupContextV2,
+-    push_service::{HttpAuth, HttpAuthOverride, ReqwestExt, ServiceIds},
++    push_service::{HttpAuth, HttpAuthOverride, HttpResponseExt, ServiceIds},
+     utils::BASE64_RELAXED,
+     websocket::{self, SignalWebSocket},
+ };
+@@ -17,8 +17,8 @@
+ use bytes::Bytes;
+ use chrono::{Days, NaiveDate, NaiveTime, Utc};
+ use futures::AsyncReadExt;
++use http::Method;
+ use rand::{CryptoRng, Rng};
+-use reqwest::Method;
+ use serde::Deserialize;
+ use zkgroup::{
+     auth::{AuthCredentialWithPni, AuthCredentialWithPniResponse},
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/lib.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/lib.rs
+--- /tmp/libsignal-upstream/src/lib.rs	2026-05-14 15:45:54.112248230 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/lib.rs	2026-05-07 19:18:21.796742060 +0200
+@@ -24,10 +24,12 @@
+ pub mod provisioning;
+ pub mod push_service;
+ pub mod receiver;
++// Stage 6.1: sync transport abstraction. See docs/REPORT.md Decision 3.
+ pub mod sender;
+ pub mod service_address;
+ pub mod session_store;
+ mod timestamp;
++pub mod transport;
+ pub mod unidentified_access;
+ pub mod utils;
+ pub mod websocket;
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/proto.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/proto.rs
+--- /tmp/libsignal-upstream/src/proto.rs	2026-05-14 15:45:54.106911003 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/proto.rs	2026-05-07 19:18:21.796742060 +0200
+@@ -1,8 +1,8 @@
+ #![allow(clippy::all)]
+ 
++use http::StatusCode;
+ use libsignal_core::{Aci, ServiceId};
+ use rand::{CryptoRng, Rng};
+-use reqwest::StatusCode;
+ include!(concat!(env!("OUT_DIR"), "/signalservice.rs"));
+ include!(concat!(env!("OUT_DIR"), "/signal.rs"));
+ 
+@@ -41,7 +41,7 @@
+         }
+     }
+ 
+-    pub fn status_code(&self) -> Option<reqwest::StatusCode> {
++    pub fn status_code(&self) -> Option<http::StatusCode> {
+         StatusCode::from_u16(self.status().try_into().ok()?).ok()
+     }
+ }
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/provisioning/mod.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/provisioning/mod.rs
+--- /tmp/libsignal-upstream/src/provisioning/mod.rs	2026-05-14 15:45:54.112248230 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/provisioning/mod.rs	2026-05-07 19:18:21.797031073 +0200
+@@ -160,7 +160,11 @@
+     mut tx: Sender<SecondaryDeviceProvisioning>,
+ ) -> Result<(), ProvisioningError> {
+     // open a websocket without authentication, to receive a tsurl://
+-    let ws = push_service
++    // Stage 6.1: ws() now returns (ws, task). The task drives the
++    // SignalWebSocket process loop and must outlive the ws value.
++    // We spawn it via the transport's per-thread task-spawner registered
++    // by the worker-thread bootstrap.
++    let (ws, ws_task) = push_service
+         .ws(
+             "/v1/websocket/provisioning/",
+             "/v1/keepalive/provisioning",
+@@ -168,6 +172,7 @@
+             None,
+         )
+         .await?;
++    crate::transport::spawn_detached(ws_task);
+ 
+     let registration_id = csprng.random_range(1..256);
+     let pni_registration_id = csprng.random_range(1..256);
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/provisioning/pipe.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/provisioning/pipe.rs
+--- /tmp/libsignal-upstream/src/provisioning/pipe.rs	2026-05-14 15:45:54.107306797 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/provisioning/pipe.rs	2026-05-07 19:18:21.797031073 +0200
+@@ -29,7 +29,10 @@
+     provisioning_cipher: ProvisioningCipher,
+ }
+ 
+-#[expect(clippy::large_enum_variant)]
++// `#[expect]` is target-dependent — the lint fires on hosted but
++// not on rv32-xous, which makes `#[expect]` itself an error there.
++// `#[allow]` is target-stable.
++#[allow(clippy::large_enum_variant)]
+ #[derive(Debug)]
+ pub enum ProvisioningStep {
+     Url(Url),
+@@ -109,7 +112,21 @@
+                         &BASE64_RELAXED.encode(
+                             self.provisioning_cipher.public_key().serialize(),
+                         ),
+-                    );
++                    )
++                    // Signal-Android / Signal-iOS reject device-link
++                    // QRs from clients that don't advertise the
++                    // `backup5` capability — the phone parses the
++                    // URL, doesn't recognize the linker as a
++                    // backup-aware peer, and silently drops the
++                    // ProvisionEnvelope step. Result on our side is
++                    // a "no provisioning message received" timeout.
++                    // The older tunnell/xous-signal-client added
++                    // this param explicitly in manager.rs after
++                    // calling presage; we patch the upstream URL
++                    // builder so all callers get it. Reference:
++                    // tunnell/xous-signal-client manager.rs link()
++                    // and Signal-Android ProvisioningV2.kt.
++                    .append_pair("capabilities", "backup5");
+ 
+                 // acknowledge
+                 responder
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/push_service/cdn.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/push_service/cdn.rs
+--- /tmp/libsignal-upstream/src/push_service/cdn.rs	2026-05-14 15:45:54.107387979 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/push_service/cdn.rs	2026-05-07 19:18:21.797106585 +0200
+@@ -1,16 +1,14 @@
+ use std::{
+     collections::HashMap,
+-    io::{self, Read, SeekFrom},
++    io::{Read, SeekFrom},
+ };
+ 
+-use futures::TryStreamExt;
+-use reqwest::{
++use http::{
+     header::{CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, RANGE},
+-    multipart::Part,
+     Method, StatusCode,
+ };
+ use serde::Deserialize;
+-use tracing::{debug, trace};
++use tracing::trace;
+ use url::Url;
+ 
+ use crate::{
+@@ -18,10 +16,15 @@
+     proto::AttachmentPointer, push_service::HttpAuthOverride,
+ };
+ 
+-use super::{response::ReqwestExt, PushService, ServiceError};
++use super::{response::HttpResponseExt, PushService, ServiceError};
+ 
+ #[derive(Debug, serde::Deserialize, Default)]
+ #[serde(rename_all = "camelCase")]
++// Stage 6.1: fields were used by reqwest::multipart::Form in
++// upload_to_cdn0; that path is stubbed pending a hand-rolled multipart
++// builder. Allow dead_code to keep the deserialization shape correct
++// (server still sends these fields in the upload-form response).
++#[allow(dead_code)]
+ pub struct AttachmentV2UploadAttributes {
+     key: String,
+     credential: String,
+@@ -82,7 +85,13 @@
+         cdn_id: u32,
+         path: &str,
+     ) -> Result<impl futures::io::AsyncRead + Send + Unpin, ServiceError> {
+-        let response_stream = self
++        // Stage 6.1: was reqwest's bytes_stream() → into_async_read() for
++        // streaming downloads. Our HttpResponse buffers the whole body up
++        // front (the underlying ureq sync HTTP/1.1 client would too); we
++        // wrap the buffer in a futures::io::Cursor to keep the AsyncRead
++        // return type. Acceptable for MVP — attachments on Precursor are
++        // post-MVP and capped at a few MiB, so full-buffer is fine.
++        let body = self
+             .request(
+                 Method::GET,
+                 Endpoint::cdn(cdn_id, path),
+@@ -90,12 +99,12 @@
+             )?
+             .send()
+             .await?
+-            .error_for_status()?
+-            .bytes_stream()
+-            .map_err(io::Error::other)
+-            .into_async_read();
++            .error_for_status()
++            .map_err(|_| ServiceError::UnhandledResponseCode { http_code: 0 })?
++            .bytes()
++            .await?;
+ 
+-        Ok(response_stream)
++        Ok(futures::io::Cursor::new(body))
+     }
+ 
+     pub(crate) async fn get_attachment_v4_upload_attributes(
+@@ -297,45 +306,25 @@
+         path: &str,
+         upload_attributes: AttachmentV2UploadAttributes,
+         filename: String,
+-        mut reader: impl Read + Send,
++        reader: impl Read + Send,
+     ) -> Result<(), ServiceError> {
+-        let mut buf = Vec::new();
+-        reader
+-            .read_to_end(&mut buf)
+-            .expect("infallible Read instance");
+-
+-        // Amazon S3 expects multipart fields in a very specific order
+-        // DO NOT CHANGE THIS (or do it, but feel the wrath of the gods)
+-        let form = reqwest::multipart::Form::new()
+-            .text("acl", upload_attributes.acl)
+-            .text("key", upload_attributes.key)
+-            .text("policy", upload_attributes.policy)
+-            .text("Content-Type", "application/octet-stream")
+-            .text("x-amz-algorithm", upload_attributes.algorithm)
+-            .text("x-amz-credential", upload_attributes.credential)
+-            .text("x-amz-date", upload_attributes.date)
+-            .text("x-amz-signature", upload_attributes.signature)
+-            .part(
+-                "file",
+-                Part::stream(buf)
+-                    .mime_str("application/octet-stream")?
+-                    .file_name(filename),
+-            );
+-
+-        let response = self
+-            .request(
+-                Method::POST,
+-                Endpoint::cdn(0, path),
+-                HttpAuthOverride::NoOverride,
+-            )?
+-            .multipart(form)
+-            .send()
+-            .await?
+-            .error_for_status()?;
+-
+-        debug!("HyperPushService::PUT response: {:?}", response);
+-
+-        Ok(())
++        // Stage 6.1: was a reqwest::multipart::Form upload. The Xous fork
++        // doesn't have multipart-form support in its transport (writing a
++        // hand-rolled multipart/form-data body builder is ~100 LoC and
++        // wasn't needed for MVP — text-message send/receive doesn't go
++        // through this path; only attachment upload does, which is
++        // post-MVP per docs/REPORT.md).
++        //
++        // Returning a clear error so callers fail fast instead of
++        // silently succeeding with no upload. To re-enable: write a
++        // multipart-builder helper in transport.rs that constructs the
++        // body bytes with a custom boundary, sets Content-Type to
++        // `multipart/form-data; boundary=<boundary>`, and POSTs via the
++        // existing RequestBuilder.
++        let _ = (filename, reader, upload_attributes, path); // silence unused warns
++        Err(ServiceError::SendError {
++            reason: "attachment multipart upload not implemented in Stage 6.1 — see push_service/cdn.rs upload_attachment_v3".to_string(),
++        })
+     }
+ 
+     #[tracing::instrument(skip(self, content))]
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/push_service/error.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/push_service/error.rs
+--- /tmp/libsignal-upstream/src/push_service/error.rs	2026-05-14 15:45:54.107387979 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/push_service/error.rs	2026-05-07 19:18:21.797106585 +0200
+@@ -52,8 +52,13 @@
+     #[error("Unexpected response: HTTP {http_code}")]
+     UnhandledResponseCode { http_code: u16 },
+ 
++    // Stage 6.1: was `WsError(Box<reqwest_websocket::Error>)`. WS errors
++    // now route through the transport::HttpError type via the
++    // HttpTransport variant. WsError(String) is kept for explicit
++    // libsignal-service-rs-side WS-state errors that don't have a
++    // transport-level cause (e.g. from process_frame).
+     #[error("Websocket error: {0}")]
+-    WsError(Box<reqwest_websocket::Error>),
++    WsError(String),
+     #[error("Websocket closing: {reason}")]
+     WsClosing { reason: &'static str },
+ 
+@@ -117,8 +122,10 @@
+     #[error("Device limit reached: {current} out of {max} devices.")]
+     DeviceLimitReached { current: u32, max: u32 },
+ 
+-    #[error("HTTP reqwest error: {0}")]
+-    Http(#[from] reqwest::Error),
++    // Stage 6.1 phase 3b: reqwest::Error variant removed. All HTTP errors
++    // route through transport::HttpError now.
++    #[error("HTTP transport error: {0}")]
++    HttpTransport(#[from] crate::transport::HttpError),
+ 
+     #[error(transparent)]
+     Curve(#[from] CurveError),
+@@ -150,8 +157,6 @@
+     }
+ }
+ 
+-impl From<reqwest_websocket::Error> for ServiceError {
+-    fn from(error: reqwest_websocket::Error) -> Self {
+-        Self::WsError(Box::new(error))
+-    }
+-}
++// Stage 6.1: From<reqwest_websocket::Error> removed. WS-specific errors
++// now use either WsError(String) for explicit messages or route through
++// HttpTransport via #[from] crate::transport::HttpError.
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/push_service/linking.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/push_service/linking.rs
+--- /tmp/libsignal-upstream/src/push_service/linking.rs	2026-05-14 15:45:54.107387979 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/push_service/linking.rs	2026-05-07 19:18:21.797106585 +0200
+@@ -1,5 +1,5 @@
++use http::Method;
+ use libsignal_core::DeviceId;
+-use reqwest::Method;
+ use serde::{Deserialize, Serialize};
+ use uuid::Uuid;
+ 
+@@ -9,7 +9,8 @@
+ };
+ 
+ use super::{
+-    response::ReqwestExt, HttpAuth, HttpAuthOverride, PushService, ServiceError,
++    response::HttpResponseExt, HttpAuth, HttpAuthOverride, PushService,
++    ServiceError,
+ };
+ 
+ #[derive(Debug, Serialize)]
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/push_service/mod.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/push_service/mod.rs
+--- /tmp/libsignal-upstream/src/push_service/mod.rs	2026-05-14 15:45:54.107387979 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/push_service/mod.rs	2026-05-09 20:17:00.983176850 +0200
+@@ -1,19 +1,27 @@
+-use std::{sync::LazyLock, time::Duration};
++use std::{sync::Arc, sync::LazyLock, time::Duration};
+ 
+ use crate::{
+     configuration::{Endpoint, ServiceCredentials, SignalServers},
+     prelude::ServiceConfiguration,
++    transport::{self, BasicAuth, HeaderMap, HttpClient, RequestBuilder},
+     utils::serde_device_id_vec,
+     websocket::{SignalWebSocket, WebSocketType},
+ };
+ 
++use http::Method;
+ use libsignal_core::DeviceId;
+ use protobuf::ProtobufResponseExt;
+-use reqwest::{Method, RequestBuilder};
+-use reqwest_websocket::RequestBuilderExt;
+ use serde::{Deserialize, Serialize};
+ use tracing::{debug_span, Instrument};
+ 
++/// Interval between application-level keepalives on the auth WS.
++/// Upstream value (55s). Restored from the temporary 30s used while
++/// diagnosing the rv32 WebSocket-closing bug — that turned out to be
++/// a kernel/std encoding mismatch in xous-core/services/net (fixed in
++/// std_glue.rs::respond_with_error byte-1 mirror), not a keepalive
++/// timing issue. Shorter interval increased timer-vs-response race
++/// pressure on libsignal's keepalive close logic; back to 55s gives
++/// the close-tolerance fix below more breathing room.
+ pub const KEEPALIVE_TIMEOUT_SECONDS: Duration = Duration::from_secs(55);
+ pub static DEFAULT_DEVICE_ID: LazyLock<libsignal_core::DeviceId> =
+     LazyLock::new(|| libsignal_core::DeviceId::try_from(1).unwrap());
+@@ -27,7 +35,7 @@
+ pub use account::*;
+ pub use cdn::*;
+ pub use error::*;
+-pub(crate) use response::{ReqwestExt, SignalServiceResponse};
++pub(crate) use response::{HttpResponseExt, SignalServiceResponse};
+ 
+ #[derive(Debug, Serialize, Deserialize)]
+ pub struct ProofRequired {
+@@ -77,36 +85,31 @@
+     pub(crate) servers: SignalServers,
+     cfg: ServiceConfiguration,
+     credentials: Option<HttpAuth>,
+-    client: reqwest::Client,
++    // Stage 6.1: was `client: reqwest::Client`. Now an Arc'd HttpClient
++    // pulled from the per-thread `transport::set_http_client` registration
++    // (typically a UreqHttpClient set up by xous-net-bridge). The pinned
++    // CA + connect/total timeouts + user-agent that used to go through
++    // reqwest::ClientBuilder are now responsibilities of the HttpClient
++    // implementation.
++    client: Arc<dyn HttpClient + Send + Sync>,
+ }
+ 
+ impl PushService {
+     pub fn new(
+         env: SignalServers,
+         credentials: Option<ServiceCredentials>,
+-        user_agent: impl AsRef<str>,
++        // Stage 6.1: user_agent is no longer used here — it's a property
++        // of the HttpClient implementation, set when the implementation
++        // is constructed (in xous-net-bridge::http::UreqHttpClient::new
++        // or similar).
++        _user_agent: impl AsRef<str>,
+     ) -> Self {
+         let cfg: ServiceConfiguration = env.into();
+-        let client = reqwest::ClientBuilder::new()
+-            .tls_built_in_root_certs(false)
+-            .add_root_certificate(
+-                reqwest::Certificate::from_pem(
+-                    cfg.certificate_authority.as_bytes(),
+-                )
+-                .unwrap(),
+-            )
+-            .connect_timeout(Duration::from_secs(10))
+-            .timeout(Duration::from_secs(65))
+-            .user_agent(user_agent.as_ref())
+-            .http1_only()
+-            .build()
+-            .unwrap();
+-
+         Self {
+             servers: env,
+             cfg,
+             credentials: credentials.and_then(|c| c.authorization()),
+-            client,
++            client: transport::get_http_client(),
+         }
+     }
+ 
+@@ -118,14 +121,14 @@
+         auth_override: HttpAuthOverride,
+     ) -> Result<RequestBuilder, ServiceError> {
+         let url = endpoint.into_url(&self.cfg)?;
+-        let mut builder = self.client.request(method, url);
++        let mut builder = RequestBuilder::new(self.client.clone(), method, url);
+ 
+         builder = match auth_override {
+             HttpAuthOverride::NoOverride => {
+                 if let Some(HttpAuth { username, password }) =
+                     self.credentials.as_ref()
+                 {
+-                    builder.basic_auth(username, Some(password))
++                    builder.basic_auth(username.clone(), Some(password.clone()))
+                 } else {
+                     builder
+                 }
+@@ -139,35 +142,49 @@
+         Ok(builder)
+     }
+ 
++    /// Open an authenticated WebSocket. Returns `(SignalWebSocket, task)`
++    /// where `task` is a future the caller must drive (typically by
++    /// spawning on the local executor — for our Xous integration that's
++    /// `presage::runtime::spawn_detached(task)`). Stage 6.1: was
++    /// `tokio::task::spawn(task)`-ing internally.
+     pub async fn ws<C: WebSocketType>(
+         &mut self,
+         path: &str,
+         keepalive_path: &str,
+         additional_headers: &[(&'static str, &str)],
+         credentials: Option<ServiceCredentials>,
+-    ) -> Result<SignalWebSocket<C>, ServiceError> {
++    ) -> Result<
++        (
++            SignalWebSocket<C>,
++            std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>,
++        ),
++        ServiceError,
++    > {
+         let span = debug_span!("websocket");
+ 
+         let mut url = Endpoint::service(path).into_url(&self.cfg)?;
+         url.set_scheme("wss").expect("valid https base url");
+ 
+-        let mut builder = self.client.get(url);
++        let mut headers = HeaderMap::new();
+         for (key, value) in additional_headers {
+-            builder = builder.header(*key, *value);
+-        }
+-
+-        if let Some(credentials) = credentials {
+-            builder =
+-                builder.basic_auth(credentials.login(), credentials.password);
++            if let (Ok(name), Ok(val)) = (
++                http::HeaderName::try_from(*key),
++                http::HeaderValue::try_from(*value),
++            ) {
++                headers.insert(name, val);
++            }
+         }
+ 
+-        let ws = builder
+-            .upgrade()
+-            .send()
+-            .await?
+-            .into_websocket()
+-            .instrument(span.clone())
+-            .await?;
++        let auth = credentials.map(|c| BasicAuth {
++            username: c.login(),
++            password: c.password.unwrap_or_default(),
++        });
++
++        let channels = self
++            .client
++            .connect_websocket(url, headers, auth)
++            .await
++            .map_err(ServiceError::HttpTransport)?;
+ 
+         let unidentified_push_service = PushService {
+             servers: self.servers,
+@@ -176,13 +193,12 @@
+             client: self.client.clone(),
+         };
+         let (ws, task) = SignalWebSocket::new(
+-            ws,
++            channels,
+             keepalive_path.to_owned(),
+             unidentified_push_service,
+         );
+         let task = task.instrument(span);
+-        tokio::task::spawn(task);
+-        Ok(ws)
++        Ok((ws, Box::pin(task)))
+     }
+ 
+     pub(crate) async fn get_group(
+@@ -205,10 +221,11 @@
+ 
+ pub(crate) mod protobuf {
+     use async_trait::async_trait;
++    use http::header;
+     use prost::{EncodeError, Message};
+-    use reqwest::{header, RequestBuilder, Response};
+ 
+     use super::ServiceError;
++    use crate::transport::{HttpResponse, RequestBuilder};
+ 
+     pub(crate) trait ProtobufRequestBuilderExt
+     where
+@@ -223,7 +240,7 @@
+         ) -> Result<Self, EncodeError>;
+     }
+ 
+-    #[async_trait::async_trait]
++    #[async_trait(?Send)]
+     pub(crate) trait ProtobufResponseExt {
+         /// Get the response body decoded from Protobuf
+         async fn protobuf<T>(self) -> Result<T, ServiceError>
+@@ -244,14 +261,14 @@
+         }
+     }
+ 
+-    #[async_trait]
+-    impl ProtobufResponseExt for Response {
++    #[async_trait(?Send)]
++    impl ProtobufResponseExt for HttpResponse {
+         async fn protobuf<T>(self) -> Result<T, ServiceError>
+         where
+             T: Message + Default,
+         {
+             let body = self.bytes().await?;
+-            let decoded = T::decode(body)?;
++            let decoded = T::decode(body.as_slice())?;
+             Ok(decoded)
+         }
+     }
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/push_service/response.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/push_service/response.rs
+--- /tmp/libsignal-upstream/src/push_service/response.rs	2026-05-14 15:45:54.107387979 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/push_service/response.rs	2026-05-07 19:18:21.797106585 +0200
+@@ -1,4 +1,4 @@
+-use reqwest::StatusCode;
++use http::StatusCode;
+ 
+ use crate::proto::WebSocketResponseMessage;
+ 
+@@ -130,35 +130,9 @@
+     fn header(&self, name: &str) -> Option<&str>;
+ }
+ 
+-#[async_trait::async_trait]
+-impl SignalServiceResponse for reqwest::Response {
+-    type Error = reqwest::Error;
+-
+-    fn status_code(&self) -> StatusCode {
+-        self.status()
+-    }
+-
+-    async fn json<U>(self) -> Result<U, Self::Error>
+-    where
+-        for<'de> U: serde::Deserialize<'de>,
+-    {
+-        reqwest::Response::json(self).await
+-    }
+-
+-    async fn text(self) -> Result<String, Self::Error> {
+-        reqwest::Response::text(self).await
+-    }
+-
+-    fn header(&self, name: &str) -> Option<&str> {
+-        self.headers().get(name).and_then(|v| {
+-            v.to_str()
+-                .inspect_err(|e| {
+-                    tracing::warn!(?e, "could not read header as string")
+-                })
+-                .ok()
+-        })
+-    }
+-}
++// Stage 6.1: SignalServiceResponse impl for reqwest::Response removed.
++// WebSocketResponseMessage and HttpResponse impls are below; those cover
++// every callsite that uses the trait now.
+ 
+ #[async_trait::async_trait]
+ impl SignalServiceResponse for WebSocketResponseMessage {
+@@ -192,22 +166,52 @@
+     }
+ }
+ 
++// Stage 6.1: ReqwestExt trait + impl removed; HttpResponseExt below
++// is the new shape.
++
++// Stage 6.1: parallel ext-trait for our `HttpResponse` so callers using
++// `.send().await?.service_error_for_status().await?` keep the same shape.
+ #[async_trait::async_trait]
+-pub(crate) trait ReqwestExt
++pub(crate) trait HttpResponseExt
+ where
+     Self: Sized,
+ {
+-    /// convenience error handler to be used in the builder-style API of `reqwest::Response`
+     async fn service_error_for_status(
+         self,
+-    ) -> Result<reqwest::Response, ServiceError>;
++    ) -> Result<crate::transport::HttpResponse, ServiceError>;
+ }
+ 
+ #[async_trait::async_trait]
+-impl ReqwestExt for reqwest::Response {
++impl HttpResponseExt for crate::transport::HttpResponse {
+     async fn service_error_for_status(
+         self,
+-    ) -> Result<reqwest::Response, ServiceError> {
++    ) -> Result<crate::transport::HttpResponse, ServiceError> {
+         service_error_for_status(self).await
+     }
+ }
++
++// Implement SignalServiceResponse for our HttpResponse so the generic
++// `service_error_for_status<R>` function works on it.
++#[async_trait::async_trait]
++impl SignalServiceResponse for crate::transport::HttpResponse {
++    type Error = crate::transport::HttpError;
++
++    fn status_code(&self) -> StatusCode {
++        self.status
++    }
++
++    async fn json<U>(self) -> Result<U, Self::Error>
++    where
++        for<'de> U: serde::Deserialize<'de>,
++    {
++        crate::transport::HttpResponse::json(self).await
++    }
++
++    async fn text(self) -> Result<String, Self::Error> {
++        crate::transport::HttpResponse::text(self).await
++    }
++
++    fn header(&self, name: &str) -> Option<&str> {
++        self.headers.get(name).and_then(|v| v.to_str().ok())
++    }
++}
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/receiver.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/receiver.rs
+--- /tmp/libsignal-upstream/src/receiver.rs	2026-05-14 15:45:54.107387979 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/receiver.rs	2026-05-07 19:18:21.797106585 +0200
+@@ -30,7 +30,9 @@
+             "X-Signal-Receive-Stories",
+             if allow_stories { "true" } else { "false" },
+         )];
+-        let ws = self
++        // Stage 6.1: ws() now returns (ws, task). Spawn the task on the
++        // transport's per-thread task-spawner so it outlives this scope.
++        let (ws, ws_task) = self
+             .service
+             .ws(
+                 "/v1/websocket/",
+@@ -39,6 +41,7 @@
+                 Some(credentials),
+             )
+             .await?;
++        crate::transport::spawn_detached(ws_task);
+         Ok(MessagePipe::from_socket(ws))
+     }
+ 
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/transport.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/transport.rs
+--- /tmp/libsignal-upstream/src/transport.rs	1970-01-01 01:00:00.000000000 +0100
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/transport.rs	2026-05-07 19:18:21.797106585 +0200
+@@ -0,0 +1,369 @@
++// Stage 6.1: groundwork. The trait and types defined here are used by
++// follow-up commits that swap PushService internals. Until those land,
++// some types appear unused — which is intentional.
++#![allow(dead_code)]
++
++//! Transport abstraction (Stage 6.1, Xous fork).
++//!
++//! Upstream `libsignal-service-rs` uses `reqwest::Client` (HTTP/1.1 over
++//! `hyper-util` over `tokio`) and `reqwest_websocket::WebSocket` for the
++//! Signal chat-server transport. Both pull `tokio` → `mio`, which doesn't
++//! compile on `riscv32imac-unknown-xous-elf`.
++//!
++//! This module defines a sync-leaf transport abstraction that drives the
++//! same Signal protocol over a non-tokio sync HTTP/1.1 + WS stack. The
++//! actual implementation lives in `xous-net-bridge` (sync `ureq` + sync
++//! `tungstenite` over `async-channel`); libsignal-service-rs only sees
++//! the trait.
++//!
++//! See `docs/REPORT.md` Decision 3.
++
++use std::sync::Arc;
++
++use async_trait::async_trait;
++pub use http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
++use serde::Serialize;
++use thiserror::Error;
++use url::Url;
++
++/// Auth credentials that the transport may attach to a request.
++#[derive(Clone, Debug)]
++pub struct BasicAuth {
++    pub username: String,
++    pub password: String,
++}
++
++/// A request, fully resolved (URL, method, headers, optional body, optional auth).
++#[derive(Clone, Debug)]
++pub struct HttpRequest {
++    pub method: Method,
++    pub url: Url,
++    pub headers: HeaderMap,
++    pub body: Option<Vec<u8>>,
++    pub auth: Option<BasicAuth>,
++    /// Total request timeout. None = use the implementation's default.
++    pub timeout: Option<std::time::Duration>,
++}
++
++/// A response, fully buffered (status + headers + body).
++#[derive(Clone, Debug)]
++pub struct HttpResponse {
++    pub status: StatusCode,
++    pub headers: HeaderMap,
++    pub body: Vec<u8>,
++}
++
++/// Errors the transport can return. Implementation-specific errors fold into
++/// `Network`; HTTP-level non-success status codes are NOT errors at this layer
++/// (they're returned in the response and the caller uses `error_for_status` /
++/// `service_error_for_status` to decide).
++#[derive(Debug, Error)]
++pub enum HttpError {
++    #[error("transport network error: {0}")]
++    Network(String),
++    #[error("invalid url: {0}")]
++    InvalidUrl(String),
++    #[error("response body not utf-8")]
++    InvalidUtf8,
++    #[error("response body could not be deserialized: {0}")]
++    Decode(String),
++    #[error("request encoding failed: {0}")]
++    Encode(String),
++}
++
++/// A bidirectional WebSocket connection, expressed as the channel ends
++/// of an internal sync↔async pump. The implementation (in
++/// `xous-net-bridge`) owns a worker thread holding a sync
++/// `tungstenite::WebSocket`; this struct hands the executor side the
++/// frame channels.
++///
++/// Uses `async-channel` (rather than `futures::channel::mpsc`) because
++/// the implementation runs the WS pump on a sync OS thread. async-channel
++/// has both sync (`send_blocking`/`recv_blocking`) and async
++/// (`send`/`recv`) APIs, so the same channel object connects the sync
++/// pump thread to the async executor without translation.
++pub struct WebSocketChannels {
++    /// Outgoing frames (executor side → wire). Drop this to half-close.
++    pub outgoing: async_channel::Sender<WsFrame>,
++    /// Incoming frames (wire → executor side).
++    pub incoming: async_channel::Receiver<Result<WsFrame, HttpError>>,
++}
++
++/// Opaque WebSocket frame. Mirrors the subset of
++/// `reqwest_websocket::Message` that libsignal-service-rs uses.
++#[derive(Clone, Debug)]
++pub enum WsFrame {
++    Binary(Vec<u8>),
++    Text(String),
++    Ping(Vec<u8>),
++    Pong(Vec<u8>),
++    Close { code: u16, reason: String },
++}
++
++/// The `?Send` async trait is friendly to single-threaded executors.
++#[async_trait(?Send)]
++pub trait HttpClient {
++    /// Send a single HTTP request and receive the full response body.
++    async fn execute(
++        &self,
++        req: HttpRequest,
++    ) -> Result<HttpResponse, HttpError>;
++
++    /// Open a WebSocket to `url` with the supplied headers. Returns the
++    /// outgoing/incoming channel pair. The implementation typically spawns
++    /// a worker thread that owns the sync WebSocket and bridges frames
++    /// across the channels; the channels stay open as long as the
++    /// underlying connection is alive.
++    async fn connect_websocket(
++        &self,
++        url: Url,
++        headers: HeaderMap,
++        auth: Option<BasicAuth>,
++    ) -> Result<WebSocketChannels, HttpError>;
++}
++
++// ---------------------------------------------------------------------------
++// Builder shim — the API surface libsignal-service-rs callers use to
++// construct requests, mirroring just enough of `reqwest::RequestBuilder` to
++// minimize churn at the callsites.
++// ---------------------------------------------------------------------------
++
++/// A fluent builder for an `HttpRequest`. Returned by `PushService::request`.
++/// Mirrors the subset of `reqwest::RequestBuilder` that libsignal-service-rs
++/// actually uses.
++pub struct RequestBuilder {
++    client: Arc<dyn HttpClient + Send + Sync>,
++    req: HttpRequest,
++}
++
++impl RequestBuilder {
++    pub(crate) fn new(
++        client: Arc<dyn HttpClient + Send + Sync>,
++        method: Method,
++        url: Url,
++    ) -> Self {
++        Self {
++            client,
++            req: HttpRequest {
++                method,
++                url,
++                headers: HeaderMap::new(),
++                body: None,
++                auth: None,
++                timeout: None,
++            },
++        }
++    }
++
++    pub fn header<K, V>(mut self, name: K, value: V) -> Self
++    where
++        HeaderName: TryFrom<K>,
++        HeaderValue: TryFrom<V>,
++    {
++        if let (Ok(k), Ok(v)) =
++            (HeaderName::try_from(name), HeaderValue::try_from(value))
++        {
++            self.req.headers.insert(k, v);
++        }
++        self
++    }
++
++    pub fn body<B: Into<Vec<u8>>>(mut self, body: B) -> Self {
++        self.req.body = Some(body.into());
++        self
++    }
++
++    /// Set the body to a JSON serialization of `value` and `Content-Type:
++    /// application/json`. Mirrors `reqwest::RequestBuilder::json`.
++    pub fn json<T: Serialize + ?Sized>(mut self, value: &T) -> Self {
++        match serde_json::to_vec(value) {
++            Ok(buf) => {
++                self.req.body = Some(buf);
++                self.req.headers.insert(
++                    http::header::CONTENT_TYPE,
++                    HeaderValue::from_static("application/json"),
++                );
++            },
++            Err(_e) => {
++                // Defer the error to send-time so the builder API stays infallible.
++                // Mirrors reqwest's behavior — they also defer this.
++                self.req.body = None;
++            },
++        }
++        self
++    }
++
++    pub fn basic_auth<U, P>(mut self, user: U, pass: Option<P>) -> Self
++    where
++        U: Into<String>,
++        P: Into<String>,
++    {
++        self.req.auth = Some(BasicAuth {
++            username: user.into(),
++            password: pass.map(|p| p.into()).unwrap_or_default(),
++        });
++        self
++    }
++
++    pub fn timeout(mut self, d: std::time::Duration) -> Self {
++        self.req.timeout = Some(d);
++        self
++    }
++
++    /// Send the request. Mirrors `reqwest::RequestBuilder::send`.
++    pub async fn send(self) -> Result<HttpResponse, HttpError> {
++        self.client.execute(self.req).await
++    }
++}
++
++// ---------------------------------------------------------------------------
++// Response convenience methods — mirror the subset of `reqwest::Response`
++// libsignal-service-rs uses.
++// ---------------------------------------------------------------------------
++
++impl HttpResponse {
++    pub fn status(&self) -> StatusCode {
++        self.status
++    }
++
++    pub fn headers(&self) -> &HeaderMap {
++        &self.headers
++    }
++
++    /// Mirrors `reqwest::Response::error_for_status`: if status is 4xx/5xx,
++    /// returns an error; otherwise returns `Ok(self)`. We use this only as
++    /// a courtesy — `service_error_for_status` (in `push_service::response`)
++    /// is what callers actually use because it produces richer Signal-specific
++    /// errors.
++    pub fn error_for_status(self) -> Result<Self, HttpError> {
++        if self.status.is_success() {
++            Ok(self)
++        } else {
++            Err(HttpError::Network(format!("HTTP {}", self.status.as_u16())))
++        }
++    }
++
++    pub async fn bytes(self) -> Result<Vec<u8>, HttpError> {
++        Ok(self.body)
++    }
++
++    pub async fn text(self) -> Result<String, HttpError> {
++        String::from_utf8(self.body).map_err(|_| HttpError::InvalidUtf8)
++    }
++
++    pub async fn json<T>(self) -> Result<T, HttpError>
++    where
++        T: serde::de::DeserializeOwned,
++    {
++        serde_json::from_slice(&self.body)
++            .map_err(|e| HttpError::Decode(e.to_string()))
++    }
++}
++
++// ---------------------------------------------------------------------------
++// CA certificate loading — replaces `reqwest::Certificate::from_pem`.
++// ---------------------------------------------------------------------------
++
++/// Pinned CA certificate, in PEM form. The transport implementation accepts
++/// these via its constructor; this opaque type is just a typed marker.
++#[derive(Clone, Debug)]
++pub struct Certificate {
++    pub pem: Vec<u8>,
++}
++
++impl Certificate {
++    pub fn from_pem(pem: &[u8]) -> Result<Self, HttpError> {
++        Ok(Certificate { pem: pem.to_vec() })
++    }
++}
++
++// ---------------------------------------------------------------------------
++// Thread-local HTTP client handle.
++//
++// PushService used to own a `reqwest::Client` directly. Now the transport
++// implementation lives in a different crate (`xous-net-bridge`) and needs to
++// be installed on the worker thread before any PushService method runs. The
++// pattern mirrors `presage::set_executor` for symmetry — and because both
++// the executor and the http client need per-thread handles to satisfy the
++// `?Send` async-trait constraints, a single registration step at thread
++// startup is the cleanest API.
++//
++// Usage:
++//   // On the worker thread, once at startup:
++//   libsignal_service::transport::set_http_client(Arc::new(my_ureq_impl));
++//   // Then PushService::new etc. work.
++// ---------------------------------------------------------------------------
++
++use std::cell::RefCell;
++
++thread_local! {
++    static HTTP_CLIENT: RefCell<Option<Arc<dyn HttpClient + Send + Sync>>> =
++        const { RefCell::new(None) };
++}
++
++/// Install the per-thread `HttpClient` that PushService will use. Call once
++/// on the worker thread before any PushService method.
++pub fn set_http_client(client: Arc<dyn HttpClient + Send + Sync>) {
++    HTTP_CLIENT.with(|cell| *cell.borrow_mut() = Some(client));
++}
++
++/// Internal accessor used by PushService::new and PushService::request.
++pub(crate) fn get_http_client() -> Arc<dyn HttpClient + Send + Sync> {
++    HTTP_CLIENT.with(|cell| {
++        cell.borrow()
++            .as_ref()
++            .expect("libsignal_service::transport::set_http_client must be called on this thread first")
++            .clone()
++    })
++}
++
++// ---------------------------------------------------------------------------
++// Task spawner — for libsignal-service-rs functions that need to spawn
++// the WebSocket-pump background task without taking a runtime parameter.
++//
++// Functions like `provisioning::link_device` and `PushService::ws` produce
++// a `Future<Output = ()>` task that drives the WS process loop. Upstream
++// would `tokio::task::spawn(task)` it. We don't have an ambient tokio
++// runtime; instead, the worker thread registers a spawner closure once at
++// startup, and these internal functions call it.
++//
++// Symmetry with `presage::runtime`: ideally there would be one shared
++// registration that both crates use, but presage depends on
++// libsignal-service-rs (not the other way), so we keep them separate and
++// the worker-thread bootstrap calls both.
++// ---------------------------------------------------------------------------
++
++type TaskFuture = std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>;
++type SpawnerFn = Box<dyn Fn(TaskFuture)>;
++
++thread_local! {
++    static TASK_SPAWNER: RefCell<Option<SpawnerFn>> = const { RefCell::new(None) };
++}
++
++/// Install the per-thread task-spawner closure used by libsignal-service-rs
++/// internals (e.g., `provisioning::link_device`, `PushService::ws`) to
++/// spawn fire-and-forget background tasks on the local executor. Call once
++/// on the worker thread before any libsignal-service-rs API is invoked.
++///
++/// Typical setup:
++/// ```ignore
++/// let exec: &'static LocalExecutor<'static> = ...;
++/// libsignal_service::transport::set_task_spawner(Box::new(|task| {
++///     exec.spawn(task).detach();
++/// }));
++/// ```
++pub fn set_task_spawner(spawner: SpawnerFn) {
++    TASK_SPAWNER.with(|cell| *cell.borrow_mut() = Some(spawner));
++}
++
++/// Spawn `task` as a detached background task on the per-thread spawner.
++/// Panics if `set_task_spawner` was not called on this thread.
++pub(crate) fn spawn_detached(task: TaskFuture) {
++    TASK_SPAWNER.with(|cell| {
++        let spawner = cell.borrow();
++        let spawner = spawner.as_ref().expect(
++            "libsignal_service::transport::set_task_spawner must be called on this thread first",
++        );
++        spawner(task);
++    });
++}
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/websocket/account.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/account.rs
+--- /tmp/libsignal-upstream/src/websocket/account.rs	2026-05-14 15:45:54.107387979 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/account.rs	2026-05-07 19:18:21.797106585 +0200
+@@ -1,5 +1,5 @@
+ use chrono::{DateTime, Utc};
+-use reqwest::Method;
++use http::Method;
+ use serde::{Deserialize, Serialize};
+ use uuid::Uuid;
+ 
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/websocket/directory.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/directory.rs
+--- /tmp/libsignal-upstream/src/websocket/directory.rs	2026-05-14 15:45:54.107850518 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/directory.rs	2026-05-07 19:18:21.797499622 +0200
+@@ -2,6 +2,7 @@
+ //!
+ //! Provides authentication credentials for CDSI contact lookup operations.
+ //!
++use http::Method;
+ use libsignal_core::ServiceId;
+ use libsignal_net::auth::Auth;
+ use libsignal_net::cdsi::{CdsiConnection, LookupResponseEntry};
+@@ -10,7 +11,6 @@
+ };
+ use libsignal_net_infra::dns::DnsResolver;
+ use libsignal_net_infra::utils::no_network_change_events;
+-use reqwest::Method;
+ use serde::Deserialize;
+ use tracing::warn;
+ 
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/websocket/keys.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/keys.rs
+--- /tmp/libsignal-upstream/src/websocket/keys.rs	2026-05-14 15:45:54.107850518 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/keys.rs	2026-05-07 19:18:21.797499622 +0200
+@@ -1,12 +1,12 @@
+ use std::collections::HashMap;
+ 
++use http::Method;
+ use libsignal_core::DeviceId;
+ use libsignal_protocol::{
+     kem::{Key, Public},
+     IdentityKey, PreKeyBundle, PublicKey, SenderCertificate, ServiceId,
+     ServiceIdKind, SignalProtocolError,
+ };
+-use reqwest::Method;
+ use serde::Deserialize;
+ 
+ use crate::{
+@@ -133,7 +133,7 @@
+             .send_json(&req)
+             .await?;
+ 
+-        if res.status_code() == Some(reqwest::StatusCode::CONFLICT) {
++        if res.status_code() == Some(http::StatusCode::CONFLICT) {
+             return Ok(false);
+         }
+ 
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/websocket/linking.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/linking.rs
+--- /tmp/libsignal-upstream/src/websocket/linking.rs	2026-05-14 15:45:54.107850518 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/linking.rs	2026-05-07 19:18:21.797499622 +0200
+@@ -1,5 +1,5 @@
++use http::Method;
+ use libsignal_core::DeviceId;
+-use reqwest::Method;
+ 
+ use crate::websocket::{self, SignalWebSocket};
+ 
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/websocket/mod.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/mod.rs
+--- /tmp/libsignal-upstream/src/websocket/mod.rs	2026-05-14 15:45:54.107850518 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/mod.rs	2026-05-12 20:53:13.505805629 +0200
+@@ -1,5 +1,6 @@
+ use std::collections::{HashMap, HashSet};
+ use std::marker::PhantomData;
++use std::sync::atomic::{AtomicU16, Ordering};
+ use std::sync::{Arc, Mutex, MutexGuard};
+ 
+ use std::future::Future;
+@@ -10,9 +11,11 @@
+ use futures::future::BoxFuture;
+ use futures::prelude::*;
+ use futures::stream::FuturesUnordered;
+-use reqwest::Method;
+-use reqwest_websocket::WebSocket;
+-use tokio::time::Instant;
++use http::Method;
++// Stage 6.1: WebSocket transport replaced. Was reqwest_websocket::WebSocket
++// (async, tokio-coupled); now a channel pair from xous-net-bridge's WS
++// pump. WsFrame enum mirrors the reqwest_websocket::Message variants.
++use crate::transport::WsFrame;
+ use tracing::debug;
+ 
+ use crate::configuration::SignalServers;
+@@ -22,6 +25,7 @@
+     WebSocketResponseMessage,
+ };
+ use crate::push_service::{self, ServiceError, SignalServiceResponse};
++use crate::transport::WebSocketChannels;
+ 
+ pub mod account;
+ #[cfg(feature = "cdsi")]
+@@ -85,6 +89,14 @@
+         WebSocketRequestMessage,
+         oneshot::Sender<Result<WebSocketResponseMessage, ServiceError>>,
+     )>,
++    /// Last WebSocket close-frame code observed by the process loop, or
++    /// `0` if no close has been observed yet. RFC 6455 reserves `0` and
++    /// it never appears on the wire, so 0 unambiguously means "still
++    /// open or never closed". See [`SignalWebSocket::last_close_code`].
++    /// Added for xas issue #13 (Bug B: distinguish 4401 reauth from
++    /// 1001 idle close so the worker can apply a settling delay and
++    /// emit `Event::SignalAuthExpired` after N terminal 403s).
++    last_close_code: Arc<AtomicU16>,
+ }
+ 
+ struct SignalWebSocketInner {
+@@ -114,7 +126,18 @@
+         BoxFuture<'static, Result<WebSocketResponseMessage, Canceled>>,
+     >,
+ 
+-    ws: WebSocket,
++    // Stage 6.1: was `ws: WebSocket` (reqwest_websocket). Now the two
++    // channel ends from `xous-net-bridge`'s sync-tungstenite worker pump.
++    // async-channel (vs futures::channel::mpsc) so the pump worker thread
++    // can use sync send_blocking/recv_blocking, while this async loop uses
++    // .send().await / .recv().await — same channel object both sides.
++    ws_outgoing: async_channel::Sender<WsFrame>,
++    ws_incoming:
++        async_channel::Receiver<Result<WsFrame, crate::transport::HttpError>>,
++
++    /// Shared with `SignalWebSocket::last_close_code`. The process loop
++    /// writes the close-frame code here before logging + breaking out.
++    last_close_code: Arc<AtomicU16>,
+ }
+ 
+ impl SignalWebSocketProcess {
+@@ -183,6 +206,27 @@
+                         self.outgoing_keep_alive_set.take(&id)
+                     {
+                         let status_code = response.status();
++                        // Diagnostic: explicit log when a KA response
++                        // is correlated. The presence of this line in
++                        // UART (matched against the corresponding
++                        // "ka frame queued for writer req_id=N" line
++                        // by req_id) tells us the KA roundtrip
++                        // completed end-to-end. The absence of this
++                        // line — despite a queued KA — is what
++                        // builds outgoing_keep_alive_set up over time
++                        // and ultimately triggers the close branch
++                        // below. Matched with the writer's "send ok"
++                        // and the reader's "recv frame" lines, this
++                        // pinpoints whether responses fail to leave
++                        // the server, fail in transit, or fail
++                        // upstream of this correlation step.
++                        let outstanding_remaining = self.outgoing_keep_alive_set.len();
++                        tracing::info!(
++                            req_id = id,
++                            status_code,
++                            outstanding_remaining,
++                            "ka response received",
++                        );
+                         if status_code != 200 {
+                             tracing::warn!(
+                                 status_code,
+@@ -220,40 +264,70 @@
+     }
+ 
+     async fn run(mut self) -> Result<(), ServiceError> {
+-        let mut ka_interval = tokio::time::interval_at(
+-            Instant::now(),
+-            push_service::KEEPALIVE_TIMEOUT_SECONDS,
+-        );
++        // Stage 6.1: was `tokio::time::interval_at(Instant::now(),
++        // KEEPALIVE_TIMEOUT_SECONDS)` returning a `tokio::time::Interval`.
++        // Replaced with a futures-timer Delay reset on each tick — first
++        // fires immediately (Duration::ZERO), then every
++        // KEEPALIVE_TIMEOUT_SECONDS. Same external behaviour, no tokio
++        // timer reactor needed.
++        let mut ka_delay = futures_timer::Delay::new(std::time::Duration::ZERO);
++        // Diagnostic: track timer-fire times so we can verify on rv32 that
++        // futures_timer is actually firing on schedule (vs the local fix
++        // shipping but never reaching the wire).
++        let ka_loop_start = std::time::Instant::now();
++        let mut ka_count: u64 = 0;
++        let mut ka_last: Option<std::time::Instant> = None;
+ 
+         loop {
+-            futures::select! {
+-                _ = ka_interval.tick().fuse() => {
+-                    use prost::Message;
+-                    if !self.outgoing_keep_alive_set.is_empty() {
+-                        tracing::warn!("Websocket will be closed due to failed keepalives.");
+-                        if let Err(e) = self.ws.close(reqwest_websocket::CloseCode::Away, None).await {
+-                            tracing::debug!("Could not close WebSocket: {:?}", e);
++            // select_biased! with deterministic arm order — incoming
++            // first, outgoing next, KA last. The KA-timer arm only
++            // fires when neither the incoming nor outgoing arm had
++            // work that poll, which means a queued KA *response* is
++            // always drained off ws_incoming before the timer arm
++            // re-checks outgoing_keep_alive_set. Removes the random-
++            // dispatch race that previously needed MAX_OUTSTANDING
++            // _KEEPALIVES=3 as a tolerance hack on rv32 hardware.
++            // Per [#8].
++            futures::select_biased! {
++                // Drain inbound WS frames first — including KA responses —
++                // so outgoing_keep_alive_set is up-to-date before the KA
++                // timer arm could possibly fire.
++                web_socket_item = self.ws_incoming.recv().fuse() => {
++                    match web_socket_item {
++                        Ok(Ok(WsFrame::Close { code, reason })) => {
++                            // Capture the close code BEFORE logging so the
++                            // sequence is deterministic for diagnostics:
++                            // any subsequent `last_close_code()` reader is
++                            // guaranteed to see this value if it observes
++                            // the "websocket closed" log line. xas issue
++                            // #13 (Bug B) uses this to distinguish 4401
++                            // "Reauthentication required" from 1001 idle
++                            // closes and apply a settling delay before
++                            // reconnect.
++                            self.last_close_code.store(code, Ordering::Release);
++                            tracing::warn!(%code, reason, "websocket closed");
++                            break;
++                        },
++                        Ok(Ok(WsFrame::Binary(frame))) => {
++                            self.process_frame(frame).await?;
++                        }
++                        Ok(Ok(WsFrame::Ping(_))) => {
++                            tracing::trace!("received ping");
++                        }
++                        Ok(Ok(WsFrame::Pong(_))) => {
++                            tracing::trace!("received pong");
++                        }
++                        Ok(Ok(WsFrame::Text(_))) => {
++                            tracing::trace!("received text (unsupported, skipping)");
++                        }
++                        Ok(Err(e)) => return Err(ServiceError::HttpTransport(e)),
++                        Err(_closed) => {
++                            return Err(ServiceError::WsClosing {
++                                reason: "end of web request stream; socket closing"
++                            });
+                         }
+-                        self.outgoing_keep_alive_set.clear();
+-                        break;
+                     }
+-                    tracing::debug!("sending keep-alive");
+-                    let request = WebSocketRequestMessage::new(Method::GET)
+-                        .id(self.next_request_id())
+-                        .path(&self.keep_alive_path)
+-                        .build();
+-                    self.outgoing_keep_alive_set.insert(request.id.unwrap());
+-                    let msg = WebSocketMessage {
+-                        r#type: Some(web_socket_message::Type::Request.into()),
+-                        request: Some(request),
+-                        ..Default::default()
+-                    };
+-                    let buffer = msg.encode_to_vec();
+-                    if let Err(e) = self.ws.send(reqwest_websocket::Message::Binary(buffer)).await {
+-                        tracing::info!("Websocket sink has closed: {:?}.", e);
+-                        break;
+-                    };
+-                },
++                }
+                 // Process requests from the application, forward them to Signal
+                 x = self.requests.next() => {
+                     match x {
+@@ -283,7 +357,8 @@
+                                 ..Default::default()
+                             };
+                             let buffer = msg.encode_to_vec();
+-                            self.ws.send(reqwest_websocket::Message::Binary(buffer)).await?
++                            self.ws_outgoing.send(WsFrame::Binary(buffer)).await
++                                .map_err(|_| ServiceError::WsClosing { reason: "ws sink closed" })?;
+                         }
+                         None => {
+                             debug!("end of application request stream; websocket closing");
+@@ -291,34 +366,7 @@
+                         }
+                     }
+                 }
+-                // Incoming websocket message
+-                web_socket_item = self.ws.next().fuse() => {
+-                    use reqwest_websocket::Message;
+-                    match web_socket_item {
+-                        Some(Ok(Message::Close { code, reason })) => {
+-                            tracing::warn!(%code, reason, "websocket closed");
+-                            break;
+-                        },
+-                        Some(Ok(Message::Binary(frame))) => {
+-                            self.process_frame(frame).await?;
+-                        }
+-                        Some(Ok(Message::Ping(_))) => {
+-                            tracing::trace!("received ping");
+-                        }
+-                        Some(Ok(Message::Pong(_))) => {
+-                            tracing::trace!("received pong");
+-                        }
+-                        Some(Ok(Message::Text(_))) => {
+-                            tracing::trace!("received text (unsupported, skipping)");
+-                        }
+-                        Some(Err(e)) => return Err(e.into()),
+-                        None => {
+-                            return Err(ServiceError::WsClosing {
+-                                reason: "end of web request stream; socket closing"
+-                            });
+-                        }
+-                    }
+-                }
++                // Process outgoing responses to incoming Signal requests
+                 response = self.outgoing_responses.next() => {
+                     use prost::Message;
+                     match response {
+@@ -331,7 +379,8 @@
+                                 ..Default::default()
+                             };
+                             let buffer = msg.encode_to_vec();
+-                            self.ws.send(buffer.into()).await?;
++                            self.ws_outgoing.send(WsFrame::Binary(buffer)).await
++                                .map_err(|_| ServiceError::WsClosing { reason: "ws sink closed" })?;
+                         }
+                         Some(Err(error)) => {
+                             tracing::error!(%error, "could not generate response to a Signal request; responder was canceled. continuing.");
+@@ -341,6 +390,79 @@
+                         }
+                     }
+                 }
++                // KA timer fires LAST in biased order: we only get here
++                // when neither incoming nor outgoing had work this poll.
++                _ = (&mut ka_delay).fuse() => {
++                    let now = std::time::Instant::now();
++                    let since_start = now.duration_since(ka_loop_start);
++                    let since_last = ka_last.map(|t| now.duration_since(t));
++                    ka_last = Some(now);
++                    ka_count += 1;
++                    tracing::info!(
++                        ka_count,
++                        elapsed_ms = since_start.as_millis() as u64,
++                        gap_ms = since_last.map(|d| d.as_millis() as u64).unwrap_or(0),
++                        "ka timer fired",
++                    );
++                    // Reset the timer for the next tick.
++                    ka_delay = futures_timer::Delay::new(push_service::KEEPALIVE_TIMEOUT_SECONDS);
++                    use prost::Message;
++                    // Threshold=3 even though select_biased! removes the
++                    // *dispatch race*: rv32 hardware test on 2026-05-11
++                    // showed select_biased! alone is not sufficient because
++                    // on rv32 the KA round-trip can exceed the 55s KA
++                    // interval under traffic (PQXDH on first send + slow
++                    // wlan can push a single send to 90-170 s). With
++                    // threshold=1, the WS gets closed by us while the
++                    // response is still legitimately in flight; that self-
++                    // DoSes every send. PR #431's constant=3 tolerance
++                    // turned out to be addressing two independent
++                    // problems: (a) dispatch race (now fixed by
++                    // select_biased!) and (b) network-RTT-vs-interval (now
++                    // mitigated by keeping threshold=3). See issue #8
++                    // commentary for the full reasoning.
++                    const MAX_OUTSTANDING_KEEPALIVES: usize = 3;
++                    if self.outgoing_keep_alive_set.len() >= MAX_OUTSTANDING_KEEPALIVES {
++                        tracing::warn!(
++                            outstanding = self.outgoing_keep_alive_set.len(),
++                            threshold = MAX_OUTSTANDING_KEEPALIVES,
++                            "Websocket will be closed due to failed keepalives.",
++                        );
++                        // Stage 6.1: send a Close frame (code 1001 = Going Away).
++                        let _ = self.ws_outgoing.send(WsFrame::Close { code: 1001, reason: String::new() }).await;
++                        self.outgoing_keep_alive_set.clear();
++                        break;
++                    } else if !self.outgoing_keep_alive_set.is_empty() {
++                        tracing::info!(
++                            outstanding = self.outgoing_keep_alive_set.len(),
++                            threshold = MAX_OUTSTANDING_KEEPALIVES,
++                            "ka outstanding (within tolerance, continuing)",
++                        );
++                    }
++                    tracing::info!(path = %self.keep_alive_path, "ka sending");
++                    let request = WebSocketRequestMessage::new(Method::GET)
++                        .id(self.next_request_id())
++                        .path(&self.keep_alive_path)
++                        .build();
++                    let req_id = request.id.unwrap();
++                    self.outgoing_keep_alive_set.insert(req_id);
++                    let msg = WebSocketMessage {
++                        r#type: Some(web_socket_message::Type::Request.into()),
++                        request: Some(request),
++                        ..Default::default()
++                    };
++                    let buffer = msg.encode_to_vec();
++                    let buf_len = buffer.len();
++                    match self.ws_outgoing.send(WsFrame::Binary(buffer)).await {
++                        Ok(()) => {
++                            tracing::info!(req_id, buf_len, "ka frame queued for writer");
++                        }
++                        Err(e) => {
++                            tracing::warn!(?e, "ka send: ws_outgoing closed");
++                            break;
++                        }
++                    }
++                },
+             }
+         }
+         Ok(())
+@@ -352,8 +474,11 @@
+         self.inner.lock().unwrap()
+     }
+ 
++    /// Stage 6.1: was `(ws: WebSocket, ...)`. Now takes the channel pair
++    /// from the transport's `connect_websocket`. The pump runs on a worker
++    /// thread inside `xous-net-bridge`; this struct only sees the channels.
+     pub fn new(
+-        ws: WebSocket,
++        channels: WebSocketChannels,
+         keep_alive_path: String,
+         unidentified_push_service: PushService,
+     ) -> (Self, impl Future<Output = ()>) {
+@@ -362,6 +487,12 @@
+             mpsc::unbounded();
+         let (outgoing_request_sink, outgoing_requests) = mpsc::channel(1);
+ 
++        // Shared close-code slot. The process loop stores into it on the
++        // WsFrame::Close arm; the SignalWebSocket clone exposes it via
++        // `last_close_code()`. RFC 6455 reserves 0 and it never appears
++        // on the wire, so 0 = "no close observed yet".
++        let last_close_code = Arc::new(AtomicU16::new(0));
++
+         let process = SignalWebSocketProcess {
+             keep_alive_path,
+             requests: outgoing_requests,
+@@ -375,7 +506,9 @@
+             ]
+             .into_iter()
+             .collect(),
+-            ws,
++            ws_outgoing: channels.outgoing,
++            ws_incoming: channels.incoming,
++            last_close_code: last_close_code.clone(),
+         };
+         let process = process.run().map(|x| match x {
+             Ok(()) => (),
+@@ -394,6 +527,7 @@
+                         inner: incoming_request_stream,
+                     }),
+                 })),
++                last_close_code,
+             },
+             process,
+         )
+@@ -407,6 +541,22 @@
+         self.request_sink.is_closed()
+     }
+ 
++    /// Returns the WebSocket close-frame code observed by the process
++    /// loop, or `None` if no close has been observed yet. RFC 6455
++    /// reserves `0` (it never appears on the wire), which is used as
++    /// the sentinel for "still open or never closed".
++    ///
++    /// Used by the xas worker for issue #13 (Bug B) to distinguish
++    /// `4401 "Reauthentication required"` from `1001 "Idle timeout"`
++    /// and `4409 "Connected elsewhere"` (issue #1 Bug A), since the
++    /// follow-up reconnect strategy differs per close code.
++    pub fn last_close_code(&self) -> Option<u16> {
++        match self.last_close_code.load(Ordering::Acquire) {
++            0 => None,
++            code => Some(code),
++        }
++    }
++
+     pub fn is_used(&self) -> bool {
+         self.inner_locked().stream.is_none()
+     }
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/websocket/profile.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/profile.rs
+--- /tmp/libsignal-upstream/src/websocket/profile.rs	2026-05-14 15:45:54.112248230 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/profile.rs	2026-05-07 19:18:21.797499622 +0200
+@@ -1,5 +1,5 @@
++use http::Method;
+ use libsignal_protocol::Aci;
+-use reqwest::Method;
+ use serde::{Deserialize, Serialize};
+ use zkgroup::profiles::{ProfileKeyCommitment, ProfileKeyVersion};
+ 
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/websocket/registration.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/registration.rs
+--- /tmp/libsignal-upstream/src/websocket/registration.rs	2026-05-14 15:45:54.107850518 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/registration.rs	2026-05-07 19:18:21.797499622 +0200
+@@ -1,5 +1,5 @@
++use http::Method;
+ use libsignal_protocol::IdentityKey;
+-use reqwest::Method;
+ use serde::{Deserialize, Serialize};
+ use uuid::Uuid;
+ 
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/websocket/request.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/request.rs
+--- /tmp/libsignal-upstream/src/websocket/request.rs	2026-05-14 15:45:54.107850518 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/request.rs	2026-05-07 19:18:21.797499622 +0200
+@@ -1,6 +1,6 @@
+ use std::fmt;
+ 
+-use reqwest::Method;
++use http::Method;
+ use serde::Serialize;
+ 
+ use crate::{
+diff -ruN -x .git -x target -x Cargo.lock /tmp/libsignal-upstream/src/websocket/usernames.rs /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/usernames.rs
+--- /tmp/libsignal-upstream/src/websocket/usernames.rs	2026-05-14 15:45:54.107850518 +0200
++++ /home/tunnell/code/xas/xous-app-signal/vendor/libsignal-service-rs/src/websocket/usernames.rs	2026-05-07 19:18:21.797499622 +0200
+@@ -1,7 +1,7 @@
+ use crate::utils::serde_base64;
+ use base64::{prelude::BASE64_URL_SAFE_NO_PAD, Engine};
++use http::Method;
+ use libsignal_core::{Aci, ServiceIdKind};
+-use reqwest::Method;
+ 
+ use crate::content::ServiceError;
+ 

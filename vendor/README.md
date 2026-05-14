@@ -90,6 +90,6 @@ the smaller diff. The eventual goal is `*.diff` files that are empty.
 
 | File | Populated | Last regen |
 |---|---|---|
-| `presage.diff` | yes — see file | 2026-05-14 |
-| `libsignal-service-rs.diff` | TODO | — |
-| `curve25519-dalek.diff` | TODO | — |
+| `presage.diff` | yes (2684 lines, 97K) | 2026-05-14 |
+| `libsignal-service-rs.diff` | yes (1646 lines, 70K) | 2026-05-14 |
+| `curve25519-dalek.diff` | yes (653 lines, 26K) | 2026-05-14 |
