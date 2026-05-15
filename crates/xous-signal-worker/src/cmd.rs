@@ -173,6 +173,18 @@ pub enum Cmd {
     /// could read it back; the warning log is the only signal an
     /// operator currently has.
     ///
+    /// `presage_store_pddb`'s `Store::clear` is not atomic across
+    /// dictionaries (see `presage-store-pddb/src/store.rs::clear`
+    /// and `~/REFACTOR_NOTES.md` PS.sec-E): a mid-clear error leaves
+    /// `session_cache` and `session_dirty` partially populated, and
+    /// downstream the PDDB free-list does **not** zero pages on
+    /// dictionary delete (PS.sec-C). Acquiring the flash post-wipe
+    /// can therefore recover ciphertext that the API surface
+    /// presents as gone. The W-W.7 refactor to surface partial-wipe
+    /// success per dictionary depends on this clear-semantics
+    /// contract; the secure-erase opcode the PDDB team would expose
+    /// is the deeper fix.
+    ///
     /// This does **not** remove the device from the primary phone's
     /// Linked Devices list — that requires `unlink_secondary`,
     /// which is a primary-only API. The user must remove the entry

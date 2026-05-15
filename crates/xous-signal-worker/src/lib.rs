@@ -786,6 +786,30 @@ struct InnerSend {
 /// (`MAX_CONSECUTIVE_FAILURES` reached, a fatal `4409` close code,
 /// or the `MAX_REAUTH_403S` budget exhausted).
 ///
+/// # Manager ownership and Drop
+///
+/// The `manager` parameter is moved into this task at spawn time
+/// and is dropped only when the task exits. On Drop the
+/// [`presage_store_pddb::PddbStore`] handle held inside `Manager`
+/// is dropped too; the `PddbStore` is `Clone + Send + Sync` but
+/// `Clone` is shallow (clones share one
+/// `Arc<Mutex<HashMap<SessionKey, SessionRecord>>>` session cache
+/// and one `Arc<dyn KvBackend>`). The `session_cache` therefore
+/// stays alive as long as *any* clone exists — see
+/// `presage_store_pddb::PddbStore` Clone semantics in the docstring
+/// of that type. libsignal's `SessionRecord` does **not** derive
+/// `Zeroize` upstream (PS.sec-B in `~/REFACTOR_NOTES.md`), so an
+/// extended `Manager` / `PddbStore` lifetime extends the post-Drop
+/// memory-disclosure window for ratchet state. The receive loop
+/// flushes sessions on `Received::QueueEmpty`; future code paths
+/// that hold long-lived Store clones should consider an explicit
+/// `flush_sessions` + drop before the receive cycle ends.
+///
+/// `presage_store_pddb::PddbBackend` does **not** retry internally
+/// on `NotMounted` — that retry loop lives here in the worker
+/// (`worker_main`'s `load_registered` loop). New paths that read
+/// the store must do their own readiness handling.
+///
 /// # Why the multiplexer exists
 ///
 /// presage's API forces a difficult shape: both `receive_messages`

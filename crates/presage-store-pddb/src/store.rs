@@ -41,16 +41,28 @@ impl Store for PddbStore {
     /// See the module-level Security note for the durability bound
     /// (PDDB free-list does not zero pages on free).
     ///
+    /// `xous_signal_worker::Cmd::Logout` is the production caller;
+    /// the worker treats `Err` from this method as non-fatal (logs a
+    /// warning, emits `Event::LoggedOut` anyway). The W-W.7 refactor
+    /// to surface partial-wipe outcomes per dictionary depends on the
+    /// per-dict failure contract documented under `# Errors` below.
+    ///
     /// # Errors
     ///
     /// Returns the first backend error encountered via `?`. Earlier
     /// `delete_dict` calls have already taken effect; there is no
-    /// rollback. The in-memory session cache and dirty set are
-    /// cleared only after every backend dict has been deleted
-    /// successfully, so on partial failure they retain the
-    /// pre-`clear` state and a subsequent `flush_sessions` could
-    /// re-persist sessions whose protocol-dict was already wiped.
-    /// See REFACTOR_NOTES sec-E.
+    /// rollback. Order of dictionaries wiped:
+    /// `signal.state` (via `clear_registration`), every contents
+    /// dict (via `clear_contents`), then for each of
+    /// `IdentityType::Aci` and `IdentityType::Pni` the seven
+    /// protocol dicts in the order
+    /// `session, identity, prekey_bundle, signed_prekey,
+    /// kyber_prekey, kyber_meta, sender_key`. The in-memory session
+    /// cache and dirty set are cleared only after every backend
+    /// dict has been deleted successfully, so on partial failure
+    /// they retain the pre-`clear` state and a subsequent
+    /// `flush_sessions` could re-persist sessions whose
+    /// protocol-dict was already wiped. See REFACTOR_NOTES sec-E.
     async fn clear(&mut self) -> Result<(), <Self as StateStore>::StateStoreError> {
         // Wipe registration data + identity keypairs + sender cert +
         // master key.

@@ -190,7 +190,13 @@ pub trait KvBackend: Send + Sync + fmt::Debug {
 /// every clone of a `PddbStore` therefore observes the same on-disk
 /// state and the same in-flight session cache, which is the
 /// behaviour Manager assumes when it stashes a store handle behind
-/// shared state.
+/// shared state. A consequence: every live clone (held by `Manager`,
+/// stashed in the worker dispatcher, captured in spawned tasks)
+/// extends the lifetime of the cached `SessionRecord` bytes, which
+/// libsignal-protocol does not zeroize on Drop today (PS.sec-B in
+/// `~/REFACTOR_NOTES.md`). `xous_signal_worker::manager_task` drops
+/// the Manager when its `send_rx` closes; the cache is gone only
+/// once the last clone has been dropped.
 ///
 /// # Security
 ///
