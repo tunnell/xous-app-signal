@@ -61,7 +61,22 @@ releases create new `xas-vX.Y+1` branches — they don't reuse old ones.
    git push origin vX.Y
    ```
 
-8. **Don't delete `xas-vX.Y` on xous-core.** Past release branches stay
+8. **Sync `main` to `dev`.** `main` tracks the latest released commit;
+   `dev` is active development. After tagging, fast-forward `main` to
+   the tagged commit:
+
+   ```sh
+   cd path/to/xous-app-signal
+   git checkout main
+   git pull --ff-only
+   git merge --ff-only vX.Y
+   git push origin main
+   ```
+
+   This must be a fast-forward. If it isn't, something landed on `main`
+   that isn't on `dev` — stop and investigate before forcing.
+
+9. **Don't delete `xas-vX.Y` on xous-core.** Past release branches stay
    frozen and accessible forever — anyone re-building an old xas version
    from source needs them.
 
