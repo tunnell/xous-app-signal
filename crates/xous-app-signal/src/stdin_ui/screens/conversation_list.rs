@@ -1,10 +1,20 @@
 //! Conversation list.
 //!
-//! On entry the driver sends `Cmd::StartReceive`. The screen's status
-//! tracks whether the receive loop is active; received messages are
-//! appended to a flat `Vec<MessageSummary>` (could later group by
-//! thread per the original UI design (since superseded; see git log for the spec)'s pinned/unpinned layout, but for MVP a
-//! single chronological list is enough).
+//! On entry, the driver sends `Cmd::StartReceive`. The screen's
+//! [`ReceiveStatus`] tracks whether the receive loop is active;
+//! received messages are appended to a flat
+//! `Vec<MessageSummary>` rendered latest-first.
+//!
+//! # Trust boundary
+//!
+//! Each [`MessageSummary`] carries plaintext that crossed the
+//! libsignal decrypt boundary inside the worker. The sender field
+//! is the account-identifying ACI (or e164 fallback) that the
+//! worker forwarded; the body is the decrypted message text. Treat
+//! everything in this screen as PII or higher when adding new
+//! consumers — see workspace REFACTOR_NOTES W-W.2 on PII redaction
+//! discipline and W-W.3 on wrapping decrypted bodies in zeroizing
+//! containers.
 
 use crate::stdin_ui::key::Key;
 use crate::stdin_ui::screen::{Screen, Transition};
@@ -12,10 +22,23 @@ use crate::stdin_ui::screens::menu::MenuScreen;
 
 /// One received message, flattened for display. Mirrors the
 /// `Event::Message` payload from `xous-signal-worker`.
+///
+/// # Security
+///
+/// Both `sender` and `body` are plaintext that crossed the
+/// libsignal decrypt boundary. `sender` is account-identifying;
+/// `body` is the actual message text. The derived `Debug` impl
+/// renders both verbatim — avoid `tracing::debug!(?summary)` and
+/// equivalent on any value of this type.
 #[derive(Debug, Clone)]
 pub struct MessageSummary {
+    /// ACI (UUID) of the message author, or e164/UUID-shaped
+    /// fallback if the worker could not resolve a contact name.
     pub sender: String,
+    /// Decrypted message body.
     pub body: String,
+    /// Unix milliseconds. Comes from the worker; xas does not
+    /// re-stamp.
     pub timestamp: u64,
 }
 
