@@ -4,12 +4,61 @@
 //!   `signal.state["{aci|pni}_identity_key_pair"]` key written by
 //!   `set_aci_identity_key_pair` / `set_pni_identity_key_pair`. The
 //!   bytes are libsignal's binary `IdentityKeyPair::serialize()`
-//!   format.
+//!   format (private + public halves inline).
 //! - `get_local_registration_id`: comes from the registration blob
 //!   loaded by `StateStore::load_registration_data`. Same source the
 //!   sqlite store uses.
 //! - `save_identity` / `is_trusted_identity` / `get_identity`: per-
 //!   `ProtocolAddress` keys in `signal.protocol.{aci,pni}.identity`.
+//!   These hold **peer** identity public keys; no private material
+//!   crosses this dict.
+//!
+//! # Trust boundary
+//!
+//! `get_identity_key_pair` reconstructs an [`IdentityKeyPair`] —
+//! including its private half — from raw PDDB bytes. PDDB has already
+//! authenticated those bytes (per-page AES-256-GCM-SIV); we trust
+//! libsignal's `IdentityKeyPair::try_from(&[u8])` to reject anything
+//! that isn't a valid keypair encoding. There is no second-layer MAC
+//! here. A successful `try_from` is the trust witness.
+//!
+//! `save_identity` / `is_trusted_identity` make the TOFU decision
+//! described inline. The two-state policy (`Trust` accepts rotation,
+//! `Reject` denies it) is governed by the `trust_new_identities` flag
+//! on the parent `PddbStore` — set once at construction time.
+//!
+//! # Security
+//!
+//! The local identity key bytes returned by `get_identity_key_pair`
+//! are the single most sensitive value in this entire crate.
+//! Compromise of these bytes:
+//!
+//! - destroys the deniable-authentication property of every past and
+//!   future session for this identity (ACI or PNI);
+//! - lets the holder impersonate the user to any Signal peer (until
+//!   the user rekeys);
+//! - lets the holder decrypt prekey-initiated sessions that haven't
+//!   yet ratcheted forward.
+//!
+//! The `Vec<u8>` returned by `backend.get(...)` does **not** zero on
+//! drop. libsignal's `IdentityKeyPair` itself zeroes its internal
+//! private-key buffer on drop (see libsignal-protocol's
+//! `PrivateKey`), but the transient `bytes` local here lives in a
+//! plain `Vec<u8>`. Logging the `bytes` value, including via
+//! `tracing::debug!(?bytes)` on this function's body, would leak the
+//! key. **MUST NOT happen.** See REFACTOR_NOTES sec-A.
+//!
+//! Peer identity public keys are not secret-equivalent on their own,
+//! but the (address, identity-key) mapping is privacy-relevant: it
+//! reveals which UUIDs the user has spoken to.
+//!
+//! # Logging
+//!
+//! `is_trusted_identity` calls `tracing::warn!(?address, "trusting
+//! new identity (TOFU)")`. The address is the libsignal
+//! `ProtocolAddress` (UUID + device id) — non-private-key material —
+//! and matches presage-store-sqlite's behaviour. No identity bytes
+//! are logged.
 
 use async_trait::async_trait;
 use presage::libsignal_service::protocol::{
@@ -102,10 +151,16 @@ impl IdentityKeyStore for PddbProtocolStore {
         _direction: Direction,
     ) -> Result<bool, SignalProtocolError> {
         match self.get_identity(address).await? {
-            // Same TOFU policy presage-store-sqlite uses: known-and-equal
-            // is trusted; known-and-different defers to the store-level
-            // `trust_new_identities` flag (`Trust` accepts the change,
-            // `Reject` rejects).
+            // TOFU policy matching presage-store-sqlite. Three cases:
+            //  - known-and-equal: trusted unconditionally.
+            //  - known-and-different: a rotation. The store-level
+            //    `trust_new_identities` flag decides. `Trust` accepts
+            //    silently (libsignal will surface the safety-number
+            //    change to UI); `Reject` refuses and blocks the
+            //    message until the user re-verifies.
+            //  - unknown: trust-on-first-use. Always accepted, but a
+            //    warning is logged so audit can see a fresh identity
+            //    showed up.
             Some(stored) if &stored == identity => Ok(true),
             Some(_) => Ok(matches!(
                 self.store.trust_new_identities,

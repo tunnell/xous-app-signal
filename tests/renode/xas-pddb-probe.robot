@@ -1,8 +1,8 @@
 *** Comments ***
-Stage 13b — exploratory PDDB IPC probe.
+Exploratory PDDB IPC probe.
 
 Boots the same Xous image as xas-smoke.robot, but expects the
-binary to have been built with --features probe-pddb. The probe
+binary to have been built with `--features probe-pddb`. The probe
 calls xous-core's PDDB Mount Poller via raw `xous::send_message`
 (the same path a hand-rolled PDDB client would take) and logs
 the result.

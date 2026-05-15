@@ -1,20 +1,19 @@
 *** Comments ***
-Boot-regression test for the bulk-write branch.
+Boot-regression test for hardware-flag builds with PDDB enabled.
 
-Verifies that a canonical hardware-flag build (NO auto-firing probe
-features) on the bulk-write branches boots far enough that PDDB
-finishes service registration and reaches the password prompt — i.e.
-no `ServerNotFound` cascade in unrelated services (llio, trng,
-modals, susres).
+Verifies that a canonical hardware-flag build (no auto-firing
+probe features) boots far enough that PDDB finishes service
+registration and reaches the password prompt — i.e. no
+`ServerNotFound` cascade in unrelated services (llio, trng, modals,
+susres).
 
-History: prior to 2026-05-14, the xas binary had `probe-pddb-real`
-and `probe-bulk-ab` features that auto-fired immediately after
-worker spawn and called `presage_store_pddb::PddbBackend::connect()`.
-That hit xous-names BEFORE all services had registered, triggering
-a watchdog reboot loop on Precursor PVT2 hardware. Those features
-were removed; the bulk-write benchmark moved to the shellchat
-command `pddb bulk_probe`. This robot test is the regression guard
-against re-introducing an auto-fire that races with boot.
+This test is the regression guard against re-introducing an
+auto-fire that races with xous-names server registration during
+boot. xas deliberately avoids calling
+`presage_store_pddb::PddbBackend::connect()` immediately after
+spawning the worker; bulk-write benchmarking is exposed via the
+shellchat `pddb bulk_probe` command (user-invoked after PIN entry
+and PDDB mount), not via an auto-fire feature.
 
 Reaching the `Requesting login password` line means the PDDB
 service started cleanly, which can only happen after llio + trng +

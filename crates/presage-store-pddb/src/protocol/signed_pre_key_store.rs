@@ -5,6 +5,19 @@
 //! their libsignal binary form (`record.serialize()?`) — same shape
 //! presage-store-sqlite uses (vendor/presage/presage-store-sqlite/
 //! src/protocol.rs:341-360).
+//!
+//! # Security
+//!
+//! A signed prekey record holds an EC private key (the prekey
+//! private half) plus the identity-key signature over its public
+//! half. Compromise of the private bytes lets the holder forge a
+//! prekey bundle and act as a valid receiver of X3DH-initiated
+//! sessions for some window (until the signed prekey is rotated by
+//! the next presage replenish pass).
+//!
+//! Stored as the libsignal binary form; PDDB's per-page AEAD is the
+//! single trust boundary. Read returns a fresh `Vec<u8>` that does
+//! not zero on drop.
 
 use async_trait::async_trait;
 use presage::libsignal_service::protocol::{

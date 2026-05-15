@@ -15,9 +15,9 @@
 //!   `sha256("group:" + base64(master_key))`. Keys inside the
 //!   dictionary are 16-hex-character zero-padded `u64` timestamps so
 //!   that `list_keys` order matches arrival order under PDDB's
-//!   lexicographic key sort. Values are JSON `StoredMessage` envelopes
-//!   wrapping libsignal's binary `Content` protobuf body alongside its
-//!   `Metadata`.
+//!   lexicographic key sort. Values are JSON `StoredMessage`
+//!   envelopes wrapping libsignal's binary `Content` protobuf body
+//!   alongside its `Metadata`.
 //!
 //! Messages-by-thread serialization choice — JSON envelope around
 //! prost-encoded body bytes — matches presage-store-sqlite's pattern
@@ -26,6 +26,60 @@
 //! adopt presage-store-sled's `InternalSerialization.proto` wrapper:
 //! it requires a build script and a textsecure proto, both of which
 //! we'd have to maintain alongside upstream.
+//!
+//! # Security
+//!
+//! ContentsStore is the **application-data** layer (vs StateStore's
+//! account-credential layer and ProtocolStore's key-material layer).
+//! Sensitivity tiers here are different:
+//!
+//! - **`ProfileKey`** (`profile_keys`, derived into the
+//!   `profile_dict_key` hash, also embedded in `RegistrationData`):
+//!   the 32-byte symmetric profile encryption key per contact.
+//!   Compromise lets the holder decrypt that contact's profile
+//!   metadata (name, about, avatar). Stored as JSON of the upstream
+//!   `ProfileKey` struct (`{"bytes": [...]}`).
+//! - **`Group` master keys** (used as the dict-key in `signal.groups`
+//!   and `signal.group_avatars`): 32-byte keys identifying a Signal
+//!   group. Compromise lets the holder derive the group's access
+//!   credentials. Stored hex-encoded as the dict-key string — i.e.
+//!   the master key is itself embedded in the PDDB key namespace, not
+//!   in the value. PDDB's per-page AEAD covers the keyspace, but
+//!   `list_keys` returns hex-encoded master keys to whoever calls it.
+//! - **Message bodies** (`signal.threads.<...>` values): the decrypted
+//!   plaintext (`proto::Content`) of every message the user has sent
+//!   or received in that thread. Compromise reveals all of the user's
+//!   message history with that contact / group. Stored as JSON
+//!   envelope with a `body_proto: Vec<u8>` field carrying the
+//!   protobuf-encoded `Content`.
+//! - **Contacts / groups / profiles / sticker packs**: metadata about
+//!   the user's social graph. Not secret-equivalent but highly
+//!   privacy-sensitive — knowing who the user talks to is a metadata
+//!   leak.
+//! - **Avatar bytes**: raw images, stored unframed.
+//!
+//! All values cross the PDDB trust boundary as `Vec<u8>` that do not
+//! zero on drop. The bodies-by-thread `body_proto` `Vec<u8>` lives
+//! inside a `StoredMessage` whose `Debug` derive is never invoked but
+//! would print the protobuf body bytes as a decimal-int array if it
+//! were.
+//!
+//! # Logging
+//!
+//! No method here emits `tracing` events that include value bytes or
+//! decoded plaintext. presage's manager and the worker layer may log
+//! the user-visible *fact* that a message arrived (sender UUID,
+//! timestamp), but never the body.
+//!
+//! # rv32 / 16 MiB constraint
+//!
+//! `messages(thread, range)` walks the thread dict's full key list,
+//! filters by range, and eagerly loads matching values into a
+//! `Vec<Result<Content, Error>>` returned as the `MessagesIter`. For
+//! a thread of N messages all matching the range, this allocates N
+//! `Content` instances plus their backing `Vec<u8>` clones. The
+//! caller decides cardinality; presage callers typically use bounded
+//! ranges. See REFACTOR_NOTES perf-A for streaming variants.
 
 use std::ops::{Bound, RangeBounds};
 
@@ -118,6 +172,14 @@ fn message_key(timestamp: u64) -> String {
 /// don't have to re-derive `Serialize` for libsignal types we don't
 /// own. Metadata fields are spelled out individually for
 /// pddbcli-readability.
+///
+/// # Security
+///
+/// `body_proto` is the protobuf-encoded plaintext of a Signal
+/// message — i.e. the decrypted message body, including any
+/// attachment pointers. Treat it as user content. The struct does
+/// **not** derive `Debug`; logging a `StoredMessage` would dump the
+/// plaintext body as a decimal-int array.
 #[derive(Serialize, Deserialize)]
 struct StoredMessage {
     sender: String,

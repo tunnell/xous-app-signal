@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Stage 9b — Renode test runner wrapper.
+# Renode test runner wrapper.
 #
-# Builds the xas rv32 ELF, copies it to a known dist location,
-# then invokes `renode-test` against the Stage 9b smoke Robot
-# script (or whichever .robot is named on the command line).
+# Builds the xas rv32 ELF, copies it to a known dist location, then
+# invokes `renode-test` against the named Robot script (default:
+# xas-smoke.robot).
 #
 # Usage:
 #   tests/renode/run-renode-tests.sh                  # default: xas-smoke.robot
-#   tests/renode/run-renode-tests.sh xas-link-mock.robot
+#   tests/renode/run-renode-tests.sh xas-probe.robot
 #
 # Environment:
 #   RENODE        — renode-test binary (default: renode-test)
@@ -40,8 +40,7 @@ if ! command -v "$renode_bin" >/dev/null 2>&1; then
 fi
 
 # 1. Cross-compile xas for rv32 + copy ELF to the dist dir the
-#    .resc script expects. (Previously this was `cargo xtask dist`;
-#    inlined here after xtask removal.)
+#    .resc script expects.
 cd "$workspace_root"
 echo "==> building xas for riscv32imac-unknown-xous-elf"
 cargo build --target riscv32imac-unknown-xous-elf --release \

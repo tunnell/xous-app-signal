@@ -1,8 +1,11 @@
 //! Empty conversation list.
 //!
-//! Shown after a successful link when the local store has no threads
-//! yet. The hint footer collapses to one item ("Menu") since no
-//! navigation is possible.
+//! Shown after a successful link when the local store has no
+//! threads yet. The hint footer collapses to a single item
+//! ("Menu") since no navigation is possible until messages arrive.
+//! The driver replaces this with
+//! [`crate::stdin_ui::screens::conversation_list::ConversationListScreen`]
+//! when the first `Event::Message` is received.
 
 use crate::stdin_ui::key::Key;
 use crate::stdin_ui::screen::{Screen, Transition};

@@ -1,6 +1,19 @@
-//! Smoke test: `PddbBackend::put` must shrink a key when overwriting
-//! with a smaller value (refs #14). Run from a hosted-xas startup
-//! path or rv32 test runner; needs live PDDB IPC.
+//! Smoke test: `PddbBackend::put` must shrink a key when
+//! overwriting with a smaller value (refs #14).
+//!
+//! Run from a hosted-xas startup path or rv32 test runner; needs
+//! live PDDB IPC. The test writes a 50 KB blob, overwrites it with
+//! 10 KB, and asserts the read-back is exactly 10 KB of the small
+//! marker. A tail of `LARGE_MARKER` bytes after the overwrite is the
+//! signature of the PDDB `truncate=false` regression.
+//!
+//! Side effects: writes to the dict `xas.put_truncate_smoke`, key
+//! `buffer`. The test deletes the key on completion (best-effort);
+//! a crash during the test may leave the key behind.
+//!
+//! Not security-sensitive: the marker bytes are constants
+//! (`0xAA`/`0x55`) and the test runs against a dedicated dict, so
+//! it never touches user material.
 
 use crate::backend_pddb::PddbBackend;
 use crate::KvBackend;
@@ -12,20 +25,29 @@ const SMALL_LEN: usize = 10_000;
 const LARGE_MARKER: u8 = 0xAA;
 const SMALL_MARKER: u8 = 0x55;
 
+/// Outcome of [`smoke_put_truncates`].
 #[derive(Debug)]
 pub enum SmokeResult {
+    /// Overwrite shrank the key correctly; read-back is exactly the
+    /// small value.
     Pass,
+    /// Read-back length or content was wrong. `sample_tail` carries
+    /// the last 16 bytes of the read for diagnostic logging — if
+    /// those bytes are all `LARGE_MARKER` (0xAA), the truncation
+    /// bug regressed.
     Fail {
         expected_len: usize,
         actual_len: usize,
         sample_tail: Vec<u8>,
     },
+    /// A step prerequisite (initial put, intermediate get) failed.
+    /// String is the backend error rendering.
     Error(String),
 }
 
-/// Write a 50 KB blob, overwrite with 10 KB, read back. Pass iff the
-/// read-back is exactly 10 KB of `SMALL_MARKER`. A tail of `LARGE_MARKER`
-/// bytes is the signature of the truncation bug.
+/// Write a 50 KB blob, overwrite with 10 KB, read back. Pass iff
+/// the read-back is exactly 10 KB of `SMALL_MARKER`. A tail of
+/// `LARGE_MARKER` bytes is the signature of the truncation bug.
 pub fn smoke_put_truncates(backend: &PddbBackend) -> SmokeResult {
     let large = vec![LARGE_MARKER; LARGE_LEN];
     if let Err(e) = backend.put(DICT, KEY, &large) {

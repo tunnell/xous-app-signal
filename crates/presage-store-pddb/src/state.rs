@@ -2,21 +2,77 @@
 //!
 //! All state lives in a single PDDB dictionary, `signal.state`, with
 //! one key per field. This matches presage-store-sqlite's `kv` table
-//! layout. Per-field keys keep reads cheap and let `clear_registration`
-//! walk the dict instead of editing a giant blob.
+//! layout. Per-field keys keep reads cheap and let
+//! `clear_registration` walk the dict instead of editing a giant
+//! blob.
+//!
+//! # Trust boundary
+//!
+//! Every byte read here came from PDDB and has been authenticated by
+//! PDDB's per-page AEAD. The libsignal types reconstruct themselves
+//! from those bytes; a deserialization failure is the only signal
+//! that something is wrong, and surfaces as [`Error::Decode`] or
+//! [`Error::Protocol`].
+//!
+//! # Security
+//!
+//! Persisted material, by sensitivity tier:
+//!
+//! - **`IdentityKeyPair`** (`aci_identity_key_pair`,
+//!   `pni_identity_key_pair`): long-term private+public identity
+//!   keys. See the protocol module's identity store for the full
+//!   compromise analysis. Stored as libsignal binary
+//!   `IdentityKeyPair::serialize()`.
+//! - **`MasterKey`** (`master_key`): the 32-byte Signal storage
+//!   service master key. Compromise gives the holder read+write
+//!   access to the user's Signal storage-service-encrypted content
+//!   (contacts, groups, profile metadata). Stored as the **raw 32
+//!   bytes** of `master_key.inner` — no framing, no MAC, no
+//!   zeroization at this layer.
+//! - **`RegistrationData`** (`registration`): contains the Signal
+//!   account password, both ACI and PNI registration ids, the
+//!   profile key, the linked device id, and the user's E.164 phone
+//!   number. Compromise lets the holder authenticate to Signal's
+//!   chat service as the user and rotate prekeys / sessions.
+//!   Stored as `serde_json` of the upstream `RegistrationData`
+//!   shape; the `password` field is a plain `String`, the
+//!   `profile_key` serializes to base64 (see vendor/presage/presage/
+//!   src/serde.rs `serde_profile_key`).
+//! - **`SenderCertificate`** (`sender_certificate`): a signed
+//!   certificate that authorizes sealed-sender envelopes for this
+//!   account. Contains the user's public identity key and a
+//!   server-issued signature. Not secret-equivalent (the cert is
+//!   what gets sent on the wire) but loss-of-control means anyone
+//!   who has the cert can send sealed-sender messages spoofed as
+//!   the user until expiry.
+//!
+//! All read/write paths return / accept `Vec<u8>` that do not zero
+//! on drop. The `MasterKey` and the `password` field inside
+//! `RegistrationData` are the values most worth wrapping in
+//! `secrecy::SecretBox`; see REFACTOR_NOTES sec-D.
 //!
 //! Serialization choices:
 //!
 //! - `RegistrationData` — `serde_json` (debuggable from a `pddbcli`
-//!   dump). Same choice presage-store-sqlite makes.
-//! - `IdentityKeyPair` — `.serialize()` to a libsignal-defined binary
-//!   form, `IdentityKeyPair::try_from(&[u8])` to read. Matches
-//!   presage-store-sqlite's pattern.
+//!   dump). Same choice presage-store-sqlite makes. The
+//!   debuggability comes at the cost of plaintext-in-PDDB-page
+//!   storage; the entire blob (including the account password) sits
+//!   in one key.
+//! - `IdentityKeyPair` — `.serialize()` to a libsignal-defined
+//!   binary form, `IdentityKeyPair::try_from(&[u8])` to read.
+//!   Matches presage-store-sqlite's pattern.
 //! - `SenderCertificate` — `.serialized()? -> Vec<u8>` /
 //!   `SenderCertificate::deserialize(&[u8])`. Protocol-defined wire
 //!   format; do not reframe.
 //! - `MasterKey` — store the 32 raw bytes from `master_key.inner`;
 //!   `MasterKey::from_slice` to read.
+//!
+//! # Logging
+//!
+//! None of the StateStore methods emit `tracing` events that include
+//! field values. The store-level callers (presage) may log
+//! `RegistrationData`-derived facts (e.g. the user's UUID); the bytes
+//! themselves never leave PDDB except into the caller's owned types.
 
 use presage::libsignal_service::prelude::MasterKey;
 use presage::libsignal_service::protocol::{IdentityKeyPair, SenderCertificate};

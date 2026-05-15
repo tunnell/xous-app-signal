@@ -1,27 +1,69 @@
-//! `BufferingBackend` — a `KvBackend` wrapper that defers writes to
-//! an in-memory buffer during a "batch" scope, then replays them to
-//! the inner backend on commit.
+//! [`BufferingBackend`] — a [`KvBackend`] wrapper that defers
+//! writes to an in-memory buffer during a "batch" scope, then
+//! replays them to the inner backend on commit.
 //!
 //! Motivation: each `PddbBackend::put` on the real PDDB triggers an
 //! expensive multi-basis sync inside the server's `Opcode::WriteKey`
-//! handler (xous-core/services/pddb/src/main.rs:2293-2294). Coalescing
-//! the writes that fire during a single Signal `send_message` into
-//! one logical batch lets the application layer choose where to pay
-//! that cost — typically once at the end of send, rather than per
-//! Store-trait write.
+//! handler (xous-core/services/pddb/src/main.rs:2293-2294).
+//! Coalescing the writes that fire during a single Signal
+//! `send_message` into one logical batch lets the application layer
+//! choose where to pay that cost — typically once at the end of
+//! send, rather than per Store-trait write.
 //!
-//! This wrapper sits between `PddbStore` and the underlying backend.
-//! It is **transparent** when no batch is active: every call passes
-//! through to the inner backend with no extra work. It is only
-//! interesting inside a batch scope opened via `begin_batch()`.
+//! This wrapper sits between [`crate::PddbStore`] and the underlying
+//! backend. It is **transparent** when no batch is active: every
+//! call passes through to the inner backend with no extra work. It
+//! is only interesting inside a batch scope opened via
+//! [`BufferingBackend::begin_batch`].
+//!
+//! # Trust boundary
+//!
+//! [`BufferingBackend`] sits inside the PDDB trust boundary on the
+//! write path: buffered bytes live in process memory until commit,
+//! never on disk. Read-through against the buffer returns bytes the
+//! same caller just wrote, so it adds no new trust hop.
+//!
+//! # Security
+//!
+//! The in-memory buffer is `Mutex<HashMap<(String, String),
+//! BufferEntry>>` of secret-bearing values during a session-send
+//! batch (the buffered values include session records, identity
+//! state, etc.). The `Vec<u8>` payloads do not zero on drop. A
+//! [`BatchGuard::commit`] on a successful path replays them to the
+//! inner backend and clears the buffer; a `Drop`-abort clears the
+//! buffer without replay. In both cases the `HashMap`'s capacity
+//! storage is reused (so old `Vec<u8>` allocations are freed but
+//! their backing memory may sit on the allocator's freelist until
+//! reused).
+//!
+//! Crash semantics: if the process crashes between buffer-write and
+//! commit, all buffered values are lost. This matches the existing
+//! `session_cache` pattern (protocol/session_store.rs) — the
+//! application is responsible for ordering durability boundaries.
+//!
+//! # Logging
+//!
+//! `begin_batch`, `commit_internal`, and `abort_internal` emit
+//! `tracing::info!` perf events that carry buffer cardinality, put
+//! and delete counts, and elapsed milliseconds. Value bytes are
+//! never logged. A per-entry `put_batch` failure surfaces the inner
+//! error message via `tracing::warn!`; that message is the backend's
+//! own `Error::Backend(...)` string and does not carry value bytes.
+//!
+//! # rv32 / 16 MiB constraint
+//!
+//! Buffer memory is unbounded in this implementation. In practice
+//! the worst-case batch (one `Signal::send_message` for a 100-member
+//! group) touches at most ~110 entries × ~1 KB each = ~110 KB.
+//! See REFACTOR_NOTES perf-B for a heapless-bounded variant.
 //!
 //! Batch semantics:
 //!
-//! - During a batch, `put(dict, key, value)` records the value in an
-//!   in-memory `HashMap` keyed on `(dict, key)`. **No inner-backend
-//!   write fires.**
-//! - During a batch, `delete(dict, key)` records a tombstone in the
-//!   same map.
+//! - During a batch, `put(dict, key, value)` records the value in
+//!   an in-memory `HashMap` keyed on `(dict, key)`. **No
+//!   inner-backend write fires.**
+//! - During a batch, `delete(dict, key)` records a tombstone in
+//!   the same map.
 //! - During a batch, `get(dict, key)` consults the buffer first
 //!   (read-through): a buffered put returns the buffered bytes; a
 //!   buffered tombstone returns `Ok(None)`; otherwise falls through
@@ -32,9 +74,10 @@
 //! - `delete_dict(dict)` clears the buffer entries for `dict` and
 //!   forwards to the inner backend. (Rare during send; included for
 //!   completeness.)
-//! - `commit_batch()` drains the buffer, replays each entry through
-//!   `inner.put` / `inner.delete`, clears the flag, returns the
-//!   number of replayed operations.
+//! - `commit_internal` (via [`BatchGuard::commit`]) drains the
+//!   buffer, replays puts through `inner.put_batch` (one IPC for
+//!   PddbBackend), replays deletes individually, clears the flag,
+//!   and returns the number of replayed operations.
 //! - `BatchGuard::Drop` without an explicit `commit()` is an abort:
 //!   the buffer is cleared, the flag is reset, no replay fires.
 //!
@@ -43,11 +86,6 @@
 //! `Err(Error::backend("batch already in flight"))` if a batch is
 //! active. Reads during a batch from another caller see the
 //! pre-batch state (the buffer is per-batch).
-//!
-//! Crash semantics: if the process crashes between buffer-write and
-//! commit, all buffered values are lost. This matches the existing
-//! `session_cache` pattern (protocol/session_store.rs:1-20) — the
-//! application is responsible for ordering durability boundaries.
 //!
 //! See the feasibility report at
 //! `research/2026-05-12-pddb-send-batching-feasibility.md` for the
@@ -71,7 +109,18 @@ enum BufferEntry {
     Delete,
 }
 
-/// Read-through, write-defer wrapper. See module doc.
+/// Read-through, write-defer [`KvBackend`] wrapper.
+///
+/// See this file's module documentation for batch semantics, the
+/// trust boundary, and the crash-loss bound. The wrapped backend is
+/// held behind `Arc<dyn KvBackend>` so this layer is composable with
+/// either [`crate::MockBackend`] (tests) or `PddbBackend` (production).
+///
+/// # Logging
+///
+/// Every batch open / commit / abort emits a `tracing::info!`
+/// `perf/store: ...` event with cardinality and elapsed time. No
+/// value bytes are emitted.
 pub struct BufferingBackend {
     inner: Arc<dyn KvBackend>,
     batching: AtomicBool,
@@ -89,6 +138,10 @@ impl std::fmt::Debug for BufferingBackend {
 }
 
 impl BufferingBackend {
+    /// Wrap an inner [`KvBackend`]. The wrapper starts in pass-through
+    /// mode (no batch in flight); writes pass straight through to
+    /// the inner backend until [`begin_batch`](Self::begin_batch) is
+    /// called.
     pub fn new(inner: Arc<dyn KvBackend>) -> Self {
         Self {
             inner,
@@ -97,22 +150,29 @@ impl BufferingBackend {
         }
     }
 
-    /// Return `true` while a batch is in flight.
+    /// Return `true` while a batch is in flight. Acquire-ordered
+    /// load on the `batching` flag.
     pub fn is_batching(&self) -> bool {
         self.batching.load(Ordering::Acquire)
     }
 
     /// Number of buffered entries (puts + deletes). Test/diagnostic.
+    /// Returns 0 if the buffer mutex is poisoned.
     pub fn buffered_len(&self) -> usize {
         self.buffer.lock().map(|b| b.len()).unwrap_or(0)
     }
 
-    /// Open a batch scope. Returns `Err` if a batch is already in
-    /// flight on this backend.
+    /// Open a batch scope.
     ///
-    /// The returned `BatchGuard` aborts on `Drop` (no replay). Call
-    /// `commit()` to replay the buffered operations to the inner
-    /// backend.
+    /// The returned [`BatchGuard`] aborts on `Drop` (no replay). Call
+    /// [`BatchGuard::commit`] to replay the buffered operations to
+    /// the inner backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(Error::backend("batch already in flight on this
+    /// backend"))` if a batch is already in flight. The flag is set
+    /// via a `compare_exchange` so the check-and-set is atomic.
     pub fn begin_batch(&self) -> Result<BatchGuard<'_>, Error> {
         // Compare-and-swap: only succeed if no batch is active.
         match self.batching.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire) {
@@ -125,13 +185,30 @@ impl BufferingBackend {
     }
 
     /// Internal: drain the buffer and replay to the inner backend.
-    /// Called by `BatchGuard::commit`.
+    /// Called by [`BatchGuard::commit`].
     ///
-    /// Puts and deletes are grouped: puts go through `inner.put_batch`
-    /// in a single call (one server-side sync for PddbBackend);
-    /// deletes are issued individually. Within the puts batch the
-    /// order of replay is unspecified — the buffered set is a
-    /// HashMap.
+    /// Puts and deletes are grouped: puts go through
+    /// `inner.put_batch` in a single call (one server-side sync for
+    /// `PddbBackend`); deletes are issued individually. Within the
+    /// puts batch the order of replay is unspecified — the buffered
+    /// set is a [`HashMap`].
+    ///
+    /// # Errors
+    ///
+    /// The buffer is drained via `mem::take` before any inner write
+    /// fires, so the failure modes split into:
+    ///
+    /// - `put_batch` fails on the buffered puts (e.g. PDDB's
+    ///   `MAX_PDDB_WRITE_BATCH_LEN` ceiling exceeded). The code
+    ///   falls back to per-entry `inner.put` for each buffered put.
+    ///   The original batch error is logged but not surfaced; only a
+    ///   per-entry put failure becomes the returned error.
+    /// - One of the deletes fails. The first delete error becomes
+    ///   the returned error; subsequent deletes are still attempted.
+    ///
+    /// Either way, the batch flag is cleared on exit so a new batch
+    /// can be opened. On partial-failure return the inner backend
+    /// contains whatever succeeded — there is no rollback.
     fn commit_internal(&self) -> Result<usize, Error> {
         let _perf_start = std::time::Instant::now();
         // Take ownership of the buffer contents so other operations
@@ -225,6 +302,10 @@ impl BufferingBackend {
 
     /// Internal: abort the batch — discard the buffer, clear the
     /// flag. Called by `BatchGuard::Drop` when not committed.
+    ///
+    /// Clears the `HashMap` in place; the `Vec<u8>` payloads are
+    /// dropped as part of the clear. They do not zero on drop; see
+    /// the module-level Security note.
     fn abort_internal(&self) {
         let _perf_buffered_count = self.buffer.lock().map(|g| g.len()).unwrap_or(0);
         if let Ok(mut guard) = self.buffer.lock() {
@@ -321,9 +402,20 @@ impl KvBackend for BufferingBackend {
     }
 }
 
-/// RAII guard for a batch scope. `commit()` replays the buffer to
-/// the inner backend and consumes the guard. Dropping the guard
-/// without `commit()` aborts the batch (buffer cleared, no replay).
+/// RAII guard for a batch scope.
+///
+/// [`commit`](Self::commit) replays the buffer to the inner backend
+/// and consumes the guard. Dropping the guard without `commit()`
+/// aborts the batch (buffer cleared, no replay) — i.e. abort is the
+/// default, commit is opt-in. The abort-by-default RAII convention
+/// matches what [`xous_pddb_ipc`] uses around its bulk-write surface,
+/// even though the two operate at different layers: this `BatchGuard`
+/// owns the in-memory write-coalescing buffer; on commit it calls
+/// `KvBackend::put_batch`, which for `PddbBackend` issues exactly one
+/// [`xous_pddb_ipc::PddbClient::write_batch`] IPC carrying every
+/// buffered put. The IPC-layer batch is a single sub-second
+/// server-side operation; this layer's batch can span an entire
+/// Signal `send_message` call.
 pub struct BatchGuard<'a> {
     backend: &'a BufferingBackend,
     committed: bool,
@@ -333,10 +425,16 @@ impl<'a> BatchGuard<'a> {
     /// Replay all buffered operations to the inner backend, then
     /// close the batch.
     ///
-    /// Returns the number of operations replayed. If any individual
-    /// replay fails the remaining entries are still attempted; the
-    /// first failure is returned. The batch flag is cleared
-    /// regardless so the backend stays usable.
+    /// Returns the number of operations replayed.
+    ///
+    /// # Errors
+    ///
+    /// If any individual replay fails the remaining entries are
+    /// still attempted; the first failure is returned. The batch
+    /// flag is cleared regardless so the backend stays usable. See
+    /// [`BufferingBackend`]'s `commit_internal` for the full failure
+    /// taxonomy (batch-overflow fallback to per-entry put, partial
+    /// delete failures, etc.).
     pub fn commit(mut self) -> Result<usize, Error> {
         self.committed = true;
         self.backend.commit_internal()

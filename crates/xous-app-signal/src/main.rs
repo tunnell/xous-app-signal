@@ -1,18 +1,30 @@
-//! Xous Signal app entry point.
+//! Xous Signal app (`xas`) binary entry point.
 //!
-//! The earlier sequential Hello/Whoami probe is replaced with
-//! a real UI loop. The probe lives on as the menu's "Test worker"
-//! item — useful for verifying the worker thread + IPC channels are
-//! still alive after a code change. The shape of the binary is now:
+//! Sits at the top of the crate stack. From bottom to top:
 //!
-//! 1. Construct a `PddbStore` (mock backend in hosted; real PDDB
-//!    behind a `pddb-backend` feature flag).
-//! 2. Spawn the manager worker thread (`xous-signal-worker`).
-//! 3. Hand the cmd/event channels to `Ui::new` and call `Ui::run`.
-//! 4. Worker shutdown is the responsibility of the UI driver — it
-//!    sends `Cmd::Shutdown` on Quit.
+//! - `xous-net-bridge` — sync TLS + WSS + HTTPS transport, owns the
+//!   `Arc<ClientConfig>` for TLS-1.3 ticket resumption.
+//! - `presage-store-pddb` — `presage::Store` impl backed by Xous's
+//!   PDDB (real) or an in-memory mock (hosted).
+//! - `xous-signal-worker` — owns the `presage::Manager` on a
+//!   dedicated worker thread driven by `smol-rs::LocalExecutor`,
+//!   exposes a [`Cmd`] / [`Event`] async-channel surface.
+//! - This crate — UI (`gam_app::App` on hardware, `stdin_ui::Ui` on
+//!   hosted) wired to the worker via the two channels.
 //!
-//! See docs/ARCHITECTURE.md and docs/UI.md for the runtime + UI design.
+//! The startup sequence is:
+//!
+//! 1. Wire up the rv32 TRNG-backed `getrandom` shim if compiling for
+//!    Xous; on hosted the OS RNG is used.
+//! 2. Construct a [`PddbStore`] (mock backend on hosted; real PDDB
+//!    behind the `pddb-backend` feature).
+//! 3. Spawn [`run_signal_worker`].
+//! 4. Hand the cmd/event channels to the UI and run.
+//! 5. The UI sends [`Cmd::Shutdown`] on quit; the worker drains and
+//!    emits `Event::ShuttingDown`.
+//!
+//! See `docs/ARCHITECTURE.md` for the full data-flow walkthrough and
+//! `docs/UI.md` for the UI design.
 
 mod dialogue;
 mod gam_app;
@@ -24,21 +36,40 @@ use presage_store_pddb::PddbStore;
 use stdin_ui::Ui;
 use xous_signal_worker::{Cmd, Event, run_signal_worker};
 
-/// Real `__getrandom_v03_custom` body backed by xous-core's TRNG
-/// service.
+/// `__getrandom_v03_custom` implementation backed by xous-core's
+/// TRNG service.
 ///
-/// Looks up the trng SID via `xous-api-names`, then calls
-/// `Trng::fill_buf` (per `xous-core/services/trng/src/lib.rs:63`).
-/// `fill_buf` takes `&mut [u32]` — we cast from `*mut u8` and
-/// handle a possible odd tail (`len % 4 != 0`) with a final 1-word
-/// scratch read.
+/// Looks up the TRNG SID via `xous-api-names`, then calls
+/// `Trng::fill_buf`. `fill_buf` takes `&mut [u32]` so this shim
+/// casts from `*mut u8` to a `[u32; 1020]` scratch buffer, copies
+/// the filled bytes back to `dest`, and handles a possible odd
+/// tail (`len % 4 != 0`) with one final 1-word read.
 ///
-/// The signature mirrors `getrandom-0.3.4/src/backends/custom.rs:10`.
+/// The signature mirrors `getrandom::backends::custom`. A
+/// thread-local `Trng` cell preserves the IPC connection across
+/// calls so each `getrandom` entry reuses the same SID handshake.
 ///
-/// `Trng::new` registers a long-lived connection to the TRNG
-/// server. We retain a thread-local `Trng` instance so each
-/// getrandom call reuses the same IPC connection rather than
-/// re-handshaking on every entry.
+/// # Trust boundary
+///
+/// This routes every `getrandom` call from libsignal, rustls, and
+/// the rest of the dependency tree to the xous-core TRNG service.
+/// Everything cryptographic on the device depends on this returning
+/// real entropy.
+///
+/// # Errors
+///
+/// Returns `getrandom::Error::UNSUPPORTED` if the TRNG IPC call
+/// fails. The thread-local `OnceCell` initialization may panic via
+/// the inner `expect` if `xous-names` or the TRNG service are
+/// unreachable at first use — that is a fatal misconfiguration of
+/// the Xous image, not a recoverable runtime condition.
+///
+/// # Safety
+///
+/// Implements an `unsafe extern "Rust"` symbol that the
+/// `getrandom` crate's custom backend mechanism resolves at link
+/// time. Caller (the `getrandom` crate) guarantees `dest` is valid
+/// for `len` bytes; this function only writes into `dest[..len]`.
 #[cfg(target_os = "xous")]
 #[unsafe(no_mangle)]
 unsafe extern "Rust" fn __getrandom_v03_custom(
@@ -100,20 +131,43 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
     })
 }
 
-/// Channel capacity. 16 is plenty for the single-prompt
-/// round-trip; production sizing will revisit.
+/// Capacity of the [`Cmd`] and [`Event`] async channels between
+/// the UI and the worker.
+///
+/// Sized for the UI's typical command pattern: a small handful of
+/// commands in flight at any time (link, send, sync, account
+/// info). The worker drains commands eagerly so back-pressure on
+/// the UI side is unlikely on real workloads.
+///
+/// Capacity tradeoff: the `event_tx` cap bounds how many
+/// back-pressured `Event::Message` emissions
+/// `xous_signal_worker::manager_task` can buffer before its
+/// `event_tx.send(...).await` blocks the worker's receive stream.
+/// Too small → an idle or slow UI stalls inbound receive; too large
+/// → unbounded memory on a poorly-behaved peer with high message
+/// flux. 16 is the negotiated middle: enough for a bursty receive
+/// from a chat the user just opened, small enough to keep the
+/// post-Drop bare-`String` body exposure window bounded (see A.1 /
+/// A.3 in `~/REFACTOR_NOTES.md`).
 const CHAN_CAP: usize = 16;
 
-/// Choose the store backend based on feature flags.
+/// Construct the [`PddbStore`] the worker will use.
 ///
-/// - default (smoke / probe-flow / probe-pddb / hosted): mock
-///   in-memory backend.
-/// - `pddb-real` on rv32-xous: real `PddbStore::with_pddb_backend`.
-///   If the connect fails (e.g. PDDB isn't running), we log and
-///   fall back to mock so the binary still boots — the smoke test
-///   shouldn't fail just because PDDB's not up. Design: surface
-///   real failures via xas's UI eventually, not by hard-aborting
-///   boot.
+/// Selects backend based on feature flags:
+///
+/// - default (hosted / smoke / probe-flow / probe-pddb): in-memory
+///   mock backend.
+/// - `pddb-real` on rv32-xous: real
+///   `PddbStore::with_pddb_backend`. On connect failure (PDDB
+///   service not yet up), logs a warning and falls back to mock so
+///   the binary still boots.
+///
+/// # Trust boundary
+///
+/// The returned [`PddbStore`] is the only persistence boundary for
+/// Signal-Protocol state. The mock backend is plaintext and is for
+/// hosted / probe builds only — production images must be built
+/// with `pddb-real` enabled.
 #[cfg(feature = "pddb-real")]
 fn build_store() -> PddbStore {
     match PddbStore::with_pddb_backend() {
@@ -128,6 +182,15 @@ fn build_store() -> PddbStore {
     }
 }
 
+/// Mock-backend variant of [`build_store`] for builds without the
+/// `pddb-real` feature.
+///
+/// # Security
+///
+/// The mock backend keeps every store byte in plaintext RAM —
+/// suitable only for hosted-mode iteration and the Renode-driven
+/// probe binaries. Never select this variant for a binary intended
+/// to hold real registration data.
 #[cfg(not(feature = "pddb-real"))]
 fn build_store() -> PddbStore {
     log::info!("xas: store=mock");
@@ -155,19 +218,18 @@ fn main() -> std::io::Result<()> {
     #[cfg(all(feature = "probe-send-batch", target_os = "xous"))]
     probe_send_batch();
 
-    // NOTE: the former `probe-pddb-real` and `probe-bulk-ab` auto-fire
-    // probes have been removed. Hitting `presage_store_pddb::PddbBackend::
-    // connect()` immediately after `run_signal_worker()` raced with
-    // xous-names server registration during boot and produced a
-    // `ServerNotFound` cascade in unrelated services (llio, trng,
-    // modals, susres) on Precursor PVT2 hardware, eventually crashing
-    // the boot with a watchdog reboot loop. Hardware evidence:
-    // 2026-05-13. xous-names itself documents this race —
-    // `api/xous-api-names/src/lib.rs:124`.
+    // NOTE: load-bearing — there is no `probe-pddb-real` or
+    // `probe-bulk-ab` auto-fire probe here. Calling
+    // `presage_store_pddb::PddbBackend::connect()` immediately after
+    // `run_signal_worker()` races xous-names server registration
+    // during boot and triggers a `ServerNotFound` cascade in
+    // unrelated services (llio, trng, modals, susres), which can
+    // crash the boot via a watchdog reboot loop. xous-names itself
+    // documents this race (`api/xous-api-names/src/lib.rs`).
     //
-    // The bulk-write A/B benchmark now lives in shellchat as `pddb
-    // bulk_probe [N]`, exercised by the user AFTER PIN entry and PDDB
-    // mount. See research/2026-05-14-shellchat-probe-results.md.
+    // Bulk-write A/B benchmarking lives in shellchat as `pddb
+    // bulk_probe [N]`, exercised by the user after PIN entry and
+    // PDDB mount.
 
     // PDDB put-truncate smoke test (refs #14). Runtime-gated; exits
     // 0 PASS / 1 FAIL so a shell wrapper can assert the regression.
@@ -236,31 +298,32 @@ fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-/// Install a `log` implementation. Hosted picks
-/// `env_logger`; rv32-xous binds `xous-api-log` via the integration
-/// step (needs a path-dep that resolves only inside xous-core's
-/// tree).
+/// Install a `log` implementation for hosted builds.
+///
+/// Uses `env_logger` with a default `info` filter. Errors from
+/// `try_init` are ignored (it returns `Err` if the logger has
+/// already been installed, e.g. by a test harness).
 #[cfg(not(target_os = "xous"))]
 fn init_logger() {
     let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .try_init();
 }
 
-/// TCP-connect probe used to figure out whether
-/// Renode's WF200 wifi emulation actually carries outbound traffic.
-/// Three connect targets, each logged with elapsed time and result:
+/// TCP-connect probe verifying Renode's WF200 wifi emulation
+/// carries outbound traffic.
 ///
-/// 1. `8.8.8.8:53` — Google DNS over TCP. No DNS needed; hits the
-///    lowest-level "is there a route to the internet" question.
-/// 2. `1.1.1.1:443` — Cloudflare 1.1.1.1 over HTTPS port. Same
-///    no-DNS shape as (1) but a different provider, in case route
-///    filtering is in play.
-/// 3. `chat.signal.org:443` — the actual Signal endpoint. Requires
-///    DNS resolution, so this also probes the Xous `dns` service.
+/// Three connect targets, each logged with elapsed time and
+/// result:
 ///
-/// Each probe has a 10-second timeout. The whole sequence logs to
-/// the same `INFO:xas:` stream the Robot smoke test asserts on, so
-/// findings show up in the `xas-probe.robot` test output.
+/// 1. `8.8.8.8:53` — Google DNS over TCP. No DNS lookup needed;
+///    answers "is there any route to the internet".
+/// 2. `1.1.1.1:443` — Cloudflare HTTPS. Same shape as (1) but a
+///    different provider, in case route filtering is in play.
+/// 3. `chat.signal.org:443` — the real Signal endpoint. Requires
+///    DNS, so this also exercises the Xous `dns` service.
+///
+/// Each probe has a 10-second timeout. Output goes to the same
+/// `INFO:xas:` stream the Robot smoke tests assert on.
 #[cfg(feature = "probe-flow")]
 fn probe_network() {
     use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
@@ -323,24 +386,21 @@ fn probe_network() {
 }
 
 /// Poll xous-core's PDDB Mount Poller via raw `xous` IPC and log
-/// the result. This verifies the "hand-rolled PDDB client" path
-/// before we commit to writing it for real — the Mount Poller's
-/// `Poll` opcode (0) is the simplest IPC roundtrip we can do
-/// against PDDB, taking no payload and returning a `Scalar1(0|1)`
-/// mount state.
+/// the result.
 ///
-/// Implementation mirrors `services/pddb/src/lib.rs:30–60`
-/// (`PddbMountPoller::new` + `is_mounted_nonblocking`) but does
-/// not depend on the `pddb` crate — only on `xous`,
-/// `xous-api-names`, and `xous_ipc` (all of which we already
-/// path-dep'd or pulled from crates.io for the trng client).
+/// Mirrors `services/pddb/src/lib.rs`'s `PddbMountPoller::new` +
+/// `is_mounted_nonblocking`, but depends only on `xous`,
+/// `xous-api-names`, and `xous_ipc` (the same crate set the TRNG
+/// shim already pulls in). The Mount Poller's `Poll` opcode (0) is
+/// the simplest IPC roundtrip xas can do against PDDB: no payload,
+/// returns a `Scalar1(0|1)` mount state.
 ///
-/// Two outcomes are interesting:
-///   - `OK true` / `OK false` — the IPC plumbing works; the
-///     value tells us whether the image autobases or expects
-///     password-driven mount.
-///   - `panic` / `connection refused` — protocol replication
-///     issue (rkyv version, Buffer layout, or SID name typo).
+/// Outcomes:
+/// - `OK true` / `OK false` — IPC plumbing works; the value
+///   indicates whether the image auto-mounts or expects
+///   password-driven mount.
+/// - `connection refused` / no response — protocol drift (rkyv
+///   version, Buffer layout, or SID name mismatch).
 #[cfg(all(feature = "probe-pddb", target_os = "xous"))]
 fn probe_pddb() {
     use std::time::Instant;
@@ -403,30 +463,30 @@ fn probe_pddb() {
 }
 
 
-/// Exercise `BufferingBackend` + `BatchGuard` against a fresh
-/// `MockBackend` and log UART lines for the `xas-send-batch.robot`
-/// Renode test.
+/// Exercise [`presage_store_pddb::BufferingBackend`] +
+/// [`presage_store_pddb::KvBackend`] semantics against a fresh
+/// [`presage_store_pddb::MockBackend`] and log UART lines for the
+/// `xas-send-batch.robot` Renode test.
 ///
-/// Why MockBackend rather than the real PDDB: the real backend
-/// can't actually mount in Renode (gen1 `Opcode::TryMount` requires
-/// rootkeys + password modal which isn't injected). This probe
-/// exists to validate that the abstraction compiles for rv32 and
-/// runs under the real xous executor — the wrapper's semantics are
-/// the same regardless of inner backend. The host-side
-/// `cargo test -p presage-store-pddb` covers the same semantics in
-/// 15 tests; this probe adds rv32 build + boot + run coverage on
-/// top.
+/// Uses [`presage_store_pddb::MockBackend`] rather than the real
+/// PDDB because the real backend cannot mount inside Renode
+/// (`Opcode::TryMount` requires rootkeys + password modal that
+/// Renode does not inject). The wrapper's batching semantics are
+/// the same regardless of inner backend; this probe adds rv32
+/// build + boot + run coverage on top of the host-side
+/// `cargo test -p presage-store-pddb` suite.
 ///
-/// Synthetic "send-shaped" sequence:
-///   1. Construct BufferingBackend wrapping a fresh MockBackend.
-///   2. begin_batch.
-///   3. Three writes simulating a cold send: recipient identity,
-///      sender certificate, outbound message.
-///   4. Intra-batch read-through: verify the buffer is visible.
-///   5. Commit. Verify counts.
-///   6. Post-commit reads: verify durability through the inner.
-///   7. Abort path: begin a second batch, write, drop without
-///      commit, verify the writes are gone.
+/// Synthetic send-shaped sequence:
+///
+/// 1. Wrap a fresh `MockBackend` in a `BufferingBackend`.
+/// 2. `begin_batch` and confirm `is_batching` flips.
+/// 3. Three writes simulating a cold send (recipient identity,
+///    sender certificate, outbound message body).
+/// 4. Intra-batch read-through (writes visible inside the batch).
+/// 5. Commit; confirm the replay count.
+/// 6. Post-commit reads (writes durable in the inner backend).
+/// 7. Abort path: open a second batch, write, drop without
+///    committing, verify the writes are gone.
 #[cfg(all(feature = "probe-send-batch", target_os = "xous"))]
 fn probe_send_batch() {
     use std::sync::Arc;
@@ -536,27 +596,46 @@ fn probe_send_batch() {
 
 /// Hardware auto-link probe.
 ///
-/// Fires `Cmd::LinkDevice` and drives the resulting event stream
+/// Sends `Cmd::LinkDevice` and drives the resulting event stream
 /// to either `Event::LinkComplete` or `Event::LinkError`. On
 /// `Event::LinkUrl(url)`, opens a `xous-modals-ipc` notification
 /// modal that displays the URL as a QR code (rendered by the
-/// upstream modals server's `notification.set_qrcode` call). User
-/// scans the QR with their Signal phone, then presses any key to
-/// dismiss the modal — meanwhile the worker is parked on the
-/// provisioning WebSocket waiting for the encrypted envelope.
+/// upstream modals server's `notification.set_qrcode` call). The
+/// user scans the QR with their Signal phone and dismisses the
+/// modal; meanwhile the worker is parked on the provisioning
+/// WebSocket waiting for the encrypted envelope.
 ///
-/// Failure modes worth distinguishing in the UART log:
-/// - **No modals response**: server isn't running or our wire
-///   protocol drifted. Existing precedent (`xous-pddb-ipc`)
-///   makes wire drift unlikely; missing server means the image
-///   wasn't built with `services/modals` (always present in our
-///   `cargo xtask app-image` flow).
-/// - **`Event::LinkError(_)`**: worker-side failure (DNS, TLS,
-///   WS, or libsignal protocol error). The error string identifies
+/// # Trust boundary
+///
+/// The provisioning URL is the link credential during its window.
+/// This probe displays it to the user via the modals service; the
+/// modal is shown on the local screen only and is not forwarded
+/// elsewhere. However, the `log::info!("auto-link: link URL =
+/// {}", url)` line below emits the URL to UART at info level —
+/// same leak surface as `xous_signal_worker`'s W-W.1
+/// (`~/REFACTOR_NOTES.md`). Both call sites are scheduled for the
+/// same fix (drop the URL from the log, retain only the length);
+/// see A.2 in `~/REFACTOR_NOTES.md`.
+///
+/// # Failure modes worth distinguishing in the UART log
+///
+/// - "No modals response" — the modals service is unreachable.
+///   In a stock image this means the build skipped `services/modals`;
+///   `cargo xtask app-image` always pulls it in.
+/// - `Event::LinkError(_)` — worker-side failure (DNS, TLS, WS,
+///   or libsignal protocol error). The reason string identifies
 ///   the layer.
-/// - **`Event::LinkComplete`**: success. The aci/phone fields are
+/// - `Event::LinkComplete` — success. The ACI / phone fields are
 ///   logged so the next flash iteration can verify
-///   `with_pddb_backend` actually persisted the registration data.
+///   `with_pddb_backend` actually persisted the registration.
+///
+/// # Security
+///
+/// The ACI / phone fields are PII; the modal that displays them
+/// is the same one the user just dismissed, so display-only on
+/// the device. The `log::info!` that records device / ACI / phone
+/// is structured for the audit trail but should still be redacted
+/// before forwarding logs off-device.
 #[cfg(all(feature = "auto-link", target_os = "xous"))]
 fn auto_link(cmd_tx: async_channel::Sender<Cmd>, event_rx: async_channel::Receiver<Event>) {
     use xous_modals_ipc::ModalsClient;
@@ -650,18 +729,19 @@ fn auto_link(cmd_tx: async_channel::Sender<Cmd>, event_rx: async_channel::Receiv
     log::info!("auto-link: done");
 }
 
+/// Install a `log` implementation for rv32-xous builds.
+///
+/// `xous_api_log::init_wait()` blocks until it can connect to the
+/// `xous-log-server` SID, then registers itself as the `log::Log`
+/// impl. The server (running as a separate process in the baseline
+/// Xous image) forwards records to the UART, which is what the
+/// Renode Robot tests assert on.
+///
+/// If `init_wait` returns `Err` (log server did not come up in
+/// time, fatal Xous-image misconfiguration), this function does
+/// not panic — subsequent `log::*!` calls become no-ops, matching
+/// the surface of a binary that never installed a logger.
 #[cfg(target_os = "xous")]
 fn init_logger() {
-    // `xous-api-log::init_wait()` blocks until it can connect to
-    // the `xous-log-server` SID, then registers itself as the
-    // `log::Log` impl. The server (running as a separate process
-    // in the baseline Xous image) forwards records to the UART —
-    // which is what the Renode Robot test asserts on.
-    //
-    // Failure here means the log server didn't come up in time.
-    // For an MVP smoke test that's a fatal misconfiguration, but
-    // we don't panic — just continue. Subsequent `log::info!`
-    // calls become no-ops, which is exactly the same surface as
-    // a binary that hadn't installed a logger at all.
     let _ = xous_api_log::init_wait();
 }

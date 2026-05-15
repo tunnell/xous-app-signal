@@ -1,11 +1,13 @@
 //! App menu.
 //!
-//! Modal: New chat / Mark all read / (sep) / Link another device /
-//! Settings / About / (sep) / Test worker (echo) / Quit.
+//! Modal overlay shown when the user presses `'m'` from any
+//! populated screen. Items: New chat / Mark all read / (separator) /
+//! Link another device / Settings / About / (separator) / Test
+//! worker (Hello/Pong) / Quit.
 //!
-//! Only the navigable shell + About + Quit + the worker probe land.
-//! The other items are flagged unimplemented and Pop immediately
-//! when chosen.
+//! Only the navigable shell, About, Quit, and the worker-probe
+//! ("Test worker") items are wired. The other items are placeholders
+//! and Pop without effect when selected.
 
 use crate::stdin_ui::key::Key;
 use crate::stdin_ui::screen::{Screen, Transition};

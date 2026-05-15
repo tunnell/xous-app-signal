@@ -6,8 +6,31 @@
 //! also has a default impl that we let through.
 //!
 //! On-disk schema: one PDDB key per address; value is a
-//! `SessionBundle` (`device_id -> serialized SessionRecord`). See
-//! `session_store.rs` for the read/write helpers.
+//! [`SessionBundle`](crate::protocol::session_store::SessionBundle)
+//! (`device_id -> serialized SessionRecord`). See `session_store.rs`
+//! for the read/write helpers.
+//!
+//! # Security
+//!
+//! `delete_session` and `delete_all_sessions` are the
+//! user-deletes-a-conversation path. After they return successfully,
+//! the corresponding session bytes are gone from the cache and the
+//! PDDB. Note however:
+//!
+//! - PDDB's underlying basis storage may still hold ciphertext in
+//!   pages that have been freed but not yet overwritten. PDDB's free
+//!   list reuses pages, but there is no zero-on-free guarantee.
+//! - The `delete_session` "drop just this device_id" path reads,
+//!   modifies, and writes the bundle back; the old bundle value
+//!   remains in whatever PDDB page the previous write occupied until
+//!   subsequent writes overwrite it.
+//! - The transient `bundle` `HashMap<u32, Vec<u8>>` and the
+//!   `serialize_session_bundle` output `Vec<u8>` do not zero on
+//!   drop.
+//!
+//! Treat `delete_session` as "best-effort durable forget", not as a
+//! cryptographic wipe. For a stronger wipe primitive see
+//! REFACTOR_NOTES sec-C.
 
 use async_trait::async_trait;
 use presage::libsignal_service::prelude::SessionStoreExt;

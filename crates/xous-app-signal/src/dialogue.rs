@@ -1,15 +1,27 @@
 //! Conversation-list data model.
 //!
-//! `ThreadMessage` is one entry in xas's RAM-only message buffer — both
-//! incoming (received over WS) and outgoing (composed in xas) live in
-//! the same flat `Vec`, distinguished by the `outgoing` field.
+//! [`ThreadMessage`] is one entry in xas's RAM-only message buffer.
+//! Both inbound (received over WS) and outbound (composed in xas)
+//! messages live in the same flat `Vec`, distinguished by the
+//! [`ThreadMessage::outgoing`] field.
 //!
-//! `DialogueSummary` is the aggregate view: one row per UUID for the
-//! conversation-list home screen. Re-derived from the message vec
-//! whenever messages change. Cheap because the buffer is bounded.
+//! [`DialogueSummary`] is the aggregated per-conversation view: one
+//! row per UUID for the home screen, re-derived from the message
+//! vec whenever messages change. Cheap because the in-RAM buffer is
+//! bounded by `INBOX_CAPACITY` in `gam_app.rs`.
 //!
-//! No persistence here — the cache lives only in `App` state and resets
-//! on app restart. PDDB persistence is Phase D (see `UI-DESIGN.md`).
+//! No persistence here — the cache lives only in `App` state and
+//! resets on app restart. Future PDDB-backed history will live
+//! behind the same interface; the data shapes in this module are
+//! the persistence-side schema as well.
+//!
+//! # Trust boundary
+//!
+//! Every [`ThreadMessage`] carries plaintext that already crossed
+//! the libsignal decrypt boundary inside `xous-signal-worker`. The
+//! `body` and `author_label` fields are PII or higher; do not log
+//! them and avoid `Debug`-printing values of these types beyond the
+//! existing structured trace lines.
 
 use std::collections::HashMap;
 

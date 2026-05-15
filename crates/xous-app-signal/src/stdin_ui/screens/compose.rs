@@ -1,35 +1,56 @@
 //! Compose screen.
 //!
-//! One per send. Holds the recipient (set on construction from the
-//! most-recent received message's sender, or could be entered
-//! manually in a future stage), an editable body, and a
-//! `SendState` that the driver flips on `Event::SendComplete` /
-//! `Event::SendError`.
+//! One per send. Holds the recipient (set on construction from
+//! the most recent received message's sender), an editable body,
+//! and a [`SendState`] that the driver flips when the worker emits
+//! `Event::SendComplete` or `Event::SendError`.
 //!
-//! Hosted-mode input model: instead of per-char keystrokes (which
-//! would need raw-mode terminal handling we deliberately avoid —
-//! see `docs/UI.md` §9), the driver hands the screen the WHOLE
-//! input line as `handle_line`. Type the message + Enter, the
-//! line becomes the body and a `Cmd::SendMessage` fires. On-device
-//! On-device GAM mode will switch to the per-char `handle_key` path
-//! with backspace/cursor; the `SendState` and event handling stay
-//! the same.
+//! # Trust boundary
+//!
+//! The `body` field is the outbound message plaintext — the user
+//! has typed it but the worker has not yet handed it to
+//! libsignal's encrypt path. The `recipient` field carries the
+//! recipient's ACI (UUID) or e164 fallback; account-identifying
+//! PII. Treat both fields as confidential when adding consumers.
+//!
+//! # Hosted-mode input model
+//!
+//! Instead of per-char keystrokes (which would need raw-mode
+//! terminal handling the hosted UI deliberately avoids), the
+//! driver hands the screen the entire input line via
+//! [`crate::stdin_ui::Ui::dispatch_line`]. The user types the
+//! message and presses Enter; the line becomes the body and a
+//! `Cmd::SendMessage` fires. The on-device GAM build uses the
+//! per-char path inside `gam_app.rs::handle_keys`; the
+//! [`SendState`] transitions are the same.
 
 use crate::stdin_ui::key::Key;
 use crate::stdin_ui::screen::Transition;
 
 #[derive(Debug, Clone)]
 pub struct ComposeScreen {
-    /// Recipient `service_id_string()` — typically the most-recent
-    /// sender's UUID, populated by ConversationList when pushing
-    /// this screen.
+    /// Recipient `service_id_string()` — typically the most
+    /// recent sender's UUID, populated by `ConversationList` when
+    /// pushing this screen.
+    ///
+    /// # Security
+    ///
+    /// Account-identifying. Renders on screen so the user can
+    /// confirm who they are sending to; do not extend logging to
+    /// include this field.
     pub recipient: String,
     /// What the screen is currently doing. Determines what input
     /// the user can give and what the screen renders.
     pub state: SendState,
-    /// The body the user typed, captured the moment they hit Enter.
-    /// Only populated once per screen lifetime; a second Enter is a
-    /// no-op until the SendComplete/Error event arrives.
+    /// The body the user typed, captured the moment they pressed
+    /// Enter. Only populated once per screen lifetime; a second
+    /// Enter is a no-op until the matching `SendComplete` or
+    /// `SendError` event arrives.
+    ///
+    /// # Security
+    ///
+    /// Plaintext message body. Do not log; do not include in
+    /// `Debug` output that may reach UART.
     pub body: String,
 }
 
@@ -56,9 +77,22 @@ impl ComposeScreen {
         }
     }
 
-    /// Mark that the worker is processing the send. Returns
-    /// `(recipient, body)` so the driver can emit the actual
-    /// `Cmd::SendMessage` with the captured payload.
+    /// Capture the user's typed message and transition to
+    /// [`SendState::Sending`]. Returns `(recipient, body)` so the
+    /// driver can emit the actual `Cmd::SendMessage` with the
+    /// captured payload.
+    ///
+    /// Returns `None` when:
+    /// - The screen is not in [`SendState::Editing`] (a previous
+    ///   send is still in flight).
+    /// - `body` is empty — treated as "cancel this attempt"; the
+    ///   screen stays in `Editing`.
+    ///
+    /// # Security
+    ///
+    /// Receives the plaintext message body. The returned tuple is
+    /// handed straight to `Cmd::SendMessage` by the driver; do not
+    /// add intermediate logging or `Debug` printing.
     pub fn submit(&mut self, body: String) -> Option<(String, String)> {
         if !matches!(self.state, SendState::Editing) {
             return None;
@@ -120,9 +154,9 @@ impl ComposeScreen {
         out
     }
 
-    /// Per-key handler. Hosted mode mostly uses `handle_line`;
-    /// `handle_key` only catches Esc / Left for back-out, and for
-    /// the SendState::Error retry path on the first character.
+    /// Per-key handler. Hosted mode mostly uses the whole-line
+    /// path via [`crate::stdin_ui::Ui::dispatch_line`]; this method
+    /// only catches Esc / Left for back-out.
     pub fn handle_key(&mut self, key: Key) -> Transition {
         match key {
             Key::Esc => Transition::Pop,

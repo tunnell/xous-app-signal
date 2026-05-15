@@ -1,38 +1,57 @@
-//! GAM-rendered xas app: full MVP UI for link / receive / send.
+//! GAM-rendered xas UI: hardware-side link / receive / send.
 //!
-//! State machine:
+//! Owns the on-device UI loop. The binary in `xous-app-signal`
+//! calls [`run`], which registers a GAM context under
+//! [`gam::APP_NAME_XAS`], constructs the [`App`] state, and drives
+//! the main IPC loop until the GAM tears the context down.
 //!
-//! - **Menu**: pre-link shows Link / About / Quit; post-link
-//!   becomes Inbox / Send / About / Quit. The cursor is on the
-//!   first item by default; Up/Down navigates; Enter (or `'∴'`)
-//!   selects.
+//! # State machine
 //!
-//! - **About**: hardcoded version string, author handle, credits.
-//!   Enter returns to Menu.
+//! Pre-link screens:
 //!
-//! - **Linking**: transient screen shown after Link is selected
-//!   while we wait for the worker's `Event::LinkUrl`. The QR
-//!   modal opens on top of this screen; once user presses any key
-//!   on the modal, we wait for `Event::LinkComplete` /
-//!   `Event::LinkError` and transition to `Linked { Success } →
-//!   Inbox` or `Linked { Failure }`.
+//! - **Menu** — landing for an unlinked device. Items: Link / About
+//!   / Help. Up/Down navigates; Enter (or `'∴'`) selects.
+//! - **About** — version string, author handle, what xas protects.
+//! - **Linking** — transient; shown while the worker is waiting on
+//!   the provisioning WebSocket. The QR modal opens on top of this
+//!   screen when the worker emits `Event::LinkUrl`.
+//! - **Linked { Success }** — brief banner; auto-fires
+//!   `Cmd::StartReceive` and transitions to **Home**.
+//! - **Linked { Failure }** — error string; Enter returns to Menu.
 //!
-//! - **Linked { Success }**: brief confirmation. Auto-fires
-//!   `Cmd::StartReceive` and transitions to Inbox.
+//! Post-link screens:
 //!
-//! - **Linked { Failure }**: error message. Enter returns to Menu.
+//! - **Home** — the conversation list. F1 opens a new chat,
+//!   F2 syncs contacts, F3 opens Help, F4 opens Settings.
+//! - **Thread { uuid }** — single conversation history plus an
+//!   in-screen compose box. Enter sends; Esc/Menu opens Settings.
+//! - **Settings** — Profile / Help / About / Logout.
+//! - **Profile** — account display name, phone, ACI.
+//! - **Help** — FAQ pointer and Wi-Fi recipe.
+//! - **NoInternet** — preflight failure; transitions back to the
+//!   intended next screen on retry success.
 //!
-//! - **Inbox**: list of received messages (sender + body +
-//!   timestamp). Enter returns to Menu.
+//! # Trust boundary
 //!
-//! - **(SendResult / Inbox screens were removed in the conversation-list redesign;
-//!   their roles are folded into Home + Thread.)
-//!   round-trip. Enter returns to Menu.
+//! Everything rendered after the link completes is plaintext that
+//! crossed the libsignal decrypt boundary inside
+//! `xous-signal-worker`. Inbound message bodies, sender ACIs, and
+//! the registration tuple (`device_name`, `aci`, `phone`) all
+//! arrive here as bare strings. Treat all of them as PII or higher
+//! when adding consumers; the existing `log::info!` lines emit a
+//! deliberately limited subset (sender label, byte length) and new
+//! log lines should follow the same discipline.
 //!
-//! Worker integration: events from the signal worker (`event_rx`)
-//! reach the GAM main loop via a forwarder thread that pushes
-//! into a shared `Mutex<VecDeque<Event>>` and wakes us via a
-//! `XasOp::WorkerEvent` scalar IPC to our own SID.
+//! # Worker integration
+//!
+//! `event_rx` cannot be polled inside the GAM main loop (which
+//! blocks on `xous::receive_message`). A dedicated forwarder thread
+//! bridges the two: it blocks on `event_rx.recv_blocking`, pushes
+//! each event onto a shared `Mutex<VecDeque<Event>>`, and pokes the
+//! main SID with a `XasOp::WorkerEvent` scalar. The main loop wakes
+//! and drains the deque under [`handle_worker_event`]. **The
+//! forwarder is the sole consumer of `event_rx`** — no other site
+//! may call `recv*` on the receiver.
 
 use core::fmt::Write;
 use std::collections::VecDeque;
@@ -49,45 +68,87 @@ use xous_signal_worker::{Cmd, Event};
 
 use crate::dialogue::{DialogueSummary, SendStatus, ThreadMessage, rebuild_summaries};
 
+/// IPC server name xas registers under [`xous_names::XousNames`].
+///
+/// # Trust boundary
+///
+/// This is xas's only outward-facing IPC surface on the system.
+/// `gam` looks it up when delivering `Redraw` / `Rawkeys` /
+/// `FocusChange` notifications; the binary's own forwarder thread
+/// uses it to wake the main loop with `WorkerEvent`. No other
+/// caller has reason to send to this SID; the GAM enforces this on
+/// the redraw / rawkeys side, but a malicious local process with
+/// `xous-names` access could in principle connect and send
+/// arbitrary scalars. The receive loop is defensive (unknown opcode
+/// → log + drop, see `_ => log::debug!("…unknown msg id…")`).
 const SERVER_NAME_XAS: &str = "_xas_";
 
-/// How many recent messages we keep in the Inbox view. MVP bound
-/// — keeps render cheap and avoids any thread / sync work for
-/// scrolling.
+/// Maximum recent messages held in RAM by the [`App`].
+///
+/// Keeps the render cheap and avoids any thread / sync work for
+/// scrolling. Oldest message is evicted when a new arrival or send
+/// would overflow this bound.
+///
+/// # rv32 / 16 MiB constraint
+///
+/// Each [`ThreadMessage`] owns the body `String` and label
+/// `String`. The cap is deliberately small while xas runs without
+/// PDDB-backed history; widening this without also adding a
+/// pagination story would push real RAM use up on the rv32 device.
 const INBOX_CAPACITY: usize = 5;
 
+/// Opcodes the GAM (and the worker-event forwarder) send to xas's
+/// own SID via `xous::send_message`. Each variant maps to one arm
+/// of the receive loop in [`run`].
 #[derive(Debug, num_derive::FromPrimitive, num_derive::ToPrimitive)]
 enum XasOp {
+    /// GAM asks us to repaint the canvas.
     Redraw = 0,
+    /// GAM forwards a key event from the keyboard service.
     Rawkeys = 1,
+    /// GAM signals focus gained/lost — used to repaint on
+    /// re-foreground.
     FocusChange = 2,
-    /// Forwarder thread woke us; drain the pending-events deque.
+    /// The worker-event forwarder thread woke us; drain the
+    /// pending-events deque.
     WorkerEvent = 3,
 }
 
+/// One screen state in the UI's stack-of-one model. See the
+/// module-level "State machine" section for the transition graph.
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum Screen {
-    /// Pre-link app menu (Link / About / Quit). Post-link landing
-    /// is `Home`; the equivalent post-link surface is `Settings`.
+    /// Pre-link app menu (Link / About / Help). Post-link the menu
+    /// is reduced to About / Help; the post-link landing screen is
+    /// [`Self::Home`] and the per-link control surface is
+    /// [`Self::Settings`].
     Menu,
     About,
+    /// Transient screen shown while waiting for the worker's
+    /// `Event::LinkUrl`. The QR-code modal opens on top of this
+    /// screen when the URL arrives.
     Linking,
+    /// Terminal link banner. Auto-transitions to [`Self::Home`] on
+    /// `Success` after the user presses Enter; Enter on `Failure`
+    /// returns to the pre-link Menu.
     Linked { kind: LinkedKind },
     /// Post-link landing: conversation list. Default screen after
-    /// `LinkComplete`. F4 / Esc opens `Settings`.
+    /// `Event::LinkComplete`.
     Home,
-    /// Per-conversation history view + compose input.
+    /// Per-conversation history view plus the in-screen compose
+    /// box.
     Thread { uuid: Uuid },
-    /// Post-link settings sub-menu (Profile / Help / About / Logout / Quit).
+    /// Post-link settings sub-menu (Profile / Help / About /
+    /// Logout). Reachable via F4 (or Esc) from [`Self::Home`].
     Settings,
-    /// Account info display (Name / Number / Username).
+    /// Account info display (Name / Number / ACI).
     Profile,
     /// FAQ + issue-tracker pointer.
     Help,
     /// Preflight failed: no Wi-Fi link or no DHCP lease. Shown
     /// instead of attempting any network operation. Enter re-runs
-    /// the check; on success transitions to the screen the user
-    /// was trying to reach.
+    /// the check; on success, transitions to the screen the user
+    /// was trying to reach (encoded in `next`).
     NoInternet { next: NextScreenAfterInternet, reason: String },
 }
 
@@ -102,12 +163,15 @@ enum NextScreenAfterInternet {
     Home,
 }
 
+/// Outcome of the link flow. Carried in `Screen::Linked` so the
+/// renderer knows whether to show the success or failure banner.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum LinkedKind {
     Success,
     Failure,
 }
 
+/// Cursor position on the top-level [`Screen::Menu`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum MenuItem {
     Link,
@@ -125,52 +189,99 @@ enum SettingsItem {
     Logout,
 }
 
+/// The full UI state machine.
+///
+/// Owns the GAM context (`gam`, `content`, `bounds`), the current
+/// [`Screen`], the in-RAM message buffer, and several pieces of
+/// flow state. Driven entirely by the IPC loop in [`run`]; there
+/// is exactly one `App` per UI session and it lives until the
+/// process exits.
+///
+/// # Security
+///
+/// Holds plaintext message bodies (`messages`), sender labels, the
+/// account-identifying tuple (`account_*`), and the in-flight
+/// compose buffer. The derived `Debug` impl is **not** redacting;
+/// adding `tracing::debug!(?app)` anywhere will dump everything.
 struct App {
     gam: gam::Gam,
     content: Gid,
     bounds: Point,
     screen: Screen,
     selected: MenuItem,
-    /// Pre-link → false; post-Link `Cmd::LinkDevice` success → true.
-    /// Drives which menu items are visible + selectable.
+    /// Pre-link is `false`; flipped to `true` once
+    /// `Event::LinkComplete` arrives. Drives which menu items are
+    /// visible and which screens are reachable.
     linked: bool,
-    /// All inbound + outbound messages held in RAM for the lifetime
-    /// of this app run. Capped at `INBOX_CAPACITY` (oldest dropped
-    /// when full). Order is insertion-order (push_back); render
-    /// passes filter / sort / aggregate as needed.
+    /// All inbound and outbound messages held in RAM for the
+    /// lifetime of this UI session. Capped at `INBOX_CAPACITY`
+    /// (oldest dropped when full). Order is insertion-order;
+    /// the renderer filters and sorts per-screen.
+    ///
+    /// # Security
+    ///
+    /// Plaintext bodies for every received message live here until
+    /// the cap evicts them. See workspace REFACTOR_NOTES W-W.3 on
+    /// migrating the `body` field to a zeroizing wrapper.
     messages: Vec<ThreadMessage>,
     /// Aggregated per-conversation view derived from `messages`.
-    /// Re-built on every message arrival; rendered by `write_home`.
+    /// Re-built on every message arrival or send transition;
+    /// rendered by [`Self::write_home`].
     dialogues: Vec<DialogueSummary>,
-    /// Index of the focused row when Screen::Home is active.
+    /// Index of the focused row when [`Screen::Home`] is active.
     home_focus: usize,
-    /// Active compose buffer when Screen::Thread is on top. Cleared
-    /// when the user sends or backs out. Phase A allows alphanumeric
-    /// + space + ASCII punctuation; non-ASCII (emoji, accented chars)
-    /// is silently dropped — Phase B widens this to anything the
-    /// GAM font can render.
+    /// Active compose buffer when [`Screen::Thread`] is on top.
+    /// Cleared when the user sends or backs out. The filter
+    /// [`is_compose_char`] gates which keystrokes append; non-ASCII
+    /// (emoji, accented chars, CJK) is silently dropped today.
+    ///
+    /// # Security
+    ///
+    /// Holds plaintext the user has typed but not yet sent. Cleared
+    /// on send via `mem::take`, but the captured `String` is then
+    /// passed to `Cmd::SendMessage` (also plaintext) before the
+    /// worker encrypts it. Do not log this field; do not surface it
+    /// in error paths.
     compose_buffer: String,
     /// One-line text rendered on transient screens (Linked banner,
-    /// optional SendError surface). Cleared on transition to Home.
+    /// SendError surface, SignalAuthExpired banner). Cleared on
+    /// transition back to a normal screen.
     last_status: String,
-    /// True between Cmd::LinkDevice send and Event::Link{Complete,Error}.
-    /// While set, handle_worker_event opens the QR modal on LinkUrl
-    /// and transitions on LinkComplete/LinkError. Cleared on
-    /// terminal events.
+    /// `true` between `Cmd::LinkDevice` send and the terminal
+    /// `Event::Link{Complete,Error}`. While set,
+    /// [`handle_worker_event`] opens the QR modal on `LinkUrl` and
+    /// transitions on `LinkComplete`/`LinkError`; once cleared,
+    /// late-arriving link events are dropped on the floor (the user
+    /// has navigated away).
     linking_in_progress: bool,
-    /// Cursor on Screen::Settings.
+    /// Cursor on [`Screen::Settings`].
     settings_selected: SettingsItem,
-    /// Account info captured from Event::LinkComplete in this session.
-    /// On a cold start where the device is already linked from a
-    /// prior session, these stay None until a Cmd::GetAccountInfo
-    /// path is wired (Tier 2 chore).
+    /// Device name confirmed by the linked phone (from
+    /// `Event::LinkComplete` or `Event::AccountInfo`). `None` on a
+    /// cold start until either event arrives.
+    ///
+    /// # Security
+    ///
+    /// PII. Display-only; never log this beyond the existing
+    /// structured trace line.
     account_device_name: Option<String>,
+    /// ACI (Signal account UUID) for the linked account.
+    ///
+    /// # Security
+    ///
+    /// PII. Same logging discipline as `account_device_name`.
     account_aci: Option<String>,
+    /// E.164 phone number for the linked account.
+    ///
+    /// # Security
+    ///
+    /// PII. Same logging discipline as `account_device_name`.
     account_phone: Option<String>,
-    /// True between Cmd::ResolveUsername send and
-    /// Event::UsernameResolveResult arrival. Suppresses concurrent
-    /// lookups; gates handle_username_resolve_result so a stale
-    /// response after the user navigated away is dropped.
+    /// `true` between `Cmd::ResolveUsername` send and the
+    /// corresponding `Event::UsernameResolveResult`. Suppresses
+    /// concurrent lookups and gates
+    /// [`handle_username_resolve_result`] so a stale response after
+    /// the user navigated away is dropped silently.
     username_lookup_in_progress: bool,
 }
 
@@ -363,19 +474,24 @@ impl App {
 
     /// Render the conversation-list screen.
     ///
-    /// Layout per row (single-TextView text mode for Phase A):
-    /// ```
+    /// Layout per row (single-TextView text mode):
+    /// ```text
     ///   Bob                    12m
     /// * did you get the file?           (1)
     /// ───────────────────────────────────────
     /// > Carol                            1h
     ///   Thanks!
     /// ```
-    /// `>` marks the focused row, `*` marks unread (Phase A doesn't
-    /// have per-row bold; that comes with multi-TextView render in a
-    /// later phase). Right-aligned timestamp, trailing unread count
-    /// in `(N)` form, second-line preview with optional outgoing
+    /// `>` marks the focused row, `*` marks unread. The right-aligned
+    /// timestamp comes from [`crate::dialogue::brief_relative`]; the
+    /// trailing unread count is shown in `(N)` form; the second
+    /// line previews the latest message with an optional outgoing
     /// status glyph.
+    ///
+    /// # Security
+    ///
+    /// Renders plaintext message snippets. Do not extend this method
+    /// to emit log lines containing the snippet body or sender label.
     fn write_home(&self, out: &mut String) -> Result<(), String> {
         let total_unread: u32 = self.dialogues.iter().map(|d| d.unread_count).sum();
         if total_unread > 0 {
@@ -445,10 +561,11 @@ impl App {
             .map_err(|e| format!("home hint: {}", e))
     }
 
-    /// Render the per-conversation history view (read-only in Phase A).
+    /// Render the per-conversation history view plus the in-screen
+    /// compose box.
     ///
     /// Layout:
-    /// ```
+    /// ```text
     /// Bob
     /// -------------------------------------
     /// Bob 12m
@@ -463,8 +580,15 @@ impl App {
     ///   Enter: back to Home
     /// ```
     /// Messages oldest at top, newest just above the footer (mirrors
-    /// every chat UI). Outgoing messages prefixed with their send-
-    /// status glyph; incoming messages have no prefix.
+    /// every chat UI). Outgoing messages carry a send-status glyph;
+    /// incoming messages have no prefix.
+    ///
+    /// # Security
+    ///
+    /// Renders decrypted message bodies and sender labels. The
+    /// caller (`render`) writes the output into a GAM `TextView`
+    /// that is rendered to the framebuffer; no body or label leaves
+    /// the screen surface.
     fn write_thread(&self, out: &mut String, uuid: &Uuid) -> Result<(), String> {
         let header = self
             .dialogues
@@ -505,9 +629,10 @@ impl App {
             }
         }
         writeln!(out, "{}", "-".repeat(45)).map_err(|e| format!("thread foot rule: {}", e))?;
-        // Compose input. Cursor is `_` at the end of the buffer for
-        // Phase A — no horizontal scroll if the buffer is wider than
-        // the visible width, just shows the trailing chars.
+        // Compose input. Cursor glyph is the trailing `_`; if the
+        // buffer is wider than the visible width the ellipsizer
+        // shows only the leading slice — there is no horizontal
+        // scroll today.
         writeln!(out, "> {}_", crate::dialogue::ellipsize(&self.compose_buffer, 30))
             .map_err(|e| format!("thread compose: {}", e))?;
         write!(out, "Enter Send  Esc Back  F4 Settings")
@@ -624,21 +749,24 @@ impl App {
 }
 
 /// Whether a character is acceptable in the Thread compose buffer.
-/// Phase A: alphanumeric + space + ASCII punctuation. Non-ASCII
-/// (emoji, accented chars, CJK) is silently dropped; Phase B
-/// widens to anything the GAM font can render.
+///
+/// Accepts alphanumeric, space, and ASCII punctuation. Non-ASCII
+/// (emoji, accented chars, CJK) is silently dropped to match the
+/// font set the GAM renderer currently exposes; widening this
+/// filter is straightforward once the font has the glyphs.
 fn is_compose_char(c: char) -> bool {
     c.is_alphanumeric() || c == ' ' || c.is_ascii_punctuation()
 }
 
-/// If `XAS_MOCK_MESSAGES=1` is set in the environment, seed `App` with
-/// a small fake conversation history so hosted-mode UI iteration
-/// shows a populated Home + Thread without needing signal-cli traffic.
-/// Linked state is unaffected; messages are RAM-only and disappear
-/// across runs unless `pddb dump` is invoked.
+/// If `XAS_MOCK_MESSAGES=1` is set in the environment, seed `App`
+/// with a small fake conversation history so hosted-mode UI work
+/// can iterate on a populated Home + Thread without needing real
+/// signal-cli traffic. Linked state is set to `true` and the
+/// initial screen becomes [`Screen::Home`].
 ///
-/// Hosted-only: `std::env::var` is harmless on rv32 too (no env there)
-/// but the path simply does nothing without the variable set.
+/// The variable is harmless on rv32 (no env, so the path simply
+/// returns without seeding) — kept here without `cfg`-gating so
+/// hosted and on-device builds share one source-of-truth helper.
 fn seed_mock_messages_if_requested(app: &mut App) {
     if std::env::var("XAS_MOCK_MESSAGES").ok().as_deref() != Some("1") {
         return;
@@ -697,9 +825,12 @@ fn seed_mock_messages_if_requested(app: &mut App) {
     app.home_focus = 0;
 }
 
-/// Unix milliseconds, or 0 if the system clock is somehow before
-/// the epoch. Used by the conversation-list renderer to compute
-/// relative timestamps.
+/// Unix milliseconds, or 0 if the system clock is before the epoch.
+///
+/// Used by the conversation-list renderer to compute relative
+/// timestamps, and by `Cmd::SendMessage` to stamp outbound messages.
+/// The 0 fallback is benign: a 0 timestamp simply renders as `0s` /
+/// `(very long ago)`.
 fn unix_now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -710,6 +841,10 @@ fn unix_now_ms() -> u64 {
 
 /// Mark every message belonging to `uuid` as read, then rebuild
 /// the dialogue summaries so unread counts reflect the new state.
+///
+/// No-op when the user already had every message read; the
+/// `changed` guard avoids the rebuild cost on the common case of
+/// re-entering an already-read thread.
 fn mark_thread_read(app: &mut App, uuid: Uuid) {
     let mut changed = false;
     for m in app.messages.iter_mut() {
@@ -723,10 +858,13 @@ fn mark_thread_read(app: &mut App, uuid: Uuid) {
     }
 }
 
-/// True if `s` matches the Signal "username" shape: a non-empty
-/// nickname (3–32 chars, ASCII alnum or `_`) followed by `.` and
-/// 2–9 digits, e.g. `alice.42`. Used only for classifying user input
-/// in the New chat modal so the rejection message can be specific.
+/// `true` if `s` matches the Signal "username" shape: a non-empty
+/// nickname (3-32 chars, ASCII alphanumeric or `_`) followed by
+/// `.` and 2-9 digits, e.g. `alice.42`.
+///
+/// Used only for classifying user input in the New Chat modal so
+/// the rejection message can be specific; the server validates the
+/// real format on resolution.
 fn looks_like_signal_username(s: &str) -> bool {
     let (nick, rest) = match s.split_once('.') {
         Some(parts) => parts,
@@ -745,8 +883,19 @@ fn looks_like_signal_username(s: &str) -> bool {
 }
 
 /// Settings → Logout. Confirms with the user, then sends
-/// `Cmd::Logout` and lets the forwarder thread + handle_worker_event
-/// pick up the resulting `Event::LoggedOut` to reset state.
+/// `Cmd::Logout` and lets the forwarder + [`handle_worker_event`]
+/// pick up the resulting `Event::LoggedOut` (or, on partial
+/// failure, a warning log line from the worker followed by
+/// `Event::LoggedOut` anyway — see workspace REFACTOR_NOTES
+/// W-W.7 for a tracked improvement that would surface partial
+/// wipes more strongly).
+///
+/// # Security
+///
+/// Logout wipes Signal-Protocol state in the PDDB. Failure paths
+/// here are limited to "Modals init failed" or "Cmd channel
+/// closed" — neither of which leaks state — but the worker-side
+/// wipe surface is not yet enforced as all-or-nothing.
 fn drive_logout(cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::XousNames) {
     let modals = match modals::Modals::new(modals_xns) {
         Ok(m) => m,
@@ -783,10 +932,25 @@ fn drive_logout(cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::XousNames) {
     // the forwarder, where handle_worker_event will reset App state.
 }
 
-/// F1 on Home: prompt for a UUID (or +e164) and open an empty
+/// F1 on Home: prompt for a UUID or username and open an empty
 /// thread for it. The compose box becomes the entry point; the
 /// thread becomes a real conversation as soon as a message goes
 /// out or comes back.
+///
+/// Three input shapes are accepted:
+///
+/// - UUID (immediate, no server round-trip).
+/// - Username (`name.000` form; resolved via
+///   `Cmd::ResolveUsername` and the matching `Event` reply).
+/// - E.164 phone (rejected — CDSI is not available in this build;
+///   see the inline comment on the `+`-prefixed branch).
+///
+/// # Trust boundary
+///
+/// The username path crosses the network: it routes through the
+/// worker, then through libsignal-service's username-resolution
+/// endpoint over the TLS-pinned Signal connection. The other two
+/// paths are local-only.
 fn drive_new_chat(
     app: &mut App,
     cmd_tx: &Sender<Cmd>,
@@ -848,9 +1012,9 @@ fn drive_new_chat(
         // Phone-number lookup needs CDSI (Signal's contact-discovery
         // service over SGX/Intel-attested enclaves). The libsignal-
         // service-rs cdsi feature pulls boring-sys (BoringSSL) which
-        // doesn't target rv32-xous. The whole feature is therefore
-        // disabled in this build (per Stage 6 trade-off — see git
-        // log on vendor/libsignal-service-rs/Cargo.toml's `default`).
+        // doesn't target rv32-xous, so the feature is disabled in
+        // this build. See vendor/libsignal-service-rs/Cargo.toml's
+        // default-features list.
         log::info!("xas/gam_app: F1 phone lookup not supported (CDSI disabled)");
         let _ = modals.show_notification(
             "Phone-number lookup needs\n\
@@ -869,6 +1033,27 @@ fn drive_new_chat(
 }
 
 
+/// Run the GAM-rendered UI loop.
+///
+/// Registers the xas SID under [`SERVER_NAME_XAS`], constructs the
+/// GAM `UxRegistration`, spawns the event-forwarder thread that
+/// bridges `event_rx` into the GAM IPC loop, builds the [`App`],
+/// and dispatches incoming GAM messages until the binary exits.
+///
+/// # Trust boundary
+///
+/// Called from `main.rs` after the worker is spawned. From this
+/// point on the UI owns the `cmd_tx` / `event_rx` channels and is
+/// the sole consumer of `event_rx` (the forwarder thread that
+/// `run` spawns is the one consumer).
+///
+/// # Errors
+///
+/// Returns `Err(String)` describing the failing call when initial
+/// GAM setup (`XousNames::new`, `register_name`, `register_ux`,
+/// canvas request) fails. The receive loop itself only returns on
+/// fatal IPC error; the typical exit path is the binary process
+/// being torn down by the Xous shell.
 pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String> {
     log::info!("xas/gam_app: starting GAM-rendered loop");
 
@@ -1010,6 +1195,20 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
     }
 }
 
+/// Dispatch a Precursor keypress batch.
+///
+/// The GAM packs up to four `char`s per `Rawkeys` IPC; `'\u{0}'`
+/// fills unused slots. Each non-null char is matched against the
+/// `(Screen, char)` tuple and may mutate `app.screen`, advance the
+/// compose buffer, send a `Cmd`, or open a modal.
+///
+/// # Threading model
+///
+/// Called from the GAM main thread. Does not call any
+/// `event_rx.recv*` — the `_event_rx` parameter exists only to be
+/// passed through to [`drive_link`] which itself does not consume
+/// from it. The event forwarder spawned by [`run`] is the sole
+/// receiver.
 fn handle_keys(
     app: &mut App,
     keys: [char; 4],
@@ -1354,12 +1553,30 @@ fn handle_keys(
     }
 }
 
-/// Process a worker event delivered via the forwarder thread.
-/// Mutates `app` state; the WorkerEvent handler in `run()` does
-/// the render after we return so multiple events batch into one
-/// redraw. **The forwarder is the only consumer of `event_rx`.**
-/// All Event variants — including Link{Url, Complete, Error} —
-/// land here.
+/// Process a worker [`Event`] delivered via the forwarder thread.
+/// Mutates `app` state in place; the caller renders once after
+/// draining the entire deque, so multiple events batch into one
+/// redraw.
+///
+/// All `Event` variants land here — including the link-flow
+/// (`LinkUrl`, `LinkComplete`, `LinkError`), the receive loop
+/// (`ReceiveStarted`, `Message`, `ReceiveError`), the send loop
+/// (`SendComplete`, `SendError`), and the terminal-state banners
+/// (`LoggedOut`, `SignalAuthExpired`, `SignalConflictingDevice`).
+///
+/// # Trust boundary
+///
+/// This is the **post-decrypt boundary**: every event payload
+/// originated inside the worker after libsignal completed its
+/// ratchet and authentication checks. The body / sender / ACI /
+/// phone fields are all plaintext PII or higher.
+///
+/// # Security
+///
+/// Existing `log::info!` lines record only structured metadata
+/// (sender label, byte length, ACI for the audit trail). When
+/// extending this function, mirror that discipline — never log
+/// `body`, never `Debug`-print the whole `Event`.
 fn handle_worker_event(
     app: &mut App,
     event: Event,
@@ -1368,6 +1585,13 @@ fn handle_worker_event(
 ) {
     match event {
         Event::LinkUrl(url) => {
+            // LOGGING / SECURITY: the URL below is the link
+            // credential during its window. Logging it at info level
+            // is the same finding as W-W.1 in `~/REFACTOR_NOTES.md`
+            // (originally flagged at the worker emit site); A.2
+            // tracks the UI-side cross-reference. Anyone with UART
+            // access during the link window can replay this URL to
+            // pair their own device against the pending request.
             log::info!("xas/gam_app: link URL = {}", url);
             // Open the QR modal. show_notification blocks until the
             // user dismisses it — meanwhile the worker keeps the
@@ -1653,9 +1877,14 @@ fn handle_worker_event(
     }
 }
 
-/// Apply a `Event::UsernameResolveResult` to the in-flight New Chat
-/// flow. If a thread should open, the screen transitions to Thread.
-/// On error, the in-flight flag is cleared so the user can retry.
+/// Apply an `Event::UsernameResolveResult` to the in-flight New
+/// Chat flow. On success, transitions to [`Screen::Thread`]. On
+/// error or not-found, clears `username_lookup_in_progress` and
+/// surfaces the reason in `app.last_status` for the next render.
+///
+/// Stale responses (those arriving after the user navigated away
+/// from the New Chat modal) are silently dropped via the
+/// `username_lookup_in_progress` guard.
 fn handle_username_resolve_result(
     app: &mut App,
     result: Result<Option<Uuid>, String>,
@@ -1687,16 +1916,13 @@ fn handle_username_resolve_result(
 }
 
 /// Hosted-mode helper: read `$HOME/.xas-link-attempts`, increment
-/// it, return the device name to default to. Each link attempt
-/// gets a fresh `xasN` so the user can correlate this run's QR
-/// with the entry that lands in their phone's Linked Devices list.
+/// it, and return the device name to default to. Each link attempt
+/// gets a fresh `xasN` so the user can correlate this run's QR with
+/// the entry that lands in their phone's Linked Devices list.
 ///
 /// File semantics: missing → create with `0`, use `0`, write `1`.
-/// Existing → read N, use N, write N+1. If `$HOME` isn't set or
+/// Existing → read N, use N, write N+1. If `$HOME` is not set or
 /// the read/write fails, fall back to the bare `"xas"` name.
-///
-/// Hosted-only: on rv32 there's no general filesystem, so this
-/// quietly falls back to "xas".
 #[cfg(not(target_os = "xous"))]
 fn next_attempt_device_name() -> String {
     let Ok(home) = std::env::var("HOME") else {
@@ -1711,14 +1937,35 @@ fn next_attempt_device_name() -> String {
     format!("xas{}", n)
 }
 
+/// rv32 stub: there is no general filesystem to track attempt
+/// counts on, so every link attempt defaults to the bare `"xas"`
+/// name. The user can still override via the device-name modal.
 #[cfg(target_os = "xous")]
 fn next_attempt_device_name() -> String {
     "xas".to_string()
 }
 
-/// Result of the no-internet preflight. `Ok(())` means we have an
-/// IPv4 lease and the link is up; `Err(reason)` is a short
-/// user-facing string explaining what's missing.
+/// No-internet preflight.
+///
+/// `Ok(())` means xas has an IPv4 lease and the link is up;
+/// `Err(reason)` is a short user-facing string explaining what is
+/// missing. Used to short-circuit link / receive attempts that
+/// would otherwise spend tens of seconds inside libsignal failing
+/// to resolve `chat.signal.org`.
+///
+/// # Errors
+///
+/// - `"COM didn't respond: …"` — the COM service did not answer
+///   the `wlan_status` request.
+/// - `"Wi-Fi link is …"` — the EC reports the link is not in
+///   the `Connected` state.
+/// - `"Joined a network but no DHCP lease yet."` — link up but
+///   `ipv4.addr` is `0.0.0.0`.
+///
+/// Outside Xous (bare `cargo run` on Linux) or when
+/// `XAS_BYPASS_PREFLIGHT` is set, this returns `Ok(())`
+/// unconditionally — the host kernel's networking is assumed
+/// usable.
 fn check_internet(xns: &xous_names::XousNames) -> Result<(), String> {
     // Hosted-mode escape hatch: tests/hosted/test_link_qr.sh sets
     // XAS_BYPASS_PREFLIGHT=1 because hosted has no real WF200 radio
@@ -1751,18 +1998,17 @@ fn check_internet(xns: &xous_names::XousNames) -> Result<(), String> {
 }
 
 /// Kick off the link flow. Synchronous part only: prompts for a
-/// device name, sends `Cmd::LinkDevice`, sets the Linking screen,
+/// device name, sends `Cmd::LinkDevice`, sets [`Screen::Linking`],
 /// and returns. All async results (`LinkUrl`, `LinkComplete`,
 /// `LinkError`) flow through the forwarder thread and land in
-/// `handle_worker_event`.
+/// [`handle_worker_event`].
 ///
-/// The forwarder is the *only* consumer of `event_rx` — drive_link
-/// no longer races for events directly. (Earlier bug: both
-/// drive_link and the forwarder called `event_rx.recv_blocking`,
-/// so individual events were delivered to one or the other
-/// non-deterministically. The QR modal sometimes never opened
-/// because Event::LinkUrl was grabbed by the forwarder before
-/// drive_link saw it.)
+/// # Threading model
+///
+/// `drive_link` is called on the GAM main thread. It must not call
+/// `event_rx.recv*` — the forwarder thread is the sole consumer of
+/// `event_rx`. The `_event_rx` parameter is held only so a caller
+/// can prove ownership; it is intentionally not used.
 fn drive_link(
     app: &mut App,
     cmd_tx: &Sender<Cmd>,
