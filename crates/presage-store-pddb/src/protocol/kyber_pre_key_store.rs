@@ -7,10 +7,30 @@
 //! same flag the sqlite store carries as a column
 //! (vendor/presage/presage-store-sqlite/src/protocol.rs:407-470).
 //!
-//! `mark_kyber_pre_key_used` consults a separate `kyber_meta` dict for
-//! last-resort base-key dedup. Key = `"{kyber_id}.{ec_id}"`, value =
-//! `base_key.serialize()` bytes. Inserting the same triple twice is the
-//! "reused base key" error case.
+//! `mark_kyber_pre_key_used` consults a separate `kyber_meta` dict
+//! for last-resort base-key dedup. Key = `"{kyber_id}.{ec_id}"`,
+//! value = `base_key.serialize()` bytes. Inserting the same triple
+//! twice is the "reused base key" error case (replay-protection
+//! against a peer that tries to re-establish a session with the same
+//! base key against the same last-resort prekey).
+//!
+//! # Security
+//!
+//! A [`KyberPreKeyRecord`] holds an ML-KEM-1024 secret key. These are
+//! the post-quantum half of Signal's PQXDH X3DH variant. Compromise
+//! of a prekey's private bytes lets the holder decrypt the PQXDH
+//! ciphertext for one X3DH session.
+//!
+//! One-time keys are deleted on first use (`mark_kyber_pre_key_used`,
+//! `is_last_resort == false` branch) — they should never persist
+//! past a successful session establishment. Last-resort keys are
+//! long-lived and rotate only when presage's replenish pass runs; the
+//! dedup table (`kyber_meta`) prevents replay against a stale
+//! last-resort key.
+//!
+//! The JSON envelope (`KyberStored`) is `serde_json`-encoded. The
+//! inner `record: Vec<u8>` is libsignal's binary record bytes; the
+//! `is_last_resort` bit is plaintext metadata.
 
 use async_trait::async_trait;
 use presage::libsignal_service::protocol::{
@@ -27,8 +47,17 @@ use super::{
 };
 
 /// Wire envelope for a stored Kyber pre-key. JSON-encoded. The
-/// `record` bytes are libsignal's binary `KyberPreKeyRecord::serialize`
-/// output; we don't reframe.
+/// `record` bytes are libsignal's binary
+/// `KyberPreKeyRecord::serialize` output; we don't reframe.
+///
+/// # Security
+///
+/// `record` contains an ML-KEM-1024 secret key. The `Vec<u8>` does
+/// not zero on drop; the JSON envelope must stay inside the PDDB
+/// trust boundary. **MUST NOT be logged.** The `Debug` derive on
+/// this type is never invoked because the struct is only constructed
+/// at the storage boundary; if added, it would print the private
+/// bytes as a decimal-int array.
 #[derive(Serialize, Deserialize)]
 pub(super) struct KyberStored {
     pub(super) record: Vec<u8>,

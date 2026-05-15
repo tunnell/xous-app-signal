@@ -1,17 +1,41 @@
 //! `PreKeyStore` impl, packed-key strategy.
 //!
 //! A single PDDB key (`signal.protocol.{aci,pni}.prekey_bundle["all"]`)
-//! holds `Vec<(u32, Vec<u8>)>` — `(prekey_id, serialized_record)` pairs
-//! covering every current one-time EC pre-key. Per-key storage would
-//! burn one PDDB page per record (per-page AEAD); ~100 pre-keys × ~70
-//! bytes packed easily fit in one page.
+//! holds `Vec<(u32, Vec<u8>)>` — `(prekey_id, serialized_record)`
+//! pairs covering every current one-time EC pre-key. Per-key storage
+//! would burn one PDDB page per record (per-page AEAD); ~100
+//! pre-keys × ~70 bytes packed easily fit in one page.
 //!
 //! Trade-off: every save/remove rewrites the whole vec. With ~100
 //! entries × ~70 bytes that's ~7 KB per write — well under the
 //! per-page rewrite cost of one-key-per-id. If the prekey count grows
-//! materially we'll reconsider, but Signal's published prekey-replenish
-//! count is 100 (`PRE_KEY_BATCH_SIZE`) and the lower-bound is 10
-//! (`PRE_KEY_MINIMUM`); so the upper bound is well-behaved.
+//! materially we'll reconsider, but Signal's published
+//! prekey-replenish count is 100 (`PRE_KEY_BATCH_SIZE`) and the
+//! lower-bound is 10 (`PRE_KEY_MINIMUM`); so the upper bound is
+//! well-behaved.
+//!
+//! # Security
+//!
+//! Each entry in the bundle is a serialized libsignal
+//! [`PreKeyRecord`] — a one-time EC private key plus its id and
+//! public half. Compromise of a prekey's private bytes lets an
+//! attacker decrypt the X3DH-initiated session that consumed it, but
+//! only until the first ratchet rotation. Prekeys are consumed by
+//! the receiver on first use (`remove_pre_key` after session
+//! establishment).
+//!
+//! The `Vec<u8>` envelopes in the bundle do not zero on drop. Per
+//! call, we read the whole bundle, mutate, and write it back; each
+//! step allocates a fresh `Vec<u8>` of the JSON-encoded bundle. See
+//! REFACTOR_NOTES sec-B for the zeroization plan.
+//!
+//! # Encoding
+//!
+//! The bundle is stored as JSON of `Vec<(u32, Vec<u8>)>`. The inner
+//! `Vec<u8>` is libsignal's binary `PreKeyRecord::serialize()`. JSON
+//! is somewhat inefficient here because the inner `Vec<u8>` is
+//! rendered as a decimal-int array (3-4× inflation vs raw bytes), but
+//! ~100 × ~70 B keeps the encoded bundle well under one PDDB chunk.
 
 use async_trait::async_trait;
 use presage::libsignal_service::protocol::{
