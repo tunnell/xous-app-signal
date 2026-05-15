@@ -1,5 +1,29 @@
-//! `presage::store::Store` blanket — combines `StateStore`,
-//! `ContentsStore`, and the ACI/PNI protocol-store accessors.
+//! `presage::store::Store` blanket — combines [`presage::store::StateStore`],
+//! [`presage::store::ContentsStore`], and the ACI/PNI protocol-store
+//! accessors.
+//!
+//! `Store::clear` is the one method that crosses every persisted
+//! dict. It is documented inline; the in-memory session cache is
+//! cleared last so a flush after `clear` does not re-persist
+//! sessions that the user just asked to wipe.
+//!
+//! # Security
+//!
+//! `clear` is the only API that wipes the user's account state.
+//! After it returns successfully:
+//!
+//! - the StateStore dict (`signal.state`) is gone — registration
+//!   data, identity keypairs, master key, sender cert all removed;
+//! - every ContentsStore dict (`signal.contacts`, `signal.groups`,
+//!   etc.) is gone;
+//! - every ProtocolStore dict for both ACI and PNI is gone;
+//! - the in-memory session cache and dirty set are empty.
+//!
+//! Limitations: PDDB's free-list reuses pages but does not
+//! zero-on-free, so freed pages may still hold ciphertext on disk
+//! until the next write reuses the page. Treat `clear` as durable
+//! forget against a future cold reader of PDDB, not as a
+//! cryptographic erase. See REFACTOR_NOTES sec-C.
 
 use presage::store::{ContentsStore, StateStore, Store};
 
@@ -10,9 +34,23 @@ impl Store for PddbStore {
     type AciStore = PddbProtocolStore;
     type PniStore = PddbProtocolStore;
 
-    /// Clear *everything* — state, profiles, every protocol-store dict
-    /// (both ACI and PNI), and the in-memory session cache. Per-impl
-    /// `clear_*` methods are wired up here.
+    /// Clear *everything* — state, profiles, every protocol-store
+    /// dict (both ACI and PNI), and the in-memory session cache.
+    /// Per-impl `clear_*` methods are wired up here.
+    ///
+    /// See the module-level Security note for the durability bound
+    /// (PDDB free-list does not zero pages on free).
+    ///
+    /// # Errors
+    ///
+    /// Returns the first backend error encountered via `?`. Earlier
+    /// `delete_dict` calls have already taken effect; there is no
+    /// rollback. The in-memory session cache and dirty set are
+    /// cleared only after every backend dict has been deleted
+    /// successfully, so on partial failure they retain the
+    /// pre-`clear` state and a subsequent `flush_sessions` could
+    /// re-persist sessions whose protocol-dict was already wiped.
+    /// See REFACTOR_NOTES sec-E.
     async fn clear(&mut self) -> Result<(), <Self as StateStore>::StateStoreError> {
         // Wipe registration data + identity keypairs + sender cert +
         // master key.
