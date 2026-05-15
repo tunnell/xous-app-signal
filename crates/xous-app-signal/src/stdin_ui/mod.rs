@@ -142,6 +142,17 @@ impl Ui {
             // Drain any pending worker events. Each one may transition
             // the stack and forces a re-render before we go back to
             // waiting for input.
+            //
+            // LOGGING / SECURITY: the `{evt:?}` shape below renders
+            // the entire `xous_signal_worker::Event` via its derived
+            // Debug impl. That includes `Event::LinkUrl(_)` (the
+            // provisioning credential during its window, W-W.1 in
+            // `~/REFACTOR_NOTES.md`), `Event::Message { body, ... }`
+            // (decrypted plaintext, W-W.3), and `Event::LinkComplete
+            // { aci, phone, .. }` (account identifiers, W-W.2).
+            // Stdout in hosted mode is the developer's terminal —
+            // treat it as a public bulletin board, as documented in
+            // the module-level Trust boundary note.
             let mut got_event = false;
             while let Ok(evt) = self.event_rx.try_recv() {
                 writeln!(stdout, "[event] {evt:?}")?;

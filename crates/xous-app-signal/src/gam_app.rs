@@ -1585,6 +1585,13 @@ fn handle_worker_event(
 ) {
     match event {
         Event::LinkUrl(url) => {
+            // LOGGING / SECURITY: the URL below is the link
+            // credential during its window. Logging it at info level
+            // is the same finding as W-W.1 in `~/REFACTOR_NOTES.md`
+            // (originally flagged at the worker emit site); A.2
+            // tracks the UI-side cross-reference. Anyone with UART
+            // access during the link window can replay this URL to
+            // pair their own device against the pending request.
             log::info!("xas/gam_app: link URL = {}", url);
             // Open the QR modal. show_notification blocks until the
             // user dismisses it — meanwhile the worker keeps the

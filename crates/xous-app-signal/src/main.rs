@@ -138,6 +138,17 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
 /// commands in flight at any time (link, send, sync, account
 /// info). The worker drains commands eagerly so back-pressure on
 /// the UI side is unlikely on real workloads.
+///
+/// Capacity tradeoff: the `event_tx` cap bounds how many
+/// back-pressured `Event::Message` emissions
+/// `xous_signal_worker::manager_task` can buffer before its
+/// `event_tx.send(...).await` blocks the worker's receive stream.
+/// Too small → an idle or slow UI stalls inbound receive; too large
+/// → unbounded memory on a poorly-behaved peer with high message
+/// flux. 16 is the negotiated middle: enough for a bursty receive
+/// from a chat the user just opened, small enough to keep the
+/// post-Drop bare-`String` body exposure window bounded (see A.1 /
+/// A.3 in `~/REFACTOR_NOTES.md`).
 const CHAN_CAP: usize = 16;
 
 /// Construct the [`PddbStore`] the worker will use.
@@ -599,7 +610,12 @@ fn probe_send_batch() {
 /// The provisioning URL is the link credential during its window.
 /// This probe displays it to the user via the modals service; the
 /// modal is shown on the local screen only and is not forwarded
-/// elsewhere.
+/// elsewhere. However, the `log::info!("auto-link: link URL =
+/// {}", url)` line below emits the URL to UART at info level —
+/// same leak surface as `xous_signal_worker`'s W-W.1
+/// (`~/REFACTOR_NOTES.md`). Both call sites are scheduled for the
+/// same fix (drop the URL from the log, retain only the length);
+/// see A.2 in `~/REFACTOR_NOTES.md`.
 ///
 /// # Failure modes worth distinguishing in the UART log
 ///
