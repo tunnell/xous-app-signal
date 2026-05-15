@@ -49,15 +49,57 @@ pub use put_truncate_smoke::{smoke_put_truncates, SmokeResult};
 
 /// Internal KV abstraction used by all `PddbStore` trait impls.
 ///
-/// The `(dict, key)` shape mirrors PDDB's API: dicts hold related keys
-/// and can be dropped wholesale (`delete_dict`), which is what
+/// The `(dict, key)` shape mirrors PDDB's API: dicts hold related
+/// keys and can be dropped wholesale (`delete_dict`), which is what
 /// `clear_registration` / `clear_profiles` / etc. exploit.
 ///
-/// Implementations must be cheap to share across threads — `PddbStore`
-/// holds the backend behind an `Arc` and clones the `Arc` on
-/// `PddbStore::clone()`, so all callers see the same underlying state.
+/// Implementations must be cheap to share across threads —
+/// `PddbStore` holds the backend behind an `Arc` and clones the
+/// `Arc` on `PddbStore::clone()`, so all callers see the same
+/// underlying state.
+///
+/// # Trust boundary
+///
+/// `KvBackend` is the abstraction layer over the durability
+/// substrate. The two impls in this crate are:
+///
+/// - `PddbBackend` (feature `pddb-backend`) — forwards to the running
+///   PDDB server. Bytes are authenticated by PDDB's per-page
+///   AES-256-GCM-SIV before `KvBackend::get` returns them. This is
+///   the only trust boundary for persisted secrets.
+/// - [`MockBackend`] — plaintext `HashMap`, hosted-mode tests only.
+///   **Never built into production xas.** Carries no crypto. Lives
+///   here because the trait impls are what unit tests cover, and a
+///   real PDDB connection isn't available in hosted mode.
+///
+/// Bytes flowing across this trait are opaque to the backend — the
+/// store-trait impls (`StateStore`, `ContentsStore`, the protocol
+/// stores) are responsible for framing and decoding. A `KvBackend`
+/// is not allowed to inspect or transform the values.
+///
+/// # Security
+///
+/// A `put(dict, key, value)` write is durable when it returns
+/// `Ok(())`. The `PddbBackend` impl achieves this via PDDB's
+/// `Opcode::WriteKey` handler, which calls `basis_cache.sync(...)`
+/// before reply — see `services/pddb/src/main.rs:2293-2294`.
+///
+/// `KvBackend` impls must be `Send + Sync`: the store and its clones
+/// share one backend behind an `Arc`. Implementors are responsible
+/// for serializing concurrent IPCs — `PddbBackend` does so via an
+/// internal `Mutex<PddbClient>`.
 pub trait KvBackend: Send + Sync + fmt::Debug {
+    /// Read `key` from `dict`. Returns `Ok(None)` if the key is
+    /// absent; returns `Err` on backend failure (PDDB IPC failure,
+    /// mutex poisoning, etc.).
     fn get(&self, dict: &str, key: &str) -> Result<Option<Vec<u8>>, Error>;
+
+    /// Write `value` to `dict[key]`, replacing any prior value.
+    /// Returns `Ok(())` after the value is durable.
+    ///
+    /// The `PddbBackend` impl issues a `delete_key` before the write
+    /// to force a fresh allocation; see refs #14 for the truncation
+    /// bug this works around.
     fn put(&self, dict: &str, key: &str, value: &[u8]) -> Result<(), Error>;
 
     /// Bulk write: apply N `(dict, key, value)` writes with **one**
@@ -70,9 +112,14 @@ pub trait KvBackend: Send + Sync + fmt::Debug {
     /// per-`WriteKey` server-side basis syncs into one — the actual
     /// order-of-magnitude saving over per-key put loops.
     ///
+    /// # Errors
+    ///
     /// Not atomic across entries: if entry N fails, entries 0..N
-    /// have already been applied. For PddbBackend the trailing sync
-    /// still runs server-side, so partial state is durable.
+    /// have already been applied. For `PddbBackend` the trailing
+    /// sync still runs server-side, so partial state is durable.
+    /// Callers (notably [`BufferingBackend`]'s commit path) must be
+    /// prepared to recover by replaying entries individually if
+    /// `put_batch` returns `Err` after a partial apply.
     fn put_batch(&self, entries: &[(&str, &str, &[u8])]) -> Result<(), Error> {
         for (dict, key, value) in entries {
             self.put(dict, key, value)?;
@@ -80,8 +127,18 @@ pub trait KvBackend: Send + Sync + fmt::Debug {
         Ok(())
     }
 
+    /// Remove `key` from `dict`. Idempotent: deleting a missing key
+    /// must succeed.
     fn delete(&self, dict: &str, key: &str) -> Result<(), Error>;
+
+    /// Remove `dict` and every key inside it. Used by `clear_*`
+    /// methods on the store trait impls to wipe a whole table.
     fn delete_dict(&self, dict: &str) -> Result<(), Error>;
+
+    /// List every key currently present in `dict`. Returns an empty
+    /// `Vec` for a non-existent or empty dict. Key ordering is the
+    /// backend's lexicographic sort; content-store callers exploit
+    /// this for timestamp-ordered iteration.
     fn list_keys(&self, dict: &str) -> Result<Vec<String>, Error>;
 }
 
@@ -91,13 +148,35 @@ pub trait KvBackend: Send + Sync + fmt::Debug {
 /// session cache, and the same trust policy via `Arc`.
 /// `presage::store::Store` requires `Clone + Send + Sync + 'static`;
 /// every clone of a `PddbStore` therefore observes the same on-disk
-/// state and the same in-flight session cache, which is the behaviour
-/// Manager assumes when it stashes a store handle behind shared state.
+/// state and the same in-flight session cache, which is the
+/// behaviour Manager assumes when it stashes a store handle behind
+/// shared state.
 ///
-/// `Debug` is hand-rolled because `SessionRecord` (held inside the
+/// # Security
+///
+/// `PddbStore` is the single audit point that mediates every read
+/// and write of Signal account state, libsignal key material,
+/// per-thread message bodies, and registration credentials.
+/// Sensitivity inherits from the underlying types — see the
+/// `state`, `content`, and `protocol` private module docs for the
+/// per-type tier breakdown.
+///
+/// `Debug` is hand-rolled because [`SessionRecord`] (held inside the
 /// session cache) doesn't implement `Debug`. We surface only the
 /// cache cardinality, not its contents — matches the privacy
-/// expectations for a long-lived store.
+/// expectations for a long-lived store. Derive-`Debug` here would be
+/// catastrophic; a `tracing::debug!(?store)` on a logging path would
+/// flush every cached session's bytes to UART. (See anti-pattern A.11
+/// in `/home/tunnell/research-doc-patterns.md`.)
+///
+/// # Logging
+///
+/// None of `PddbStore`'s methods log secret-bearing values. The
+/// `buffering_backend` and `backend_pddb` layers do emit
+/// `tracing::info!` perf events — those carry dict/key strings (the
+/// `dict` and `key` are non-secret), value *lengths* (the size of
+/// e.g. a serialized session record), and elapsed milliseconds, but
+/// never value bytes.
 #[derive(Clone)]
 pub struct PddbStore {
     pub(crate) backend: Arc<dyn KvBackend>,
@@ -111,9 +190,14 @@ pub struct PddbStore {
     pub(crate) buffering: Option<Arc<BufferingBackend>>,
 
     /// In-memory dirty-set cache. `store_session` writes here only;
-    /// `flush_sessions` persists to the backend. Wrapped in `Mutex` so
-    /// it stays `Send + Sync` even though the underlying `SessionRecord`
-    /// is.
+    /// `flush_sessions` persists to the backend. Wrapped in `Mutex`
+    /// so it stays `Send + Sync` even though the underlying
+    /// `SessionRecord` is.
+    ///
+    /// **Holds Double Ratchet state for every active session.** See
+    /// the [`protocol::session_store`] module doc for the
+    /// per-record sensitivity analysis and the zeroization gap
+    /// (libsignal's `SessionRecord` does not derive `Zeroize`).
     pub(crate) session_cache:
         Arc<Mutex<HashMap<protocol::session_store::SessionKey, SessionRecord>>>,
 
@@ -124,10 +208,10 @@ pub struct PddbStore {
     /// marking the entry dirty).
     pub(crate) session_dirty: Arc<Mutex<HashSet<protocol::session_store::SessionKey>>>,
 
-    /// What to do when `IdentityKeyStore::is_trusted_identity` finds a
-    /// known address with a different identity key. `Trust` accepts the
-    /// change (TOFU-with-rotation); `Reject` refuses it. Per-store,
-    /// settable at construction time.
+    /// What to do when `IdentityKeyStore::is_trusted_identity` finds
+    /// a known address with a different identity key. `Trust`
+    /// accepts the change (TOFU-with-rotation); `Reject` refuses it.
+    /// Per-store, settable at construction time.
     pub(crate) trust_new_identities: OnNewIdentity,
 }
 
@@ -135,11 +219,22 @@ impl PddbStore {
     /// Build a store from any `KvBackend` with the default trust
     /// policy (`OnNewIdentity::Trust` — TOFU-with-rotation, what
     /// presage-store-sled / sqlite use unless overridden).
+    ///
+    /// The returned store is **not** wrapped in a
+    /// [`BufferingBackend`]; writes pass through to the inner backend
+    /// immediately. For send-time write coalescing, use
+    /// [`new_buffering`](PddbStore::new_buffering) instead.
     pub fn new(backend: Arc<dyn KvBackend>) -> Self {
         Self::with_options(backend, OnNewIdentity::Trust)
     }
 
     /// Build a store with an explicit trust policy.
+    ///
+    /// `trust_new_identities` is consulted only on the
+    /// known-and-different branch of
+    /// [`IdentityKeyStore::is_trusted_identity`](presage::libsignal_service::protocol::IdentityKeyStore::is_trusted_identity);
+    /// see the `protocol::identity_key_store` module for the full
+    /// TOFU policy.
     pub fn with_options(backend: Arc<dyn KvBackend>, trust_new_identities: OnNewIdentity) -> Self {
         Self {
             backend,
@@ -150,19 +245,21 @@ impl PddbStore {
         }
     }
 
-    /// Build a store with a `BufferingBackend` wrapping the inner
-    /// backend. `begin_send_batch` becomes meaningful.
+    /// Build a store with a [`BufferingBackend`] wrapping the inner
+    /// backend. [`begin_send_batch`](PddbStore::begin_send_batch)
+    /// becomes meaningful.
     ///
     /// This is what `with_pddb_backend` uses by default — production
     /// xas wants buffering enabled for send-time write coalescing.
     /// Tests that want to exercise the same code path can also use
     /// this constructor over any inner backend (typically
-    /// `MockBackend`).
+    /// [`MockBackend`]).
     pub fn new_buffering(inner: Arc<dyn KvBackend>) -> Self {
         Self::new_buffering_with_options(inner, OnNewIdentity::Trust)
     }
 
-    /// Same as `new_buffering` but with an explicit trust policy.
+    /// Same as [`new_buffering`](PddbStore::new_buffering) but with
+    /// an explicit trust policy.
     pub fn new_buffering_with_options(
         inner: Arc<dyn KvBackend>,
         trust_new_identities: OnNewIdentity,
@@ -178,14 +275,22 @@ impl PddbStore {
         }
     }
 
-    /// Convenience for hosted-mode tests — wraps a fresh `MockBackend`.
+    /// Convenience for hosted-mode tests — wraps a fresh
+    /// [`MockBackend`]. **Test-only**; the mock has no encryption and
+    /// must never reach a production build.
     pub fn with_mock_backend() -> Self {
         Self::new(Arc::new(MockBackend::new()))
     }
 
     /// Connect to xous-core's running PDDB server and wrap the
-    /// resulting `xous_pddb_ipc::PddbClient` as a real `KvBackend`.
-    /// `pddb-backend` feature only.
+    /// resulting `xous_pddb_ipc::PddbClient` as a real
+    /// [`KvBackend`]. `pddb-backend` feature only.
+    ///
+    /// Wraps the real `PddbBackend` in a [`BufferingBackend`] so the
+    /// store supports send-time write coalescing via
+    /// [`begin_send_batch`](PddbStore::begin_send_batch).
+    ///
+    /// # Errors
     ///
     /// Returns `Err` if the PDDB server isn't reachable. Does NOT
     /// block on the basis being mounted — the caller (typically the
@@ -193,10 +298,6 @@ impl PddbStore {
     /// `is_mounted()` before issuing operations that need the store,
     /// or for tolerating per-op `NotMounted` errors during the boot
     /// window.
-    ///
-    /// Wraps the real `PddbBackend` in a `BufferingBackend` so the
-    /// store supports send-time write coalescing via
-    /// `begin_send_batch`.
     #[cfg(feature = "pddb-backend")]
     pub fn with_pddb_backend() -> Result<Self, Error> {
         let backend = backend_pddb::PddbBackend::connect()?;
@@ -208,13 +309,19 @@ impl PddbStore {
     /// `commit()` (or abort-on-Drop) are buffered in memory and
     /// only flushed to the inner backend on commit.
     ///
-    /// Returns `Ok(None)` if the store was constructed without
-    /// buffering (e.g. `PddbStore::new(Arc::new(MockBackend::new()))`).
-    /// Caller code can treat `None` as a no-op: writes simply pass
-    /// through unchanged. This makes the call site safe to add
-    /// unconditionally.
+    /// See [`BufferingBackend`] and [`BatchGuard`] for the
+    /// read-through / write-defer semantics.
     ///
-    /// Returns `Err` if a batch is already in flight on this store.
+    /// # Errors
+    ///
+    /// - `Ok(None)` if the store was constructed without buffering
+    ///   (e.g. `PddbStore::new(Arc::new(MockBackend::new()))`). Caller
+    ///   code can treat `None` as a no-op: writes simply pass through
+    ///   unchanged. This makes the call site safe to add
+    ///   unconditionally.
+    /// - `Err` if a batch is already in flight on this store. Only
+    ///   one batch can be open at a time per `BufferingBackend`
+    ///   instance.
     pub fn begin_send_batch(&self) -> Result<Option<BatchGuard<'_>>, Error> {
         match self.buffering.as_deref() {
             Some(b) => b.begin_batch().map(Some),
@@ -222,19 +329,21 @@ impl PddbStore {
         }
     }
 
-    /// Return `true` if this store wraps a `BufferingBackend` and
+    /// Return `true` if this store wraps a [`BufferingBackend`] and
     /// has an open batch.
     pub fn is_send_batching(&self) -> bool {
         self.buffering.as_deref().map(|b| b.is_batching()).unwrap_or(false)
     }
 
     /// Number of entries currently in the session cache (any state —
-    /// dirty or not). Test-/debug-only convenience.
+    /// dirty or not). Test-/debug-only convenience; returns 0 if
+    /// the cache mutex is poisoned.
     pub fn session_cache_len(&self) -> usize {
         self.session_cache.lock().map(|c| c.len()).unwrap_or(0)
     }
 
     /// Number of dirty session entries waiting to be flushed.
+    /// Returns 0 if the dirty-set mutex is poisoned.
     pub fn session_dirty_len(&self) -> usize {
         self.session_dirty.lock().map(|d| d.len()).unwrap_or(0)
     }
@@ -250,6 +359,23 @@ impl PddbStore {
     /// `put` per address per flush, regardless of how many devices
     /// rotated keys — saves 3 IPCs of fixed `open/flush/drop`
     /// overhead per device beyond the first.
+    ///
+    /// # Trust boundary
+    ///
+    /// On successful return, every dirty session record observed at
+    /// entry has been written through to PDDB and is durable per
+    /// PDDB's per-write `basis_cache.sync(...)`. A power-cut between
+    /// `store_session` and the next `flush_sessions` loses the
+    /// ratchet step but not the session itself; libsignal recovers
+    /// by re-keying when sends fail.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first backend error encountered. Partial
+    /// durability is possible — sessions whose `put` succeeded
+    /// before the failure are durable. The dirty set is cleared only
+    /// on full success; on error the still-dirty entries remain
+    /// queued for the next flush.
     ///
     /// Returns the number of session records written. Idempotent —
     /// calling twice in a row is cheap (second call sees an empty
@@ -322,14 +448,16 @@ impl fmt::Debug for PddbStore {
 
 // --- Helpers shared by every trait impl in this crate. ---
 //
-// The patterns below were duplicated 8-24 times across the protocol /
-// state / content stores until P8a centralized them. Each is a
-// trivial wrapper, but having one place to set the error mapping or
-// serde format means future changes don't need to find every site.
+// Each is a trivial wrapper, but having one place to set the error
+// mapping or serde format means future changes don't need to find
+// every site.
 
 /// Fetch a serde-JSON value from the backend, deserializing on hit.
 /// Wraps the `backend.get(...)? + serde_json::from_slice(...)?`
 /// pattern.
+///
+/// Returns `Ok(None)` if the key isn't present; returns
+/// [`Error::Decode`] if the bytes are present but malformed.
 pub(crate) fn backend_get_json<T: for<'de> serde::Deserialize<'de>>(
     backend: &dyn KvBackend,
     dict: &str,
@@ -342,8 +470,12 @@ pub(crate) fn backend_get_json<T: for<'de> serde::Deserialize<'de>>(
 }
 
 /// Serialize a value as JSON and write to the backend. Inverse of
-/// `backend_get_json`. `serde_json::to_vec` failure is wrapped
-/// explicitly as `Error::Encode` (the From impl picks `Decode`).
+/// [`backend_get_json`].
+///
+/// `serde_json::to_vec` failure is wrapped explicitly as
+/// [`Error::Encode`]; the [`From<serde_json::Error>`] impl in
+/// `error.rs` picks `Decode`, which would be wrong for the write
+/// direction, so we route through `Error::encode` here.
 pub(crate) fn backend_put_json<T: serde::Serialize + ?Sized>(
     backend: &dyn KvBackend,
     dict: &str,
@@ -355,9 +487,13 @@ pub(crate) fn backend_put_json<T: serde::Serialize + ?Sized>(
     Ok(())
 }
 
-/// List a dict's keys parsed as `u32` IDs (silently dropping anything
-/// that doesn't parse). Used by the `*PreKeyStore::max_*_id` and
-/// similar count/max queries.
+/// List a dict's keys parsed as `u32` IDs (silently dropping
+/// anything that doesn't parse). Used by the `*PreKeyStore::max_*_id`
+/// and similar count/max queries.
+///
+/// The silent-drop behaviour is intentional: a stray non-numeric key
+/// in a prekey dict would otherwise crash the max-id calculation.
+/// In practice presage only ever writes numeric keys to these dicts.
 pub(crate) fn list_keys_as_u32s(
     backend: &dyn KvBackend,
     dict: &str,
@@ -369,9 +505,10 @@ pub(crate) fn list_keys_as_u32s(
         .collect())
 }
 
-/// Like `backend_get_json` but errors on missing key. Used by
-/// iterator closures over `list_keys` that have established the
-/// key's presence and treat its disappearance as a backend
+/// Like [`backend_get_json`] but errors on missing key.
+///
+/// Used by iterator closures over `list_keys` that have established
+/// the key's presence and treat its disappearance as a backend
 /// inconsistency rather than a normal absence. The closure is only
 /// evaluated on the missing branch (avoids constructing the message
 /// string on the hot path).
