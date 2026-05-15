@@ -42,6 +42,14 @@
 //! crate: `xous_api_names` (to look up the PDDB SID),
 //! `xous::send_message` (the IPC primitive). No dependency on
 //! presage, libsignal, or any of the Signal-protocol crates.
+//!
+//! This crate has no `BatchGuard`-style RAII type today; the bulk
+//! IPC surface is the single [`client::PddbClient::write_batch`]
+//! method, which is the atomic unit of "one IPC, one server-side
+//! sync." If a future per-IPC scope grows here it should mirror the
+//! abort-on-drop-by-default RAII convention `presage_store_pddb`
+//! uses for its in-memory write-coalescing buffer (named there
+//! `presage_store_pddb::BatchGuard` to avoid collision).
 
 pub mod api;
 pub mod client;

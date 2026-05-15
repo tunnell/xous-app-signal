@@ -352,6 +352,13 @@ impl PddbStore {
     /// See [`BufferingBackend`] and [`BatchGuard`] for the
     /// read-through / write-defer semantics.
     ///
+    /// `xous_signal_worker::handle_send` is the only production
+    /// caller. It treats `Ok(None)` as pass-through (no inner
+    /// buffering, hosted-mode test path) and `Err` as a logic bug
+    /// to surface (the `Err` arm fires only on a same-thread nested
+    /// batch; the worker's single-threaded executor means there is
+    /// no other batch-open path that can race).
+    ///
     /// # Errors
     ///
     /// - `Ok(None)` if the store was constructed without buffering

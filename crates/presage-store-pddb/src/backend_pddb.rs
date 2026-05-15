@@ -32,8 +32,15 @@
 //!
 //! The `tracing::info!` perf events emitted by every method carry
 //! the `(dict, key)` pair and value/result lengths only — never
-//! value bytes. `dict` and `key` are non-secret on their own
-//! (e.g. `signal.protocol.aci.session`, the UUID of a peer).
+//! value bytes. `dict` and `key` are non-secret in the cryptographic
+//! sense, but for the protocol stores (`signal.protocol.aci.session`,
+//! `signal.protocol.aci.identity`, etc.) the `key` is derived from
+//! the peer's `ProtocolAddress.name()`, i.e. the peer's ACI UUID.
+//! Every session read on a busy device therefore emits a peer's ACI
+//! to UART at info level — same privacy class as the worker's
+//! W-W.2 line-discipline finding in `~/REFACTOR_NOTES.md`. The
+//! redaction helper that lands for W-W.2 should replace `key={:?}`
+//! here too.
 //!
 //! # rv32 / 16 MiB constraint
 //!
@@ -116,11 +123,19 @@ impl PddbBackend {
     /// Forward to `PddbClient::is_mounted` so callers can pre-check.
     ///
     /// Returns `false` if the IPC mutex is poisoned — same
-    /// fail-closed posture as the rest of this impl. Currently
-    /// unused inside this crate; xous-app-signal's `probe-pddb-real`
-    /// feature is the expected consumer. `dead_code` allowed because
-    /// the method is part of the public surface, not a private
-    /// helper.
+    /// fail-closed posture as the rest of this impl. The poison case
+    /// is masked behind the `false` return: a poisoned mutex signals
+    /// that a prior IPC panicked, but the caller cannot distinguish
+    /// "PDDB not mounted yet" from "client state suspect" through this
+    /// API. The worker (`xous_signal_worker::worker_main`) treats the
+    /// two cases identically (poll, retry) so the conservative
+    /// fail-closed posture is correct, even if non-obvious. The
+    /// underlying [`xous_pddb_ipc::PddbClient::is_mounted`] is itself
+    /// non-blocking (single scalar IPC), so polling is cheap.
+    /// Currently unused inside this crate; xous-app-signal's
+    /// `probe-pddb-real` feature is the expected consumer.
+    /// `dead_code` allowed because the method is part of the public
+    /// surface, not a private helper.
     #[allow(dead_code)]
     pub fn is_mounted(&self) -> bool {
         match self.client.lock() {

@@ -464,6 +464,20 @@ pub struct PddbKeyList {
 /// would push the cumulative packed size past this cap, with a
 /// trailing-byte safety margin for the terminator. Exceeding the
 /// cap on the wire would silently drop entries server-side.
+///
+/// # Consumer convention
+///
+/// `presage-store-pddb`'s `BufferingBackend::commit_internal` is the
+/// primary caller of [`crate::client::PddbClient::write_batch`]. When
+/// a buffered batch packs above this cap, the inner `write_batch`
+/// returns `ErrorKind::InvalidInput` and the buffering layer falls
+/// back to per-entry `put` (one `Opcode::WriteKey` IPC + one basis
+/// sync per entry). Typical Signal session-send batches stay well
+/// under the cap; multi-recipient group sends are the workload most
+/// likely to trip it. Splitting an oversized buffered batch into
+/// multiple `write_batch` calls of size <= cap is a tracked refactor
+/// item (see `presage-store-pddb` perf-A / W8) and would preserve the
+/// one-sync-per-batch saving when N > 1.
 pub const MAX_PDDB_WRITE_BATCH_LEN: usize = 3800;
 
 /// rkyv payload for [`Opcode::WriteKeyBatch`].

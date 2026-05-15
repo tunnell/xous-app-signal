@@ -407,9 +407,15 @@ impl KvBackend for BufferingBackend {
 /// [`commit`](Self::commit) replays the buffer to the inner backend
 /// and consumes the guard. Dropping the guard without `commit()`
 /// aborts the batch (buffer cleared, no replay) — i.e. abort is the
-/// default, commit is opt-in. The convention matches `BatchGuard` in
-/// [`xous_pddb_ipc`] (see cross-crate ref to
-/// `xous_pddb_ipc::BatchGuard` in the IPC layer).
+/// default, commit is opt-in. The abort-by-default RAII convention
+/// matches what [`xous_pddb_ipc`] uses around its bulk-write surface,
+/// even though the two operate at different layers: this `BatchGuard`
+/// owns the in-memory write-coalescing buffer; on commit it calls
+/// `KvBackend::put_batch`, which for `PddbBackend` issues exactly one
+/// [`xous_pddb_ipc::PddbClient::write_batch`] IPC carrying every
+/// buffered put. The IPC-layer batch is a single sub-second
+/// server-side operation; this layer's batch can span an entire
+/// Signal `send_message` call.
 pub struct BatchGuard<'a> {
     backend: &'a BufferingBackend,
     committed: bool,

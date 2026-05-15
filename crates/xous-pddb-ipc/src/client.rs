@@ -122,6 +122,12 @@ impl PddbClient {
     /// try to read/write yet"). Mirrors
     /// `services/pddb/src/lib.rs::is_mounted_nonblocking`.
     ///
+    /// `presage_store_pddb::PddbBackend::connect` deliberately does
+    /// not block on mount; the readiness poll happens in the worker
+    /// (`xous_signal_worker::worker_main`'s `load_registered` retry
+    /// loop). This method's fast non-blocking contract is what makes
+    /// that deferred-readiness pattern workable.
+    ///
     /// # rv32 / 16 MiB constraint
     ///
     /// Single round-trip; no buffer allocation. Cheap enough to
@@ -502,6 +508,22 @@ impl PddbClient {
     /// `main.rs:2293-2294`) and through this opcode is one. The
     /// `tunnell/xous-core@feat/pddb-bulk-write` patch series
     /// (commit `8f3894f2d`) added the server side.
+    ///
+    /// The upstream caller is
+    /// `presage_store_pddb::PddbBackend::put_batch`, which forwards
+    /// the buffered-batch contents from
+    /// `presage_store_pddb::BufferingBackend::commit_internal`. The
+    /// per-entry fallback semantics (per-entry `put` on a cap-overflow
+    /// `InvalidInput`) live in `BufferingBackend`; see
+    /// `MAX_PDDB_WRITE_BATCH_LEN` for the cap value.
+    ///
+    /// The `truncate = true` server semantics on this path mean the
+    /// `delete_key` prelude that
+    /// `presage_store_pddb::PddbBackend::put` uses to work around
+    /// `Opcode::WriteKey`'s `truncate = false` (refs #14) is
+    /// **unnecessary** on the batch path. Maintainers adding new
+    /// single-entry write helpers should copy `put_batch`'s shape if
+    /// possible.
     ///
     /// An empty `entries` slice short-circuits to `Ok(())` without
     /// an IPC.
@@ -944,6 +966,19 @@ impl<'a> Read for KeyHandle<'a> {
 /// Each call pays one IPC round-trip plus one full multi-basis sync
 /// server-side (upstream `main.rs:2293-2294`). Use
 /// [`PddbClient::write_batch`] when N > 1 entries are known up front.
+///
+/// # Truncate semantics
+///
+/// The upstream `Opcode::WriteKey` handler passes `truncate = false`
+/// to its inner `key_update`, so a `WriteKey` against an existing key
+/// that previously held more bytes leaves the trailing bytes intact
+/// and subsequent reads return the new bytes concatenated with the
+/// leftover tail. Callers that want overwrite semantics through this
+/// surface must `delete_key` first
+/// (`presage_store_pddb::PddbBackend::put` is the in-tree example;
+/// refs #14 tracks the upstream fix). The
+/// [`PddbClient::write_batch`] path is unaffected — the server-side
+/// `Opcode::WriteKeyBatch` handler uses `truncate = true`.
 impl<'a> Write for KeyHandle<'a> {
     /// Write up to [`crate::api::PDDB_BUF_DATA_LEN`] = 4072 bytes
     /// from `buf` to the open key, advancing the handle's internal
