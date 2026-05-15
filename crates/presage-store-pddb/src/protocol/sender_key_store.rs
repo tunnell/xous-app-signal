@@ -1,5 +1,22 @@
-//! `SenderKeyStore` impl. Two methods, per-(addr, device, dist_id) keys
-//! in `signal.protocol.{aci,pni}.sender_key`.
+//! `SenderKeyStore` impl. Two methods, per-(addr, device, dist_id)
+//! keys in `signal.protocol.{aci,pni}.sender_key`.
+//!
+//! # Security
+//!
+//! A [`SenderKeyRecord`] holds the symmetric chain-key state for one
+//! group-distribution sender. Compromise of the bytes lets the
+//! holder decrypt **every** message sent under that
+//! `distribution_id` (including past traffic), and forge messages
+//! that the group members will accept as authentic from `sender`
+//! until the next sender-key rotation.
+//!
+//! Records are stored as their libsignal binary
+//! `SenderKeyRecord::serialize()` form. PDDB's per-page AEAD is the
+//! single trust boundary. The `Vec<u8>` does not zero on drop.
+//!
+//! The composite key (`name`, `device_id`, `distribution_id`)
+//! reveals the group-distribution mapping; non-secret-equivalent but
+//! privacy-relevant.
 
 use async_trait::async_trait;
 use presage::libsignal_service::prelude::Uuid;

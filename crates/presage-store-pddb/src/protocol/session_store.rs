@@ -8,9 +8,43 @@
 //! - `store_session` writes to an in-memory `HashMap<SessionKey,
 //!   SessionRecord>` and marks the entry dirty. No PDDB write yet.
 //! - `load_session` consults the cache first, then PDDB.
-//! - `PddbStore::flush_sessions` walks the dirty set and persists.
-//!   The receive loop calls this on `Received::QueueEmpty`; tests
-//!   call it explicitly to verify durability.
+//! - [`crate::PddbStore::flush_sessions`] walks the dirty set and
+//!   persists. The receive loop calls this on
+//!   `Received::QueueEmpty`; tests call it explicitly to verify
+//!   durability.
+//!
+//! # Trust boundary
+//!
+//! Persisted bytes -> [`SessionRecord`] is a trust crossing.
+//! `SessionRecord::deserialize` validates libsignal's protobuf
+//! framing and refuses malformed inputs; we forward that
+//! `SignalProtocolError` upstream. Successful deserialization is the
+//! trust witness — there is no second-layer MAC.
+//!
+//! # Security
+//!
+//! A [`SessionRecord`] carries Double Ratchet state for one
+//! `(uuid, device_id)`:
+//!
+//! - **root key** for the current Diffie-Hellman ratchet;
+//! - **chain keys** for the symmetric ratchets in each direction;
+//! - the **ephemeral private keys** for the next-ratchet step;
+//! - the *previous* root + chain keys retained for skipped-message
+//!   decryption.
+//!
+//! Compromise of the bytes for an active session lets the holder
+//! decrypt every plaintext that traverses that ratchet until the next
+//! Diffie-Hellman ratchet step rotates the root key. The user has no
+//! direct signal that this has happened — there is no safety-number
+//! change for a session-state leak — so the only mitigation is to
+//! keep the bytes inside the PDDB trust boundary.
+//!
+//! The in-memory `session_cache` on `PddbStore` is `Arc<Mutex<...>>`
+//! of `HashMap<_, SessionRecord>`. libsignal's `SessionRecord` does
+//! not implement `Drop`-time zeroization for its internal protobuf
+//! buffers (see libsignal-protocol's `SessionRecord` source). The
+//! `Vec<u8>` slices passed to `serialize` / `deserialize` likewise
+//! leak. See REFACTOR_NOTES sec-B.
 //!
 //! Bound on data loss: a power-cut between ratchet step and flush
 //! leaves session state slightly behind the peer's view. libsignal
@@ -18,6 +52,23 @@
 //! user as a fresh safety-number prompt). Acceptable trade-off; the
 //! alternative (write-through) is too slow for offline-message-burst
 //! catch-up.
+//!
+//! # Logging
+//!
+//! `SessionRecord` does not derive `Debug` upstream and we add no
+//! `tracing` emissions here that include its bytes. The
+//! [`crate::PddbStore::Debug`] impl reports only cache cardinality.
+//!
+//! # rv32 / 16 MiB constraint
+//!
+//! One `SessionRecord` is ~250-1500 bytes serialized. The cache is
+//! unbounded — it grows with the number of distinct
+//! `(IdentityType, uuid, device_id)` triples the user has talked to.
+//! For a Precursor user with hundreds of correspondents and a couple
+//! devices each, the cache stays well under a MiB.
+//! `flush_sessions` writes one PDDB key per address (bundled across
+//! devices), so one IPC per flushed address regardless of device
+//! count.
 
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -44,12 +95,24 @@ pub(crate) fn session_key(identity: IdentityType, address: &ProtocolAddress) -> 
 }
 
 /// On-disk shape for one PDDB session key: `device_id ->
-/// SessionRecord::serialize() bytes`. Originally JSON for
-/// debuggability; switched to bincode (versioned, with JSON fallback)
-/// because JSON encodes the inner `Vec<u8>` as a decimal-int array and
-/// inflated the bundle 3-4×, splitting one logical `put` into ~6
-/// chunked `Opcode::WriteKey` IPCs. See the parent module's
-/// `Cargo.toml` rationale.
+/// SessionRecord::serialize() bytes`.
+///
+/// # Encoding
+///
+/// On-disk format is bincode prefixed by a one-byte version tag
+/// (`SESSION_BUNDLE_VERSION_BINCODE_V1` = `0x01`). The encoder is
+/// [`serialize_session_bundle`]; the decoder
+/// [`deserialize_session_bundle`] falls back to legacy raw `serde_json`
+/// if the first byte is not the version tag (preserves blobs written
+/// by pre-versioning builds; the next write rewrites them as bincode).
+///
+/// # Security
+///
+/// Each value in the `HashMap` is a `Vec<u8>` of the libsignal binary
+/// [`SessionRecord`] for one device — i.e. the full Double Ratchet
+/// state for that `(uuid, device)`. Treatment is identical to a
+/// [`SessionRecord`]: bytes must stay inside the PDDB trust boundary.
+/// The `Vec<u8>` itself does not zero on drop.
 pub(crate) type SessionBundle = HashMap<u32, Vec<u8>>;
 
 /// Wire-format version byte for bincode-encoded `SessionBundle`
