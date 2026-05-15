@@ -1,16 +1,39 @@
-//! Sync HTTP/1.1 client implementing `libsignal_service::transport::HttpClient`.
+//! Sync HTTP/1.1 client implementing [`libsignal_service::transport::HttpClient`].
 //!
-//! Uses our existing `tls_connect` for TLS, hand-rolled HTTP/1.1
-//! request/response framing for the body. Avoids pulling `ureq`
-//! (which bundles its own rustls and would conflict with our `=0.22.2`
-//! pin) and `reqwest` (tokio-coupled).
+//! Uses [`crate::tls::tls_connect_with_config`] for TLS plus a
+//! hand-rolled HTTP/1.1 request/response framing for the body. Avoids
+//! pulling `ureq` (which bundles its own rustls and would conflict
+//! with our `=0.22.2` pin) and `reqwest` (Tokio-coupled).
 //!
-//! Sync→async bridge: the `HttpClient::execute` trait method is async, but
-//! the underlying request runs on a worker thread to keep the executor
-//! unblocked. Each request spawns a one-shot thread; the async future
-//! awaits a `oneshot`-style `async-channel` that the worker posts to.
-//! Acceptable cost for the request rate libsignal-service-rs imposes
-//! (single-digit requests per user-action).
+//! # Sync-to-async bridge
+//!
+//! `HttpClient::execute` is async, but the underlying request runs on
+//! a one-shot worker thread to keep the `smol-rs::LocalExecutor`
+//! unblocked. The async future awaits a `oneshot`-shaped
+//! [`async_channel`] that the worker posts to on completion.
+//!
+//! Cost is one OS thread + one channel per request. Acceptable for the
+//! traffic shape libsignal-service-rs produces: prekey fetches,
+//! attribute updates, profile lookups — single-digit requests per
+//! user-visible action.
+//!
+//! # Connection lifecycle
+//!
+//! Each request opens a fresh TCP+TLS connection and sets
+//! `Connection: close`. There is no connection pool. What survives
+//! across requests is the shared [`Arc<ClientConfig>`] (built once by
+//! [`SyncHttpClient::new`]), which keeps the rustls in-memory
+//! session-ticket cache alive — so back-to-back requests to the same
+//! Signal host resume the TLS session via PSK and skip the ECDHE
+//! work.
+//!
+//! # Scope
+//!
+//! Only what Signal endpoints actually need: HTTP/1.1, no
+//! `Transfer-Encoding: chunked`, no redirects (Signal-Server replies
+//! 4xx/5xx for any redirect path the client should follow), no
+//! cookies. Fixed-length response bodies parsed by reading to EOF
+//! after the server closes.
 
 use std::io::{Read, Write};
 use std::sync::Arc;

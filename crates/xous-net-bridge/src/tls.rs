@@ -1,10 +1,74 @@
-//! Sync TLS connection establishment.
+//! Sync TLS connection establishment for HTTPS and WSS.
 //!
-//! The Signal client speaks HTTPS and WSS; both layer rustls over a sync
-//! `Read + Write` stream. On hosted Linux that's `std::net::TcpStream`;
-//! on Xous it's the same thing, exposed by `services/net` (verified at
-//! `xous-core/services/net/src/std_tcpstream.rs`). API is identical, so
-//! the same `tls_connect` works on both.
+//! Both Signal transport layers (HTTPS in [`crate::http`], WSS in
+//! [`crate::ws`] / [`crate::ws_pump`]) sit on rustls 0.22 over a sync
+//! `Read + Write` stream. On hosted Linux that's
+//! `std::net::TcpStream`; on Xous the same type is exposed by
+//! `services/net` (see `xous-core/services/net/src/std_tcpstream.rs`).
+//! The API is identical, so [`tls_connect`] works unchanged on both
+//! targets.
+//!
+//! # Trust roots
+//!
+//! Two pinned root stores are exposed: [`signal_production_roots`] and
+//! [`signal_staging_roots`]. Both are vendored copies of the bundles
+//! that `whisperfish/libsignal-service-rs` carries
+//! (`certs/production-root-ca.pem`, `certs/staging-root-ca.pem`).
+//! System roots are never consulted on the hot path — a compromise of
+//! any public CA cannot man-in-the-middle a Signal connection through
+//! [`build_tls_config`]-derived configs.
+//!
+//! [`webpki_roots()`] is provided for the few non-Signal endpoints
+//! (e.g. CDN smoke tests in `examples/`); production Signal traffic
+//! must go through the pinned roots.
+//!
+//! # Resumption + observability
+//!
+//! [`build_tls_config`] installs a [`CountingResumptionStore`] wrapping
+//! rustls's `ClientSessionMemoryCache`, so [`tls_connect_with_config`]
+//! can emit `was_resumed=true|false` per connection without relying on
+//! ambiguous post-handshake heuristics. The cache is sized for a
+//! handful of distinct Signal hostnames; it lives in process memory
+//! only and is dropped on process exit (TLS tickets are never written
+//! to disk).
+//!
+//! # rv32 / 16 MiB constraint
+//!
+//! Software ECDHE + cert verification on rv32 is roughly an order of
+//! magnitude slower than the symmetric work of a TLS 1.3 PSK
+//! resumption; every saved full handshake meaningfully improves send
+//! latency. That cost ratio is why the `was_resumed` diagnostic exists
+//! at all — it lets hardware traces correlate `handshake_ms` against
+//! PSK availability.
+//!
+//! Single-hart, single-threaded async: there is at most one
+//! handshake in flight per host at any given moment. The
+//! `CountingResumptionStore`'s "snapshot before / snapshot after"
+//! race documented on the struct is theoretical for this reason.
+//!
+//! # Constant-time caveat
+//!
+//! Cryptographic primitives in this module are provided by rustls 0.22
+//! over the `ring` crypto provider. `ring` claims constant-time
+//! arithmetic on supported platforms; rv32imac is not among them. On
+//! Precursor we have:
+//!
+//! - No hardware AES instructions (rustls falls back to ChaCha20 or a
+//!   software AES).
+//! - No constant-time multiplier in the rv32imac base ISA.
+//! - No published audit of rustls/ring on rv32-xous.
+//!
+//! Accordingly, this module makes NO constant-time claim against
+//! local-attacker side-channel measurement. An attacker with
+//! cycle-accurate timing access to the device should be assumed able
+//! to learn at least the cipher-suite negotiated and the rough cost
+//! of the handshake. None of the secret material here (resumption
+//! tickets, derived keys, ephemeral private keys) is held in this
+//! module's own types; rustls owns those buffers, and they are
+//! dropped (without explicit zeroization on the rv32imac target —
+//! ring does its own zeroization but the surrounding tokio-free Rust
+//! stack does not zero secondary copies) when the `ClientConnection`
+//! is dropped.
 
 use std::fmt;
 use std::io;

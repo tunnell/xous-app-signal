@@ -1,9 +1,15 @@
-//! Sync WebSocket establishment over our `tls_connect`.
+//! Single-shot sync WSS connection helper.
 //!
-//! Uses `tungstenite` (upstream snapview/tungstenite-rs, sync) only for
-//! the handshake — TLS comes from our own `tls_connect` so we can pin
-//! our rustls version independently of tungstenite's transitive TLS
-//! choices.
+//! Wraps `tungstenite::client` over the TLS stream produced by
+//! [`crate::tls::tls_connect`]. tungstenite handles only the HTTP/1.1
+//! Upgrade handshake; the underlying TLS is wired in via our own
+//! [`crate::tls::tls_connect`] so the rustls version stays pinned at
+//! `=0.22.2` (see the workspace `Cargo.toml`).
+//!
+//! Production traffic goes through [`crate::ws_pump`] instead — this
+//! module is for examples (`examples/signal_ws_keepalive.rs`) and
+//! smoke tests where the caller does not need the reader/writer
+//! thread pair.
 
 use std::io;
 

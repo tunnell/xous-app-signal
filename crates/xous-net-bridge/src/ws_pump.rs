@@ -1,23 +1,78 @@
-//! Sync WebSocket pump worker thread.
+//! Production WSS bridge: sync tungstenite, async-channel-facing.
 //!
-//! The async-side caller (libsignal-service-rs's
-//! `SignalWebSocketProcess::run`) gets a pair of `async-channel`
-//! frame-channels. Internally a worker thread holds the sync
-//! `tungstenite::WebSocket` and bridges frames in both directions.
+//! The async-side caller (`libsignal-service-rs`'s
+//! `SignalWebSocketProcess::run`) receives a [`WebSocketChannels`]
+//! pair — one [`async_channel::Sender`] for outbound frames, one
+//! [`async_channel::Receiver`] for inbound frames. Internally, a pool
+//! of OS threads owns a sync [`tungstenite::WebSocket`] and bridges
+//! frames in both directions.
 //!
-//! The bridge uses **two** worker threads, not one:
+//! # Thread layout
 //!
-//! - **reader thread**: blocks on `ws.read_message()`, forwards each frame
-//!   to `incoming_tx.send_blocking(...)`.
-//! - **writer thread**: blocks on `outgoing_rx.recv_blocking()`, forwards
-//!   each frame via `ws.write_message(...)`.
+//! Three threads per WSS:
 //!
-//! Single-threaded designs deadlock on `ws.read_message()` — that call
-//! blocks until a frame arrives, so a single thread can't service the
-//! outgoing channel while waiting. Two threads sharing the underlying
-//! `WebSocket` (via `Mutex`) is the standard fix; tungstenite's
-//! `WebSocket<S>` is `Send` and the `Mutex<WebSocket>` pattern is the
-//! documented approach for multi-threaded usage.
+//! - **setup thread** (`xous-net-bridge-ws-setup`): owns the TLS +
+//!   tungstenite handshake. On success, wraps the resulting
+//!   `WebSocket<RustlsStream>` in `Arc<Mutex<_>>` and spawns the
+//!   reader and writer. Holds no state after that — its only role
+//!   post-spawn is to `join` the children and close the inbound
+//!   channel.
+//! - **reader thread** (`xous-net-bridge-ws-reader`): acquires the
+//!   mutex, calls `WebSocket::read()`, releases the mutex, forwards
+//!   each frame into the incoming channel. The TCP read timeout
+//!   (5 s, set in [`crate::tls::tls_connect_with_config`]) gives the
+//!   writer a window to acquire the mutex on idle WSes.
+//! - **writer thread** (`xous-net-bridge-ws-writer`): acquires the
+//!   mutex, calls `WebSocket::send()`, releases the mutex.
+//!
+//! Single-threaded designs deadlock on `WebSocket::read()`: that call
+//! blocks the calling thread until a frame arrives, so a single
+//! thread cannot service outgoing frames while waiting. The
+//! `Mutex<WebSocket>` + short-read-timeout pattern is the smallest
+//! abstraction over sync tungstenite that supports bidirectional
+//! traffic.
+//!
+//! # Why no async WSS library
+//!
+//! No async WSS+rustls stack works on Xous today. `tokio-tungstenite`
+//! requires Tokio's IO drivers; `async-tungstenite`'s smol backend
+//! still depends on `polling`, which itself needs epoll-class
+//! primitives the Xous net service does not currently expose. Sync
+//! tungstenite plus thread-per-direction is the pragmatic alternative
+//! for the v0.x line.
+//!
+//! # rv32 / 16 MiB constraint
+//!
+//! Three OS threads per WSS is not cheap — each Xous thread reserves
+//! stack pages eagerly. The Signal worker holds at most one identified
+//! WS plus one unidentified WS plus a small number of HTTPS requests
+//! in flight, so peak thread count stays well under double digits.
+//!
+//! # Logging surface
+//!
+//! Both worker loops emit `tracing` lines on every frame:
+//!
+//! - `ws reader: recv frame frame_count=... kind=... payload_len=...`
+//! - `ws writer: send ok|send failed ...`
+//! - `perf/net: ws recv|send kind=... payload_len=... read_ms|send_ms=...`
+//!
+//! `payload_len` is the encrypted-on-the-wire length (not plaintext).
+//! `kind` is the WS frame type (`Binary`, `Text`, `Ping`, `Pong`,
+//! `Close`). No frame contents, no auth headers, no negotiated PSK
+//! material is ever logged. Safe to ship to UART.
+//!
+//! # Trust boundary
+//!
+//! Outbound frames arrive on `out_rx` already serialized by
+//! libsignal-service-rs into `WebSocketMessage` protobuf — they are
+//! the *plaintext-on-application-side, ciphertext-on-the-wire* bytes.
+//! Signal Protocol encryption (Double Ratchet) and sealed-sender
+//! framing happen one layer up, before bytes reach this module.
+//!
+//! Inbound frames flow the other way: TLS-decrypted on the wire side
+//! (by rustls), forwarded verbatim into `in_tx`. Authentication of
+//! Signal messages and per-envelope decryption happen in
+//! `libsignal-service-rs` and `signalapp/libsignal` further up.
 
 use std::sync::{Arc, Mutex};
 
