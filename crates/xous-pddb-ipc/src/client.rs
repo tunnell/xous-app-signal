@@ -1,9 +1,49 @@
-//! `PddbClient` — high-level wrapper over PDDB's IPC server.
+//! High-level client over PDDB's IPC surface.
 //!
-//! Mirrors `services/pddb/src/lib.rs` for the operations our
-//! `KvBackend` needs. Keep the function shapes and error mapping
-//! aligned so that swapping in `pddb::Pddb` later (if we ever vendor
-//! it) is a one-line change.
+//! Exposes a [`PddbClient`] that owns the long-lived connections to
+//! the main PDDB server and its mount poller, plus the streaming
+//! [`KeyHandle`] type returned by [`PddbClient::open`]. The
+//! per-operation entry points mirror the upstream `services/pddb`
+//! client shape so that, if the dependency cascade is ever resolved,
+//! swapping in `pddb::Pddb` becomes a one-line change.
+//!
+//! # Trust boundary
+//!
+//! Every method on [`PddbClient`] crosses a kernel-mediated IPC
+//! into a separate process. We trust the kernel to route only to
+//! the named server SID and to copy / page-lend payloads safely.
+//! We do not trust returned payload bytes beyond what the
+//! variant discriminants in [`crate::api::PddbRequestCode`] /
+//! [`crate::api::PddbRetcode`] declare; every parser in this module
+//! bounds-checks lengths before indexing.
+//!
+//! # rv32 / 16 MiB constraint
+//!
+//! Each `MutableLend` round-trip requires a page-aligned 4 KiB
+//! `xous_ipc::Buffer`. The streaming path on [`KeyHandle`] reuses
+//! one such buffer across all reads and writes (allocated once at
+//! `open` time). The bulk-write path allocates a fresh page per
+//! [`PddbClient::write_batch`] call (4 KiB).
+//!
+//! Per-operation IPC costs:
+//!
+//! - `open`: 1 round-trip.
+//! - `delete_key`, `delete_dict`: 1 round-trip each.
+//! - `list_keys`: 1 + N round-trips (`KeyCountInDict` plus enough
+//!   `ListKeyV2` calls to drain the dict's names, at ~4 KiB of
+//!   packed names per page).
+//! - `write_batch`: 1 round-trip for N entries totalling up to
+//!   [`crate::api::MAX_PDDB_WRITE_BATCH_LEN`] = 3800 packed bytes.
+//! - `KeyHandle::read` / `KeyHandle::write`: 1 round-trip per up-to-4072-byte
+//!   chunk.
+//! - `KeyHandle::flush_writes`, `Drop` (via `KeyDrop`): 1
+//!   blocking-scalar round-trip.
+//!
+//! Each `WriteKey` round-trip pays a full multi-basis sync on the
+//! server side (upstream `main.rs:2293-2294`); the bulk-write path
+//! pays one sync per **batch**. The two costs differ by orders of
+//! magnitude for N > 1; prefer [`PddbClient::write_batch`] on
+//! latency-sensitive write hot paths.
 
 use std::io::{self, Read, Write};
 
@@ -18,9 +58,24 @@ use crate::api::{
     SERVER_NAME_PDDB_POLLER,
 };
 
-/// Top-level client. Holds long-lived connections to both the main
-/// PDDB server (for KV ops) and the mount poller (for non-blocking
-/// mount-state checks).
+/// PDDB IPC client.
+///
+/// Owns two long-lived `CID`s — one to the main PDDB server (for
+/// KV operations) and one to the mount poller (for cheap
+/// mount-state checks). Both connections are released by `Drop`.
+///
+/// # Invariants
+///
+/// - `main_conn` is connected to the SID registered as
+///   [`crate::api::SERVER_NAME_PDDB`].
+/// - `poller_conn` is connected to [`crate::api::SERVER_NAME_PDDB_POLLER`].
+/// - Both are held for the lifetime of the value; this crate makes no
+///   attempt to reconnect after a transport error.
+///
+/// # Security
+///
+/// The connections themselves are non-secret. Method-level docs
+/// describe the per-operation trust handling.
 #[derive(Debug)]
 pub struct PddbClient {
     main_conn: CID,
@@ -28,8 +83,20 @@ pub struct PddbClient {
 }
 
 impl PddbClient {
-    /// Look up the two PDDB SIDs and connect. Both connections are
-    /// long-lived; `Drop` releases them.
+    /// Look up the two PDDB SIDs by name and open long-lived
+    /// connections to each.
+    ///
+    /// Uses `xous-api-names` to resolve [`crate::api::SERVER_NAME_PDDB`]
+    /// and [`crate::api::SERVER_NAME_PDDB_POLLER`] to their CIDs.
+    /// Both calls block until the named server is registered with
+    /// xous-names, which means: if PDDB has not started this will
+    /// block, not error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::Ipc`] if `XousNames::new` fails or
+    /// either connection request returns a kernel error (e.g. the
+    /// server has been unregistered).
     pub fn new() -> Result<Self, Error> {
         let xns = xous_names::XousNames::new().map_err(|e| {
             Error::new(ErrorKind::Ipc, format!("XousNames::new failed: {:?}", e))
@@ -45,10 +112,20 @@ impl PddbClient {
         Ok(Self { main_conn, poller_conn })
     }
 
-    /// Non-blocking mount check via the poller server (matches
-    /// `services/pddb/src/lib.rs:30` `is_mounted_nonblocking`).
-    /// Returns `false` if the poller's SID is unreachable, mirroring
-    /// the upstream behavior.
+    /// Non-blocking mount-state check via the poller server.
+    ///
+    /// Sends a single blocking-scalar opcode (`PollOp::Poll = 0`)
+    /// over the poller connection. Returns `true` if mounted,
+    /// `false` if not mounted or if the IPC itself failed — the
+    /// distinction is not surfaced because callers treat
+    /// not-mounted and unreachable identically (both are "do not
+    /// try to read/write yet"). Mirrors
+    /// `services/pddb/src/lib.rs::is_mounted_nonblocking`.
+    ///
+    /// # rv32 / 16 MiB constraint
+    ///
+    /// Single round-trip; no buffer allocation. Cheap enough to
+    /// call from a UI redraw path.
     pub fn is_mounted(&self) -> bool {
         match send_message(self.poller_conn, Message::new_blocking_scalar(0, 0, 0, 0, 0)) {
             Ok(xous::Result::Scalar1(v)) => v != 0,
@@ -56,14 +133,28 @@ impl PddbClient {
         }
     }
 
-    /// Trigger an interactive mount: pops the gam password modal,
-    /// waits for the user to enter the password, then mounts. Blocks
-    /// until the mount succeeds (`Ok(true)`) or the server declines
-    /// (`Ok(false)` — e.g. wrong password, forced abort).
+    /// Trigger an interactive PDDB mount.
     ///
-    /// Server returns `Scalar2(retcode, failcount)` where `retcode == 0`
-    /// means success (mounted, or already mounted) — see
-    /// `services/pddb/src/main.rs::Opcode::TryMount`.
+    /// Pops the GAM password modal, waits for the user to enter the
+    /// password, then mounts. Blocks until either path completes:
+    /// success returns `Ok(true)`; a server-side failure (wrong
+    /// password, user abort, malformed basis) returns `Ok(false)`.
+    ///
+    /// Server returns `Scalar2(retcode, failcount)`, where
+    /// `retcode == 0` is success. Older firmware may return
+    /// `Scalar1(retcode)` — both shapes are handled.
+    ///
+    /// # Trust boundary
+    ///
+    /// The password input itself never crosses this process: the
+    /// PDDB server reads it directly from GAM via its own IPC. We
+    /// only signal "begin the interactive flow" and observe a
+    /// boolean outcome.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::Ipc`] if the server returns an
+    /// unexpected message shape (neither `Scalar1` nor `Scalar2`).
     pub fn try_mount(&self) -> Result<bool, Error> {
         let resp = send_message(
             self.main_conn,
@@ -77,9 +168,41 @@ impl PddbClient {
         }
     }
 
-    /// Open (and optionally create) a `(dict, key)` pair, returning
-    /// a streaming `KeyHandle` whose `Read`/`Write` impls round-trip
-    /// `PddbBuf` pages.
+    /// Open (and optionally create) a `(dict, key)` pair.
+    ///
+    /// Returns a streaming [`KeyHandle`] whose `Read` / `Write`
+    /// impls round-trip [`crate::api::PddbBuf`] pages. The handle
+    /// holds an [`crate::api::ApiToken`] for the lifetime of the
+    /// returned value; `Drop` issues an [`crate::api::Opcode::KeyDrop`].
+    ///
+    /// # rv32 / 16 MiB constraint
+    ///
+    /// Allocates one page-aligned 4 KiB `xous_ipc::Buffer` per
+    /// returned handle; this buffer is reused across every `read`
+    /// and `write` on the handle. Open itself is one IPC round-trip.
+    ///
+    /// # Errors
+    ///
+    /// - [`ErrorKind::InvalidInput`] if `dict.len() > DICT_NAME_LEN - 1`
+    ///   or `key.len() > KEY_NAME_LEN - 1` (validated client-side; no
+    ///   IPC is issued).
+    /// - [`ErrorKind::NotFound`] if either the dict or key doesn't
+    ///   exist and `opts.create_*` does not authorize creation.
+    /// - [`ErrorKind::AccessDenied`], [`ErrorKind::NotMounted`],
+    ///   [`ErrorKind::NoFreeSpace`] for the obvious server-side
+    ///   conditions.
+    /// - [`ErrorKind::Internal`] if the server returns success but
+    ///   does not stamp a token (should not happen against the
+    ///   upstream PDDB).
+    /// - [`ErrorKind::Ipc`] for transport failures.
+    ///
+    /// # Security
+    ///
+    /// `dict` and `key` are caller-controlled name strings that
+    /// cross into the server's address space; they are stable
+    /// identifiers (e.g. `"signal-sessions"`) and not secret-bearing.
+    /// No value bytes are sent on this opcode — the handle is the
+    /// vehicle for value bytes on subsequent `Read`/`Write`.
     pub fn open(
         &self,
         dict: &str,
@@ -135,11 +258,22 @@ impl PddbClient {
         }
     }
 
-    /// Delete a single key. Wraps `Opcode::DeleteKey`.
+    /// Delete a single key from a dictionary.
     ///
-    /// Server-side handler reads `PddbKeyRequest` (not `PddbDictRequest`) —
-    /// see `services/pddb/src/main.rs::Opcode::DeleteKey` and the upstream
-    /// client at `services/pddb/src/lib.rs::delete_key`.
+    /// Wraps [`crate::api::Opcode::DeleteKey`]. Server-side handler
+    /// rkyv-deserializes a [`crate::api::PddbKeyRequest`] (not
+    /// `PddbDictRequest`); the choice of payload type is the
+    /// load-bearing detail that makes the server accept the request.
+    /// See upstream `services/pddb/src/main.rs::Opcode::DeleteKey`
+    /// for the handler and `services/pddb/src/lib.rs::delete_key`
+    /// for the equivalent client.
+    ///
+    /// # Errors
+    ///
+    /// - [`ErrorKind::NotFound`] if the dict or key is absent.
+    /// - [`ErrorKind::NotMounted`] if PDDB is locked.
+    /// - [`ErrorKind::Ipc`] for transport failures.
+    /// - [`ErrorKind::Internal`] for any other server reply.
     pub fn delete_key(&self, dict: &str, key: &str) -> Result<(), Error> {
         let request = PddbKeyRequest {
             basis_specified: false,
@@ -170,13 +304,25 @@ impl PddbClient {
         }
     }
 
-    /// Delete a dictionary and all its keys. Wraps `Opcode::DeleteDict`.
+    /// Delete a dictionary and every key it contains.
     ///
-    /// Server-side handler reads `PddbKeyRequest` — same wire format as
-    /// `delete_key`. The original code path here used `PddbDictRequest`
-    /// (a similar but distinct rkyv type), which the server happily
-    /// deserialized with garbage field values, returning nonsensical
-    /// codes like `Create`.
+    /// Wraps [`crate::api::Opcode::DeleteDict`]. Server-side handler
+    /// rkyv-deserializes a [`crate::api::PddbKeyRequest`] — same wire
+    /// shape as `delete_key`. An earlier version of this code sent
+    /// a [`crate::api::PddbDictRequest`] (a structurally similar but
+    /// distinct rkyv type); the server silently deserialized garbage
+    /// fields and returned nonsensical codes (e.g. `Create`).
+    ///
+    /// Deleting a non-existent dictionary is treated as success
+    /// (`NotFound` is folded into `Ok(())`) — this matches the
+    /// upstream `services/pddb/src/lib.rs::delete_dict` convention
+    /// and keeps the operation idempotent.
+    ///
+    /// # Errors
+    ///
+    /// - [`ErrorKind::NotMounted`] if PDDB is locked.
+    /// - [`ErrorKind::Ipc`] for transport failures.
+    /// - [`ErrorKind::Internal`] for any other server reply.
     pub fn delete_dict(&self, dict: &str) -> Result<(), Error> {
         let request = PddbKeyRequest {
             basis_specified: false,
@@ -207,22 +353,57 @@ impl PddbClient {
         }
     }
 
-    /// List all keys in a dictionary. Wraps `Opcode::KeyCountInDict`
-    /// (gets count + token) followed by repeated `Opcode::ListKeyV2`
-    /// calls (drains the packed key list one buffer at a time, each
-    /// up to ~4 KiB of `(len-prefix, name)` records).
+    /// Drain a dictionary's key names into a `Vec`.
     ///
-    /// Returns an empty `Vec` if the dict has no keys; returns a
-    /// `NotFound` error if the dict itself doesn't exist (which is
-    /// upstream's convention — see `services/pddb/src/lib.rs:list_keys`).
+    /// Two-phase wire protocol:
+    ///
+    /// 1. [`crate::api::Opcode::KeyCountInDict`] establishes a fresh
+    ///    listing token server-side.
+    /// 2. [`crate::api::Opcode::ListKeyV2`] is repeated until the
+    ///    server sets `end = true`; each page carries up to
+    ///    [`crate::api::MAX_PDDBKLISTLEN`] = 4064 bytes of packed
+    ///    `(u8 length, [u8] name)` records.
+    ///
+    /// Returns an empty `Vec` for a present-but-empty dictionary;
+    /// returns [`ErrorKind::NotFound`] if the dictionary itself does
+    /// not exist (matches upstream `services/pddb/src/lib.rs::list_keys`).
+    ///
+    /// # rv32 / 16 MiB constraint
+    ///
+    /// Allocates one page-aligned 4 KiB `xous_ipc::Buffer` per
+    /// `ListKeyV2` round-trip (the buffer is dropped between
+    /// iterations). The returned `Vec<String>` and its inner
+    /// `String`s are heap-allocated and grow unbounded with the
+    /// dictionary's key count — callers paging large dicts on the
+    /// hot path should be aware.
+    ///
+    /// # Errors
+    ///
+    /// - [`ErrorKind::InvalidInput`] if `dict.len() > DICT_NAME_LEN - 1`.
+    /// - [`ErrorKind::NotFound`] if the dict is absent.
+    /// - [`ErrorKind::NotMounted`] if PDDB is locked.
+    /// - [`ErrorKind::AccessDenied`] if another listing holds the
+    ///   server-side lock against this dict.
+    /// - [`ErrorKind::Internal`] if a `ListKeyV2` response is
+    ///   malformed (length-prefix overruns the buffer, name not UTF-8).
+    /// - [`ErrorKind::Ipc`] for transport failures.
+    ///
+    /// # Security
+    ///
+    /// The packed-name buffer is server-supplied and treated as
+    /// untrusted: the parser bounds every `data[idx..idx+len]` slice
+    /// against [`crate::api::MAX_PDDBKLISTLEN`] and validates UTF-8
+    /// before pushing to the result. A malformed buffer surfaces
+    /// as `ErrorKind::Internal`; the parser never panics.
     pub fn list_keys(&self, dict: &str) -> Result<Vec<String>, Error> {
         if dict.len() > DICT_NAME_LEN - 1 {
             return Err(Error::new(ErrorKind::InvalidInput, "dict name too long"));
         }
 
-        // Phase 1: KeyCountInDict — gets the listing token. The token
-        // disambiguates concurrent listings (PDDB's listing protocol
-        // is stateful on the server side).
+        // Phase 1: KeyCountInDict establishes a fresh listing
+        // token. The token disambiguates concurrent listings —
+        // PDDB's listing protocol is stateful server-side and the
+        // server holds per-token cursors.
         let token = random_token_4();
         let request = PddbDictRequest {
             basis_specified: false,
@@ -250,7 +431,9 @@ impl PddbClient {
             }
         }
 
-        // Phase 2: drain via ListKeyV2 until end == true.
+        // Phase 2: drain ListKeyV2 until `end` is set. Each
+        // iteration pays one IPC round-trip and yields up to
+        // ~4 KiB of packed names.
         let mut keys = Vec::new();
         loop {
             let req = PddbKeyList {
@@ -280,8 +463,11 @@ impl PddbClient {
                 }
             }
 
-            // Packed list format: (u8 len, [u8] name) repeating, with
-            // a 0-length record indicating end of buffer.
+            // Packed list format: (u8 len, [u8] name) repeating,
+            // with a 0-length record indicating end of buffer.
+            // Every slice is bounded against MAX_PDDBKLISTLEN
+            // before indexing; a malformed length-prefix surfaces
+            // as Internal, not a panic.
             let mut idx = 0;
             while idx < MAX_PDDBKLISTLEN && response.data[idx] != 0 {
                 let strlen = response.data[idx] as usize;
@@ -304,22 +490,65 @@ impl PddbClient {
         Ok(keys)
     }
 
-    /// Bulk write of (dict, key, value) triples in a single IPC. Wraps
-    /// `Opcode::WriteKeyBatch`. All writes are applied with
-    /// `truncate=true` server-side and **one** basis sync runs at the
-    /// end of the batch — N writes pay one sync instead of N.
+    /// Bulk-write `(dict, key, value)` triples in a single IPC.
     ///
-    /// Mirrors the upstream `Pddb::write_batch` (added in
-    /// `tunnell/xous-core@feat/pddb-bulk-write`).
+    /// Wraps [`crate::api::Opcode::WriteKeyBatch`]. The server
+    /// applies each entry with `truncate = true` and runs **one**
+    /// trailing basis sync — N writes pay one sync instead of N.
+    /// For send-heavy hot paths this is the critical primitive: a
+    /// single libsignal `send_message` step writes O(10) session
+    /// records, which through individual [`KeyHandle::write`] would
+    /// be O(10) full multi-basis syncs (upstream
+    /// `main.rs:2293-2294`) and through this opcode is one. The
+    /// `tunnell/xous-core@feat/pddb-bulk-write` patch series
+    /// (commit `8f3894f2d`) added the server side.
     ///
-    /// Returns an error if any per-entry length cap is exceeded, the
-    /// packed total exceeds `MAX_PDDB_WRITE_BATCH_LEN`, the IPC
-    /// transport fails, or the server reports a write failure (out
-    /// of space, basis inaccessible, etc.).
+    /// An empty `entries` slice short-circuits to `Ok(())` without
+    /// an IPC.
     ///
-    /// Not atomic across entries: if entry N fails, entries 0..N
-    /// have already been applied. The trailing sync runs regardless,
-    /// so partial state is durable.
+    /// # Wire format
+    ///
+    /// The packed buffer layout is documented on
+    /// [`crate::api::PddbWriteBatch`]. Per-entry caller-side caps
+    /// (validated before any IPC fires):
+    /// `dict.len() in [1, DICT_NAME_LEN - 1]`,
+    /// `key.len() <= KEY_NAME_LEN - 1`, `value.len() <= u16::MAX`,
+    /// and the packed total (plus 1 byte for the terminator) must
+    /// fit in [`crate::api::MAX_PDDB_WRITE_BATCH_LEN`] = 3800.
+    ///
+    /// # rv32 / 16 MiB constraint
+    ///
+    /// Allocates one page-aligned 4 KiB `xous_ipc::Buffer` per
+    /// call. A caller streaming O(N) entries past
+    /// `MAX_PDDB_WRITE_BATCH_LEN` needs to split into multiple
+    /// `write_batch` calls (each its own IPC + sync) — typical
+    /// libsignal session batches fit comfortably under the cap.
+    ///
+    /// # Errors
+    ///
+    /// - [`ErrorKind::InvalidInput`] for empty dict names, dict /
+    ///   key names exceeding the wire caps, value lengths
+    ///   exceeding `u16::MAX`, or a packed total over the cap.
+    /// - [`ErrorKind::NotFound`] (basis lost),
+    ///   [`ErrorKind::AccessDenied`], [`ErrorKind::NoFreeSpace`]
+    ///   (disk full), [`ErrorKind::Internal`] (unexpected EOF /
+    ///   server uninit sentinel) for server-reported failures.
+    /// - [`ErrorKind::Ipc`] for transport failures.
+    ///
+    /// # Security
+    ///
+    /// `value` bytes can be secret-bearing (libsignal session
+    /// records, ciphertext envelopes). They cross the trust
+    /// boundary into the PDDB server's address space inside the
+    /// page-lent buffer; the buffer is allocated locally, copied
+    /// into via `copy_from_slice`, and dropped when this method
+    /// returns. No explicit zeroization runs on Drop today — see
+    /// workspace recommendation W4 in `~/REFACTOR_NOTES.md`.
+    ///
+    /// Not atomic across entries. If entry N fails, entries `0..N`
+    /// have already been applied; the trailing sync still runs, so
+    /// partial state is durable. Callers cannot infer N from this
+    /// method's `Err` return.
     pub fn write_batch(&self, entries: &[(&str, &str, &[u8])]) -> Result<(), Error> {
         if entries.is_empty() {
             return Ok(());
@@ -369,7 +598,10 @@ impl PddbClient {
             request.data[index..index + value.len()].copy_from_slice(value);
             index += value.len();
         }
-        // Terminator (data was zero-initialized; this is belt-and-suspenders).
+        // Write the terminator (a 0-length dict). `data` was
+        // zero-initialized so this is belt-and-suspenders, but it
+        // documents intent and survives a future allocation source
+        // that doesn't pre-zero.
         if index < MAX_PDDB_WRITE_BATCH_LEN {
             request.data[index] = 0;
         }
@@ -399,6 +631,10 @@ impl PddbClient {
         }
     }
 
+    /// Construct a partially-populated [`PddbDictRequest`] from a
+    /// validated `(dict, key)` pair. Currently dead code — retained
+    /// alongside [`PddbClient::dict_request_send`] in case the
+    /// upstream-shape `dict_request` flow is reintroduced.
     fn dict_request(&self, dict: &str, key: &str) -> Result<PddbDictRequest, Error> {
         if dict.len() > DICT_NAME_LEN - 1 {
             return Err(Error::new(ErrorKind::InvalidInput, "dict name too long"));
@@ -420,6 +656,10 @@ impl PddbClient {
         })
     }
 
+    /// Lend a [`PddbDictRequest`] to the main server and return the
+    /// server-mutated reply. Helper for opcodes that share the
+    /// `PddbDictRequest` wire shape — currently only
+    /// [`crate::api::Opcode::KeyCountInDict`].
     fn dict_request_send(
         &self,
         request: PddbDictRequest,
@@ -436,9 +676,18 @@ impl PddbClient {
 
 impl Drop for PddbClient {
     fn drop(&mut self) {
-        // Best-effort. Each connection was registered against this
-        // process; if disconnect fails (e.g. during shutdown) the
-        // kernel cleans them up via the process teardown path.
+        // Release both kernel connections. Failure is non-fatal:
+        // each connection was registered against this process and
+        // the kernel reaps them via the process teardown path on
+        // exit. We swallow errors here because the alternative —
+        // panicking from Drop — would mask the actual shutdown cause.
+        //
+        // SAFETY: `xous::disconnect` is unsafe because it makes the
+        // CID invalid for any concurrent users. Here, `&mut self`
+        // gives exclusive access to both CIDs (no other handle can
+        // call into them after Drop begins) and the function returns
+        // immediately after — no later code in this Drop touches
+        // either CID.
         unsafe {
             let _ = xous::disconnect(self.main_conn);
             let _ = xous::disconnect(self.poller_conn);
