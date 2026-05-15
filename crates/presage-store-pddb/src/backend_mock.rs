@@ -1,13 +1,23 @@
-//! In-memory `KvBackend` for hosted-mode unit tests.
+//! In-memory [`KvBackend`] for hosted-mode unit tests.
 //!
-//! Mirrors the `(dict, key) -> value` shape of PDDB. The real backend
-//! lives in `backend_pddb.rs`; the mock stays around as the test
-//! harness for every storage trait.
+//! Mirrors the `(dict, key) -> value` shape of PDDB. The real
+//! backend lives in `backend_pddb.rs`; the mock stays around as the
+//! test harness for every storage trait.
 //!
-//! Implementation note: PDDB's per-page AES-256-GCM-SIV encryption is not
-//! modeled here. The mock is plaintext. That's the correct boundary —
-//! crypto is the backend's responsibility, not the storage trait
-//! impl's, and the trait impl is what the unit tests cover.
+//! # Security
+//!
+//! **Test harness only.** PDDB's per-page AES-256-GCM-SIV encryption
+//! is not modeled here — the mock stores plaintext in a `HashMap`.
+//! That's the correct boundary for unit testing (the storage-trait
+//! impls have no responsibility for encryption), but it means a
+//! production build accidentally selecting [`MockBackend`] would
+//! persist every libsignal secret in plaintext process memory. The
+//! mock is exposed through [`crate::PddbStore::with_mock_backend`]
+//! and never reached from the production
+//! [`crate::PddbStore::with_pddb_backend`] path.
+//!
+//! Storage is `HashMap<(String, String), Vec<u8>>` behind a `Mutex`.
+//! The `Vec<u8>` values do not zero on drop.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};

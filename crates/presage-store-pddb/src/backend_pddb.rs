@@ -1,19 +1,60 @@
-//! Real PDDB-backed `KvBackend`.
+//! Real PDDB-backed [`KvBackend`].
 //!
 //! Wraps `xous_pddb_ipc::PddbClient` (the hand-rolled IPC client;
 //! bypasses `services/pddb`'s gen1 dep cascade) and forwards
-//! `KvBackend` operations to PDDB's wire protocol.
+//! [`KvBackend`] operations to PDDB's wire protocol.
+//!
+//! # Trust boundary
+//!
+//! This is the only [`KvBackend`] impl whose `get` returns bytes
+//! that have been authenticated by PDDB's per-page AES-256-GCM-SIV
+//! before crossing IPC. Successful return from `get` is the trust
+//! witness — the bytes are PDDB-decrypted plaintext for the
+//! requested `(dict, key)`.
+//!
+//! `put` returns `Ok(())` after the PDDB server has run a basis
+//! sync, so the write is durable across power-loss when `put`
+//! returns successfully.
+//!
+//! # Security
+//!
+//! Bytes crossing this trait do **not** carry an additional MAC at
+//! this layer. The single trust boundary is PDDB's encryption. A
+//! caller who passes attacker-controlled bytes to `put` will have
+//! those bytes authenticated by PDDB and returned verbatim by a
+//! later `get` — i.e. attacker control of writes results in
+//! attacker control of reads. The store-trait impls
+//! (`SessionStore`, `IdentityKeyStore`, etc.) are responsible for
+//! distinguishing "PDDB returned exactly the bytes I wrote" from
+//! "the value was signed by the source I expected" — typically by
+//! routing through libsignal's own `Record::deserialize` step,
+//! which validates protobuf framing and key encodings.
+//!
+//! The `tracing::info!` perf events emitted by every method carry
+//! the `(dict, key)` pair and value/result lengths only — never
+//! value bytes. `dict` and `key` are non-secret on their own
+//! (e.g. `signal.protocol.aci.session`, the UUID of a peer).
+//!
+//! # rv32 / 16 MiB constraint
+//!
+//! Each `get`/`put`/`delete` is one PDDB IPC. The expensive
+//! component is the server-side basis sync — PDDB's
+//! `Opcode::WriteKey` handler runs `basis_cache.sync(...)` after
+//! every key_update. [`put_batch`](Self::put_batch) collapses N
+//! writes into one trailing sync via the `WriteKeyBatch` opcode;
+//! [`crate::BufferingBackend`] exists primarily to drive that path.
 //!
 //! Behavior:
 //!
 //! - `get` opens with `create_dict=false, create_key=false` and
-//!   reads the whole key into a Vec<u8>. Returns `Ok(None)` on
+//!   reads the whole key into a `Vec<u8>`. Returns `Ok(None)` on
 //!   `NotFound`, the bytes on `Ok`, error otherwise.
-//! - `put` opens with `create_dict=true, create_key=true` and writes
-//!   the value. No client-side `flush_writes`: the PDDB server's
-//!   `Opcode::WriteKey` handler already calls `basis_cache.sync(...)`
-//!   on every write (see body for the line-cite), so `WriteKeyFlush`
-//!   is redundant. Releases the handle on Drop.
+//! - `put` opens with `create_dict=true, create_key=true` and
+//!   writes the value. No client-side `flush_writes`: the PDDB
+//!   server's `Opcode::WriteKey` handler already calls
+//!   `basis_cache.sync(...)` on every write (see body for the
+//!   line-cite), so `WriteKeyFlush` is redundant. Releases the
+//!   handle on Drop.
 //! - `delete` and `delete_dict` are direct opcodes; `NotFound` on
 //!   delete is mapped to `Ok(())` (idempotent).
 //! - `list_keys` calls `KeyCountInDict` + `ListKeyV2` chain, returns
@@ -22,11 +63,11 @@
 //!
 //! Design notes:
 //!
-//! - A single `Mutex<PddbClient>` shared via `Arc` across `PddbStore`
-//!   clones (matching the `PddbStore::clone()` shallow-share
-//!   contract). The `Mutex` serializes IPC requests; PDDB's server
-//!   is itself single-threaded so concurrent requests would queue
-//!   anyway.
+//! - A single `Mutex<PddbClient>` shared via `Arc` across
+//!   [`crate::PddbStore`] clones (matching the
+//!   `PddbStore::clone()` shallow-share contract). The `Mutex`
+//!   serializes IPC requests; PDDB's server is itself
+//!   single-threaded so concurrent requests would queue anyway.
 //! - On `is_mounted() == false`, every operation returns
 //!   `Error::backend("PDDB not mounted")`. The store layer is
 //!   expected to surface this as a presage `StoreError` and the
@@ -41,23 +82,31 @@ use xous_pddb_ipc::{ErrorKind as IpcErrorKind, KeyHandle, OpenOptions, PddbClien
 
 use crate::{Error, KvBackend};
 
-/// Real PDDB-backed `KvBackend`. Constructed via
-/// `PddbStore::with_pddb_backend()` (added in `lib.rs` for this
-/// stage).
+/// Real PDDB-backed [`KvBackend`]. Constructed via
+/// [`crate::PddbStore::with_pddb_backend`].
+///
+/// Holds an `Arc<Mutex<PddbClient>>` so clones share the same IPC
+/// connection. The mutex serializes IPCs from this client; the
+/// server itself is single-threaded so concurrent IPCs from
+/// different connections also queue server-side.
 #[derive(Debug)]
 pub struct PddbBackend {
     client: Arc<Mutex<PddbClient>>,
 }
 
 impl PddbBackend {
-    /// Connect to the running PDDB server. Returns `Err` if the
-    /// server's SID isn't registered (i.e. PDDB isn't running) or
-    /// the connection request itself fails.
+    /// Connect to the running PDDB server.
     ///
     /// Does *not* block on PDDB being mounted — that's intentional.
-    /// A caller that needs a mounted store should poll `is_mounted`
-    /// before issuing reads/writes; otherwise the per-op `NotMounted`
-    /// error tells them when the cache is cold.
+    /// A caller that needs a mounted store should poll
+    /// [`is_mounted`](Self::is_mounted) before issuing reads/writes;
+    /// otherwise the per-op `NotMounted` error tells them when the
+    /// cache is cold.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if the server's SID isn't registered (i.e.
+    /// PDDB isn't running) or the connection request itself fails.
     pub fn connect() -> Result<Self, Error> {
         PddbClient::new()
             .map(|c| PddbBackend { client: Arc::new(Mutex::new(c)) })
@@ -65,10 +114,13 @@ impl PddbBackend {
     }
 
     /// Forward to `PddbClient::is_mounted` so callers can pre-check.
-    /// Currently unused inside this crate; `xous-app-signal`'s
-    /// `probe-pddb-real` feature is the expected consumer.
-    /// `dead_code` allowed because the method is part of the public
-    /// surface, not a private helper.
+    ///
+    /// Returns `false` if the IPC mutex is poisoned — same
+    /// fail-closed posture as the rest of this impl. Currently
+    /// unused inside this crate; xous-app-signal's `probe-pddb-real`
+    /// feature is the expected consumer. `dead_code` allowed because
+    /// the method is part of the public surface, not a private
+    /// helper.
     #[allow(dead_code)]
     pub fn is_mounted(&self) -> bool {
         match self.client.lock() {
@@ -79,8 +131,14 @@ impl PddbBackend {
 
     /// Trigger an interactive mount. Blocks until the user enters
     /// the password and the mount completes, or the server returns
-    /// non-OK. Use this from test paths that need a guaranteed-mounted
-    /// PDDB before issuing put/get.
+    /// non-OK.
+    ///
+    /// **Blocking on user input.** This call sits in the worker
+    /// thread waiting for keyboard interaction with the PDDB unlock
+    /// modal. Do not call from any latency-sensitive path.
+    ///
+    /// Use this from test paths that need a guaranteed-mounted PDDB
+    /// before issuing put/get.
     #[allow(dead_code)]
     pub fn try_mount(&self) -> Result<bool, Error> {
         let guard = self.lock()?;
@@ -126,8 +184,8 @@ impl KvBackend for PddbBackend {
         // `truncate=false` to `key_update`, so overwriting an
         // existing larger key leaves the trailing bytes intact and
         // `get` returns them concatenated to the new value. Delete
-        // first to force a fresh allocation. NotFound on a never-
-        // -written key is normal — ignore.
+        // first to force a fresh allocation. NotFound on a
+        // never-written key is normal — ignore.
         match guard.delete_key(dict, key) {
             Ok(()) => {}
             Err(e) if e.kind == IpcErrorKind::NotFound => {}
@@ -136,16 +194,14 @@ impl KvBackend for PddbBackend {
         let mut handle = guard
             .open(dict, key, OpenOptions::create_all())
             .map_err(|e| map_ipc_err(e, "open for write"))?;
-        // Note: no explicit `handle.flush()` here. The PDDB server's
+        // No explicit `handle.flush()` here. The PDDB server's
         // `Opcode::WriteKey` handler at xous-core/services/pddb/src/
-        // main.rs:2293-2294 already calls `basis_cache.sync(...)` after
-        // every key_update with the comment "for now, do an expensive
-        // sync operation after every write to ensure data integrity",
-        // so data is durable on WriteKey return. A client-side
-        // `handle.flush()` issues `Opcode::WriteKeyFlush` whose handler
-        // (main.rs:2313-2329) also calls `basis_cache.sync(...)` — a
-        // redundant multi-basis sync per put. Dropping it saves 1 IPC
-        // and 1 basis sync per logical write.
+        // main.rs:2293-2294 already calls `basis_cache.sync(...)`
+        // after every key_update, so data is durable on WriteKey
+        // return. A client-side `handle.flush()` would issue
+        // `Opcode::WriteKeyFlush` (main.rs:2313-2329) which also
+        // calls `basis_cache.sync(...)` — redundant multi-basis sync
+        // per put. Dropping it saves 1 IPC + 1 basis sync per write.
         handle.write_all(value).map_err(|e| Error::backend(format!("write: {}", e)))?;
         tracing::info!(
             "perf/store: PddbBackend::put dict={:?} key={:?} len={} ms={}",
@@ -220,9 +276,12 @@ impl KvBackend for PddbBackend {
     }
 }
 
-/// Drain `handle` into `out`. Mirrors `std::io::Read::read_to_end`
-/// but bounds the read on the chunk size (4 KiB matches PDDB's
-/// per-buffer ceiling).
+/// Drain `handle` into `out`.
+///
+/// Mirrors `std::io::Read::read_to_end` but bounds the per-syscall
+/// read at the 4 KiB chunk size that matches PDDB's per-buffer
+/// ceiling. Loops until `read` returns zero, copying chunks into
+/// `out`.
 fn read_all(handle: &mut KeyHandle<'_>, out: &mut Vec<u8>) -> std::io::Result<()> {
     let mut chunk = [0u8; 4096];
     loop {
@@ -234,6 +293,10 @@ fn read_all(handle: &mut KeyHandle<'_>, out: &mut Vec<u8>) -> std::io::Result<()
     }
 }
 
+/// Map an IPC error to a [`crate::Error::Backend`] with a stable
+/// context string. The kind-to-string mapping is what callers see in
+/// the error message; matching against `e.kind` upstream lets us
+/// keep the wire-level kind enumeration internal.
 fn map_ipc_err(e: xous_pddb_ipc::Error, ctx: &str) -> Error {
     match e.kind {
         IpcErrorKind::NotMounted => Error::backend(format!("{}: PDDB not mounted", ctx)),
