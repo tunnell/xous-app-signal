@@ -154,16 +154,29 @@ mkdir -p ~/code/xas && cd ~/code/xas
 #     cd xous-app-signal && git checkout dev
 git clone https://github.com/tunnell/xous-app-signal.git
 
-# xous-core (kernel + services). The xous-app-signal branch
-# carries the net-service encoding fix and DNS CNAME fix described
-# in the README's Upstream patches section.
+# xous-core (kernel + services). The `xas-v0.2` branch is the v0.2
+# frozen release branch (see RELEASING.md for how releases pin
+# xous-core) — it registers `xas` in apps/manifest.json (so
+# `services/gam` knows to expose Signal as a launchable app),
+# carries DNS / net / gam fixes the Signal app needs (including
+# the services/net reaper fix from tunnell/xous-core#26), and
+# includes the apps/xas/ subtree.
+#
+# Future xas releases will pin to their own frozen branches
+# (`xas-v0.3`, etc.). The floating `xas` integration branch on
+# tunnell/xous-core continues to advance for development, but
+# released xas versions always build against a pinned snapshot.
+#
+# An older `xous-app-signal` branch also exists with similar
+# content; it's kept around for historical compatibility but
+# `xas-v0.2` has the more recent fixes (DNS CNAME chains,
+# net-service instrumentation, gam Enter-key alias, etc.).
 #
 # Note: --depth 1 keeps the clone small (~250 MB vs ~2 GB full).
 # If you want to verify the branch's commit history matches the
-# table in §1's 'What each clone contributes' (e.g. that
-# `cfcc12eee` is in the history), drop --depth 1 here OR run
-# `git fetch --unshallow` after cloning.
-git clone --depth 1 -b xous-app-signal https://github.com/tunnell/xous-core.git
+# table in §1's 'What each clone contributes', drop --depth 1
+# here OR run `git fetch --unshallow` after cloning.
+git clone --depth 1 -b xas-v0.2 https://github.com/tunnell/xous-core.git
 
 # xous-app-signal's workspace Cargo.toml uses paths like
 # `../repos/xous-core/...`, i.e. relative to xous-app-signal's
@@ -357,7 +370,7 @@ Three things conspire to make this awkward:
 (`generate_app_menus()` in `xtask/src/app_manifest.rs`) from
 `xous-core/apps/manifest.json`, and is gitignored.
 
-The `xous-app-signal` branch of `tunnell/xous-core` already
+The `xas-v0.2` branch of `tunnell/xous-core` (cloned in §1) already
 registers `xas` in `manifest.json` (alongside `vault`), so once
 you've invoked xtask once (`cargo xtask run` in §2.3, or
 `cargo xtask app-image-xip` in §3.2), `apps.rs` self-maintains
@@ -393,6 +406,28 @@ After §2.3 or §3.2 has run once, xtask overwrites this with the
 full manifest-derived version (both `APP_NAME_XAS` and
 `APP_NAME_VAULT` plus a vault submenu constant) — no further
 hand-edits needed.
+
+**Re-bootstrap on branch switches.** If you switch the xous-core
+checkout to a branch whose `apps/manifest.json` differs (for
+example, branching off `dev` to test a fix without the xas entry),
+the cached `apps.rs` from the previous build can disagree with the
+new manifest. Two failure modes to watch for:
+
+- The build fails with `error[E0425]: cannot find value
+  APP_NAME_XAS` (cached `apps.rs` was written on a manifest that
+  doesn't have xas; cargo build runs before xtask in
+  `tests/precursor/build-and-bundle.sh`). Re-bootstrap as above.
+- The build *succeeds* but the device boots without `Signal` in
+  the launcher menu (manifest has xas, cached `apps.rs` doesn't,
+  bundle includes the xas binary but gam never registers it).
+  Same fix: re-bootstrap.
+
+Sanity check before flashing:
+```sh
+grep APP_NAME_XAS xous-core/services/gam/src/apps.rs
+```
+If this returns nothing, the launcher won't see Signal regardless
+of what's in the bundled image. Hand-bootstrap and rebuild.
 
 ### 2.2 Build
 
@@ -596,6 +631,18 @@ If you skipped section 2 entirely, you still need the
 in 3.1 has the same gam dependency and fails the same way
 without it.
 
+**Branch selection in xous-core matters.** Hardware builds need
+the xous-core checkout on a branch whose `apps/manifest.json`
+registers xas (`tunnell/xous-core@xas-v0.2` is the canonical one
+for v0.2 builds; future releases will pin to `xas-v0.3`, etc. —
+see RELEASING.md). Building against `dev` (or any
+branch that doesn't register xas) will silently produce an
+image that bundles the xas binary but where the launcher menu
+doesn't list Signal — see the "Re-bootstrap on branch switches"
+note in §2.1. Sanity-check with
+`grep APP_NAME_XAS xous-core/services/gam/src/apps.rs` before
+flashing.
+
 ### 3.1 Build the rv32 xas binary
 
 The fastest path is the precursor test script, which does the
@@ -761,7 +808,7 @@ When the Precursor boots into Xous:
 | `usb_update.py` permission denied (Linux host) | udev rule missing | Add `tools/49-precursor.rules` to `/etc/udev/rules.d/` and `udevadm control --reload`, or run with sudo (not recommended) |
 | Hosted xas shows "OOM during link" | Default heap cap too low | Run with `RUST_LOG=info` to see allocator messages; rebuild with `--features pddb-real,hosted` (the dist build is otherwise too lean) |
 | Hardware link succeeds but no messages flow | Wi-Fi connected to 5 GHz, or DNS broken | Re-run the wlan recipe; verify `net ping chat.signal.org` works before opening xas |
-| Send fails with "WebSocket closing" within 30s | Older xous-core without the encoding fix | Confirm you cloned the `xous-app-signal` branch of `tunnell/xous-core`, not upstream `betrusted-io/xous-core`. Upstream PR is [betrusted-io/xous-core#877](https://github.com/betrusted-io/xous-core/pull/877); pull stock once it merges. |
+| Send fails with "WebSocket closing" within 30s | Older xous-core without the encoding fix | Confirm you cloned the `xas-v0.2` branch of `tunnell/xous-core`, not upstream `betrusted-io/xous-core`. Relevant upstream PRs: [#877](https://github.com/betrusted-io/xous-core/pull/877) (encoding fix) and [tunnell/xous-core#26](https://github.com/tunnell/xous-core/pull/26) (services/net reaper fix shipped with v0.2). |
 | Flash completes but device boots into the old image | Loader didn't validate the new signature | Re-flash; if it persists, check `tools/usb_update.py` log for verification errors |
 
 ---

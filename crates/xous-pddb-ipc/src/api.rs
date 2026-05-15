@@ -38,6 +38,12 @@ pub enum Opcode {
     WriteKeyFlush = 18,
     KeyDrop = 20,
     ListKeyV2 = 45,
+    /// Bulk write of (dict, key, value) triples in a single IPC,
+    /// followed by ONE basis sync at the end. Added in
+    /// tunnell/xous-core@feat/pddb-bulk-write. See
+    /// `services/pddb/src/api.rs` upstream for the canonical
+    /// discriminant.
+    WriteKeyBatch = 57,
 }
 
 /// Mount poller opcodes (different SID from the main server).
@@ -133,6 +139,29 @@ pub struct PddbKeyList {
     pub data: [u8; MAX_PDDBKLISTLEN],
     pub retcode: PddbRetcode,
     pub end: bool,
+}
+
+/// IPC payload for `Opcode::WriteKeyBatch`. Packed buffer carries
+/// the (dict, key, value) entries; per-entry wire format inside
+/// `data`:
+///
+///   u8 dict_len, dict bytes (UTF-8)
+///   u8 key_len,  key bytes (UTF-8)
+///   u16 value_len (little-endian), value bytes
+///
+/// Terminator: a single byte of value 0 (a 0-length dict).
+///
+/// Caller-side enforcement: per-entry length caps mirror upstream
+/// (`DICT_NAME_LEN - 1`, `KEY_NAME_LEN - 1`, `u16::MAX` for value).
+/// Total packed size must not exceed `MAX_PDDB_WRITE_BATCH_LEN`.
+pub const MAX_PDDB_WRITE_BATCH_LEN: usize = 3800;
+
+#[derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
+pub struct PddbWriteBatch {
+    pub basis_specified: bool,
+    pub basis: String,
+    pub data: [u8; MAX_PDDB_WRITE_BATCH_LEN],
+    pub retcode: PddbRetcode,
 }
 
 /// Page-aligned streaming buffer for `Opcode::ReadKey` and

@@ -26,7 +26,8 @@ use presage::libsignal_service::protocol::{
     ProtocolAddress, SessionRecord, SessionStore, SignalProtocolError,
 };
 
-use super::{IdentityType, PddbProtocolStore, backend_get_json_protocol, dict_session};
+use super::{IdentityType, PddbProtocolStore, dict_session, protocol_backend_err};
+use crate::{Error, KvBackend};
 
 /// Cache key — `(identity, address.name(), device_id)`. The address
 /// part is split from the device id so `flush_sessions` can group
@@ -43,9 +44,106 @@ pub(crate) fn session_key(identity: IdentityType, address: &ProtocolAddress) -> 
 }
 
 /// On-disk shape for one PDDB session key: `device_id ->
-/// SessionRecord::serialize() bytes`. JSON for debuggability —
-/// matches the choice in `pre_key_store::save_bundle`.
+/// SessionRecord::serialize() bytes`. Originally JSON for
+/// debuggability; switched to bincode (versioned, with JSON fallback)
+/// because JSON encodes the inner `Vec<u8>` as a decimal-int array and
+/// inflated the bundle 3-4×, splitting one logical `put` into ~6
+/// chunked `Opcode::WriteKey` IPCs. See the parent module's
+/// `Cargo.toml` rationale.
 pub(crate) type SessionBundle = HashMap<u32, Vec<u8>>;
+
+/// Wire-format version byte for bincode-encoded `SessionBundle`
+/// blobs. 0x01 was picked because it can't appear as the first byte
+/// of a serde_json-encoded HashMap (JSON starts with `{` = 0x7B, or
+/// — for an empty value — would be `{}`), so the deserializer can
+/// route on the first byte without ambiguity. If we ever change the
+/// encoding again, bump this and add the new branch to
+/// `deserialize_session_bundle`.
+const SESSION_BUNDLE_VERSION_BINCODE_V1: u8 = 0x01;
+
+/// Encode a `SessionBundle` for the wire. Prefixes one version byte so
+/// older blobs (raw `serde_json`) remain decodable in-place.
+pub(crate) fn serialize_session_bundle(bundle: &SessionBundle) -> Result<Vec<u8>, Error> {
+    let body = bincode::serialize(bundle).map_err(Error::encode)?;
+    let mut out = Vec::with_capacity(1 + body.len());
+    out.push(SESSION_BUNDLE_VERSION_BINCODE_V1);
+    out.extend_from_slice(&body);
+    Ok(out)
+}
+
+/// Decode a `SessionBundle`. Reads the version byte; if it isn't
+/// `SESSION_BUNDLE_VERSION_BINCODE_V1`, falls back to the legacy
+/// `serde_json` decoder so blobs already on disk from a pre-bincode
+/// build remain readable. The next time the caller writes the same
+/// key it goes out as bincode, so the migration is one-way and
+/// happens transparently.
+pub(crate) fn deserialize_session_bundle(bytes: &[u8]) -> Result<SessionBundle, Error> {
+    match bytes.first() {
+        Some(&SESSION_BUNDLE_VERSION_BINCODE_V1) => {
+            bincode::deserialize(&bytes[1..]).map_err(|e| Error::Decode(e.to_string()))
+        }
+        // Legacy: pre-versioning, raw serde_json. A real JSON map
+        // starts with `{` (0x7B); a JSON array would be `[` (0x5B).
+        // Neither collides with the version byte.
+        _ => serde_json::from_slice(bytes).map_err(Error::from),
+    }
+}
+
+/// `backend.get(...) + deserialize_session_bundle(...)` packaged for the
+/// crate-internal SessionBundle callers. Mirrors
+/// `backend_get_json_protocol` in shape but routes through the
+/// bundle's bespoke codec.
+pub(crate) fn backend_get_session_bundle(
+    backend: &dyn KvBackend,
+    dict: &str,
+    key: &str,
+) -> Result<Option<SessionBundle>, Error> {
+    match backend.get(dict, key)? {
+        Some(bytes) => Ok(Some(deserialize_session_bundle(&bytes)?)),
+        None => Ok(None),
+    }
+}
+
+/// `serialize_session_bundle(...) + backend.put(...)`. Inverse of
+/// `backend_get_session_bundle`.
+pub(crate) fn backend_put_session_bundle(
+    backend: &dyn KvBackend,
+    dict: &str,
+    key: &str,
+    bundle: &SessionBundle,
+) -> Result<(), Error> {
+    let bytes = serialize_session_bundle(bundle)?;
+    backend.put(dict, key, &bytes)
+}
+
+/// `SignalProtocolError`-flavored wrapper for `backend_get_session_bundle`.
+/// Carries the same `"decode session bundle"` context the previous
+/// `backend_get_json_protocol::<SessionBundle>` call sites used.
+pub(crate) fn backend_get_session_bundle_protocol(
+    backend: &dyn KvBackend,
+    dict: &str,
+    key: &str,
+) -> Result<Option<SessionBundle>, SignalProtocolError> {
+    match backend.get(dict, key).map_err(protocol_backend_err)? {
+        Some(bytes) => deserialize_session_bundle(&bytes)
+            .map(Some)
+            .map_err(|e| SignalProtocolError::InvalidState("decode session bundle", e.to_string())),
+        None => Ok(None),
+    }
+}
+
+/// `SignalProtocolError`-flavored wrapper for
+/// `backend_put_session_bundle`.
+pub(crate) fn backend_put_session_bundle_protocol(
+    backend: &dyn KvBackend,
+    dict: &str,
+    key: &str,
+    bundle: &SessionBundle,
+) -> Result<(), SignalProtocolError> {
+    let bytes = serialize_session_bundle(bundle)
+        .map_err(|e| SignalProtocolError::InvalidState("encode session bundle", e.to_string()))?;
+    backend.put(dict, key, &bytes).map_err(protocol_backend_err)
+}
 
 #[async_trait(?Send)]
 impl SessionStore for PddbProtocolStore {
@@ -68,11 +166,10 @@ impl SessionStore for PddbProtocolStore {
         // 2. Fall through to PDDB. One key per address; the value is a
         //    `SessionBundle` (device_id → serialized SessionRecord).
         let dict = dict_session(self.identity);
-        let Some(bundle) = backend_get_json_protocol::<SessionBundle>(
+        let Some(bundle) = backend_get_session_bundle_protocol(
             &*self.store.backend,
             &dict,
             &key.1,
-            "decode session bundle",
         )?
         else {
             return Ok(None);
@@ -115,5 +212,82 @@ impl SessionStore for PddbProtocolStore {
             })?;
         dirty.insert(key);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_bundle() -> SessionBundle {
+        let mut b: SessionBundle = HashMap::new();
+        b.insert(1, vec![0x10, 0x20, 0x30, 0x40]);
+        b.insert(2, vec![0xff; 256]);
+        b.insert(7, b"hello".to_vec());
+        b
+    }
+
+    #[test]
+    fn bincode_roundtrip() {
+        let b = sample_bundle();
+        let bytes = serialize_session_bundle(&b).expect("serialize");
+        assert_eq!(
+            bytes.first(),
+            Some(&SESSION_BUNDLE_VERSION_BINCODE_V1),
+            "bincode-encoded blob must start with the version byte"
+        );
+        let decoded = deserialize_session_bundle(&bytes).expect("deserialize");
+        assert_eq!(b, decoded);
+    }
+
+    #[test]
+    fn legacy_json_decodes() {
+        // A bundle produced by the pre-versioning build: raw
+        // serde_json with `Vec<u8>` rendered as a decimal-int array.
+        // The HashMap key here is stringified because that's how
+        // serde_json round-trips `HashMap<u32, _>` (JSON object keys
+        // must be strings).
+        let legacy_json = br#"{"1":[16,32,48,64],"7":[104,101,108,108,111]}"#;
+        let decoded = deserialize_session_bundle(legacy_json).expect("legacy decode");
+        assert_eq!(decoded.get(&1), Some(&vec![16u8, 32, 48, 64]));
+        assert_eq!(decoded.get(&7), Some(&b"hello".to_vec()));
+    }
+
+    #[test]
+    fn empty_bundle_roundtrips() {
+        let b: SessionBundle = HashMap::new();
+        let bytes = serialize_session_bundle(&b).expect("serialize");
+        let decoded = deserialize_session_bundle(&bytes).expect("deserialize");
+        assert!(decoded.is_empty());
+    }
+
+    #[test]
+    fn bincode_is_substantially_smaller_than_json() {
+        // The whole point of the encoding swap: a `SessionBundle` of
+        // 5 devices × ~250 bytes each (typical libsignal
+        // SessionRecord size) must encode to well under MAX_PDDB_WRITE_
+        // BATCH_LEN (3800) once bundled with its dict + key. JSON-
+        // encoded the same bundle is 3-4× larger and would still
+        // exceed the per-IPC chunk size, so the assertion guards the
+        // load-bearing premise of the encoding change.
+        let mut b: SessionBundle = HashMap::new();
+        for dev in 1u32..=5 {
+            b.insert(dev, vec![0xAB; 250]);
+        }
+        let bincode_bytes = serialize_session_bundle(&b).expect("serialize");
+        let json_bytes = serde_json::to_vec(&b).expect("json serialize");
+        assert!(
+            bincode_bytes.len() * 2 < json_bytes.len(),
+            "bincode should be at least 2× smaller than JSON for byte-array values: \
+             bincode={}, json={}",
+            bincode_bytes.len(),
+            json_bytes.len()
+        );
+        // And the bincode form should fit comfortably in one batch IPC.
+        assert!(
+            bincode_bytes.len() < 2048,
+            "5-device bundle ({} bytes) should fit well under a batch IPC",
+            bincode_bytes.len()
+        );
     }
 }

@@ -12,9 +12,10 @@ use xous::{CID, Message, send_message};
 use xous_ipc::Buffer;
 
 use crate::api::{
-    ApiToken, DICT_NAME_LEN, Error, ErrorKind, KEY_NAME_LEN, MAX_PDDBKLISTLEN, Opcode,
-    PDDB_BUF_DATA_LEN, PddbBuf, PddbDictRequest, PddbKeyList, PddbKeyRequest, PddbRequestCode,
-    PddbRetcode, SERVER_NAME_PDDB, SERVER_NAME_PDDB_POLLER,
+    ApiToken, DICT_NAME_LEN, Error, ErrorKind, KEY_NAME_LEN, MAX_PDDBKLISTLEN,
+    MAX_PDDB_WRITE_BATCH_LEN, Opcode, PDDB_BUF_DATA_LEN, PddbBuf, PddbDictRequest, PddbKeyList,
+    PddbKeyRequest, PddbRequestCode, PddbRetcode, PddbWriteBatch, SERVER_NAME_PDDB,
+    SERVER_NAME_PDDB_POLLER,
 };
 
 /// Top-level client. Holds long-lived connections to both the main
@@ -301,6 +302,101 @@ impl PddbClient {
         }
 
         Ok(keys)
+    }
+
+    /// Bulk write of (dict, key, value) triples in a single IPC. Wraps
+    /// `Opcode::WriteKeyBatch`. All writes are applied with
+    /// `truncate=true` server-side and **one** basis sync runs at the
+    /// end of the batch — N writes pay one sync instead of N.
+    ///
+    /// Mirrors the upstream `Pddb::write_batch` (added in
+    /// `tunnell/xous-core@feat/pddb-bulk-write`).
+    ///
+    /// Returns an error if any per-entry length cap is exceeded, the
+    /// packed total exceeds `MAX_PDDB_WRITE_BATCH_LEN`, the IPC
+    /// transport fails, or the server reports a write failure (out
+    /// of space, basis inaccessible, etc.).
+    ///
+    /// Not atomic across entries: if entry N fails, entries 0..N
+    /// have already been applied. The trailing sync runs regardless,
+    /// so partial state is durable.
+    pub fn write_batch(&self, entries: &[(&str, &str, &[u8])]) -> Result<(), Error> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let mut request = PddbWriteBatch {
+            basis_specified: false,
+            basis: String::new(),
+            data: [0u8; MAX_PDDB_WRITE_BATCH_LEN],
+            retcode: PddbRetcode::Uninit,
+        };
+        let mut index = 0usize;
+        for (dict, key, value) in entries {
+            if dict.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "empty dict name (collides with terminator)",
+                ));
+            }
+            if dict.len() > DICT_NAME_LEN - 1 {
+                return Err(Error::new(ErrorKind::InvalidInput, "dict name too long"));
+            }
+            if key.len() > KEY_NAME_LEN - 1 {
+                return Err(Error::new(ErrorKind::InvalidInput, "key name too long"));
+            }
+            if value.len() > u16::MAX as usize {
+                return Err(Error::new(ErrorKind::InvalidInput, "value too large for one entry"));
+            }
+            let needed = 1 + dict.len() + 1 + key.len() + 2 + value.len();
+            if index + needed + 1 > MAX_PDDB_WRITE_BATCH_LEN {
+                return Err(Error::new(
+                    ErrorKind::InvalidInput,
+                    "batch exceeds MAX_PDDB_WRITE_BATCH_LEN; split",
+                ));
+            }
+            request.data[index] = dict.len() as u8;
+            index += 1;
+            request.data[index..index + dict.len()].copy_from_slice(dict.as_bytes());
+            index += dict.len();
+            request.data[index] = key.len() as u8;
+            index += 1;
+            request.data[index..index + key.len()].copy_from_slice(key.as_bytes());
+            index += key.len();
+            let vlen = (value.len() as u16).to_le_bytes();
+            request.data[index] = vlen[0];
+            request.data[index + 1] = vlen[1];
+            index += 2;
+            request.data[index..index + value.len()].copy_from_slice(value);
+            index += value.len();
+        }
+        // Terminator (data was zero-initialized; this is belt-and-suspenders).
+        if index < MAX_PDDB_WRITE_BATCH_LEN {
+            request.data[index] = 0;
+        }
+
+        let mut buf = Buffer::into_buf(request)
+            .map_err(|_| Error::new(ErrorKind::Ipc, "Buffer::into_buf WriteKeyBatch"))?;
+        buf.lend_mut(self.main_conn, Opcode::WriteKeyBatch.to_u32().unwrap())
+            .map_err(|_| Error::new(ErrorKind::Ipc, "lend_mut WriteKeyBatch"))?;
+        let response = buf
+            .to_original::<PddbWriteBatch, _>()
+            .map_err(|_| Error::new(ErrorKind::Ipc, "to_original WriteKeyBatch"))?;
+        match response.retcode {
+            PddbRetcode::Ok => Ok(()),
+            PddbRetcode::BasisLost => Err(Error::new(ErrorKind::NotFound, "basis lost")),
+            PddbRetcode::AccessDenied => Err(Error::new(ErrorKind::AccessDenied, "access denied")),
+            PddbRetcode::DiskFull => Err(Error::new(ErrorKind::NoFreeSpace, "disk full")),
+            PddbRetcode::UnexpectedEof => {
+                Err(Error::new(ErrorKind::Internal, "unexpected EOF"))
+            }
+            PddbRetcode::InternalError => {
+                Err(Error::new(ErrorKind::Internal, "internal error"))
+            }
+            PddbRetcode::Uninit => Err(Error::new(
+                ErrorKind::Internal,
+                "server returned without setting retcode",
+            )),
+        }
     }
 
     fn dict_request(&self, dict: &str, key: &str) -> Result<PddbDictRequest, Error> {

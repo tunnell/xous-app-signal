@@ -9,9 +9,11 @@
 //! - `get` opens with `create_dict=false, create_key=false` and
 //!   reads the whole key into a Vec<u8>. Returns `Ok(None)` on
 //!   `NotFound`, the bytes on `Ok`, error otherwise.
-//! - `put` opens with `create_dict=true, create_key=true`, writes
-//!   the value, calls `flush_writes` to commit. Releases the handle
-//!   on Drop.
+//! - `put` opens with `create_dict=true, create_key=true` and writes
+//!   the value. No client-side `flush_writes`: the PDDB server's
+//!   `Opcode::WriteKey` handler already calls `basis_cache.sync(...)`
+//!   on every write (see body for the line-cite), so `WriteKeyFlush`
+//!   is redundant. Releases the handle on Drop.
 //! - `delete` and `delete_dict` are direct opcodes; `NotFound` on
 //!   delete is mapped to `Ok(())` (idempotent).
 //! - `list_keys` calls `KeyCountInDict` + `ListKeyV2` chain, returns
@@ -94,18 +96,31 @@ impl PddbBackend {
 
 impl KvBackend for PddbBackend {
     fn get(&self, dict: &str, key: &str) -> Result<Option<Vec<u8>>, Error> {
+        let _perf_start = std::time::Instant::now();
         let guard = self.lock()?;
         let mut handle = match guard.open(dict, key, OpenOptions::default()) {
             Ok(h) => h,
-            Err(e) if e.kind == IpcErrorKind::NotFound => return Ok(None),
+            Err(e) if e.kind == IpcErrorKind::NotFound => {
+                tracing::info!(
+                    "perf/store: PddbBackend::get NotFound dict={:?} key={:?} ms={}",
+                    dict, key, _perf_start.elapsed().as_millis()
+                );
+                return Ok(None);
+            }
             Err(e) => return Err(map_ipc_err(e, "open for read")),
         };
         let mut bytes = Vec::new();
         read_all(&mut handle, &mut bytes).map_err(|e| Error::backend(format!("read: {}", e)))?;
+        tracing::info!(
+            "perf/store: PddbBackend::get Ok dict={:?} key={:?} len={} ms={}",
+            dict, key, bytes.len(), _perf_start.elapsed().as_millis()
+        );
         Ok(Some(bytes))
     }
 
     fn put(&self, dict: &str, key: &str, value: &[u8]) -> Result<(), Error> {
+        let _perf_start = std::time::Instant::now();
+        let _perf_val_len = value.len();
         let guard = self.lock()?;
         // Refs #14: xous-core PDDB's `WriteKey` opcode passes
         // `truncate=false` to `key_update`, so overwriting an
@@ -121,32 +136,87 @@ impl KvBackend for PddbBackend {
         let mut handle = guard
             .open(dict, key, OpenOptions::create_all())
             .map_err(|e| map_ipc_err(e, "open for write"))?;
+        // Note: no explicit `handle.flush()` here. The PDDB server's
+        // `Opcode::WriteKey` handler at xous-core/services/pddb/src/
+        // main.rs:2293-2294 already calls `basis_cache.sync(...)` after
+        // every key_update with the comment "for now, do an expensive
+        // sync operation after every write to ensure data integrity",
+        // so data is durable on WriteKey return. A client-side
+        // `handle.flush()` issues `Opcode::WriteKeyFlush` whose handler
+        // (main.rs:2313-2329) also calls `basis_cache.sync(...)` — a
+        // redundant multi-basis sync per put. Dropping it saves 1 IPC
+        // and 1 basis sync per logical write.
         handle.write_all(value).map_err(|e| Error::backend(format!("write: {}", e)))?;
-        handle.flush().map_err(|e| Error::backend(format!("flush: {}", e)))?;
+        tracing::info!(
+            "perf/store: PddbBackend::put dict={:?} key={:?} len={} ms={}",
+            dict, key, _perf_val_len, _perf_start.elapsed().as_millis()
+        );
         Ok(())
     }
 
-    fn delete(&self, dict: &str, key: &str) -> Result<(), Error> {
+    fn put_batch(&self, entries: &[(&str, &str, &[u8])]) -> Result<(), Error> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let _perf_start = std::time::Instant::now();
+        let _perf_n = entries.len();
+        let _perf_total: usize = entries.iter().map(|(d, k, v)| d.len() + k.len() + v.len()).sum();
         let guard = self.lock()?;
-        match guard.delete_key(dict, key) {
+        // Single IPC, single trailing basis sync server-side. The
+        // upstream `Opcode::WriteKeyBatch` handler applies each entry
+        // with `truncate=true` so the `delete_key` prelude we'd
+        // otherwise need for #14 is unnecessary on the batch path.
+        let result = guard
+            .write_batch(entries)
+            .map_err(|e| map_ipc_err(e, "write_batch"));
+        tracing::info!(
+            "perf/store: PddbBackend::put_batch n_entries={} total_bytes={} ok={} ms={}",
+            _perf_n, _perf_total, result.is_ok(),
+            _perf_start.elapsed().as_millis()
+        );
+        result
+    }
+
+    fn delete(&self, dict: &str, key: &str) -> Result<(), Error> {
+        let _perf_start = std::time::Instant::now();
+        let guard = self.lock()?;
+        let result = match guard.delete_key(dict, key) {
             Ok(()) => Ok(()),
             Err(e) if e.kind == IpcErrorKind::NotFound => Ok(()),
             Err(e) => Err(map_ipc_err(e, "delete_key")),
-        }
+        };
+        tracing::info!(
+            "perf/store: PddbBackend::delete dict={:?} key={:?} ms={}",
+            dict, key, _perf_start.elapsed().as_millis()
+        );
+        result
     }
 
     fn delete_dict(&self, dict: &str) -> Result<(), Error> {
+        let _perf_start = std::time::Instant::now();
         let guard = self.lock()?;
-        guard.delete_dict(dict).map_err(|e| map_ipc_err(e, "delete_dict"))
+        let result = guard.delete_dict(dict).map_err(|e| map_ipc_err(e, "delete_dict"));
+        tracing::info!(
+            "perf/store: PddbBackend::delete_dict dict={:?} ms={}",
+            dict, _perf_start.elapsed().as_millis()
+        );
+        result
     }
 
     fn list_keys(&self, dict: &str) -> Result<Vec<String>, Error> {
+        let _perf_start = std::time::Instant::now();
         let guard = self.lock()?;
-        match guard.list_keys(dict) {
+        let result = match guard.list_keys(dict) {
             Ok(v) => Ok(v),
             Err(e) if e.kind == IpcErrorKind::NotFound => Ok(Vec::new()),
             Err(e) => Err(map_ipc_err(e, "list_keys")),
-        }
+        };
+        let _perf_n = result.as_ref().map(|v| v.len()).unwrap_or(0);
+        tracing::info!(
+            "perf/store: PddbBackend::list_keys dict={:?} n={} ms={}",
+            dict, _perf_n, _perf_start.elapsed().as_millis()
+        );
+        result
     }
 }
 

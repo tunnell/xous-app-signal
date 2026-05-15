@@ -28,16 +28,30 @@ probe-flow = []
 probe-pddb = []
 
 # Full PDDB-backed KvBackend.
-# - `pddb-real` swaps `PddbStore::with_mock_backend()` for
-#   `PddbStore::with_pddb_backend()` in main.rs (the construction
-#   point is feature-gated). Activating this on hosted is a no-op;
-#   the cfg in `presage-store-pddb/src/backend_pddb.rs` is gated to
-#   `target_os = "xous"`.
-# - `probe-pddb-real` is a downstream "smoke the backend" mode that,
-#   on top of `pddb-real`, drives a single put/get/delete cycle in
-#   main() and logs the result.
+# `pddb-real` swaps `PddbStore::with_mock_backend()` for
+# `PddbStore::with_pddb_backend()` in main.rs (the construction
+# point is feature-gated). Activating this on hosted is a no-op;
+# the cfg in `presage-store-pddb/src/backend_pddb.rs` is gated to
+# `target_os = "xous"`.
+#
+# The former `probe-pddb-real` and `probe-bulk-ab` companion features
+# (auto-firing diagnostic probes after worker spawn) were removed on
+# 2026-05-14 — they raced with xous-names server registration during
+# boot and crashed Precursor PVT2 hardware with a `ServerNotFound`
+# cascade. The bulk-write A/B benchmark now lives in shellchat as
+# `pddb bulk_probe`. See
+# research/2026-05-14-shellchat-probe-results.md.
 pddb-real = ["presage-store-pddb/pddb-backend"]
-probe-pddb-real = ["pddb-real"]
+
+# Probe that exercises `BufferingBackend` + `BatchGuard` against a
+# `MockBackend` (no real PDDB required). Drives a synthetic
+# "send-shaped" sequence — multiple writes through Store traits
+# wrapped in a batch scope — and logs UART lines for the
+# `xas-send-batch.robot` Renode test. Validates the abstraction
+# compiles for rv32 and works under the real xous async runtime.
+# Safe to enable on hardware: does NOT touch real PDDB, only the
+# in-memory MockBackend.
+probe-send-batch = []
 
 # Hardware auto-link probe.
 # When enabled (rv32-xous only), main() fires Cmd::LinkDevice after

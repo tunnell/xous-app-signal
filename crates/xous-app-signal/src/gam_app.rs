@@ -581,28 +581,21 @@ impl App {
         write!(
             out,
             "Help\n\n\
-             xas — Signal client for\n\
-             Precursor (Xous OS).\n\
+             xas — Signal client for Precursor (Xous OS). \
              Status: alpha.\n\n\
-             Wi-Fi (do this first, in\n\
-             shellchat, before opening\n\
-             xas):\n\
+             Wi-Fi (do this first, in shellchat, before opening xas):\n\
                wlan off\n\
                wlan on\n\
                ssid scan\n\
-               wlan status   (until\n\
-                 'Connected')\n\
+               wlan status   (until 'Connected')\n\
                net ping 1.1.1.1\n\
-             Use one SSID only — no\n\
-             roaming support yet.\n\n\
+             Use one SSID only — no roaming support yet.\n\n\
              Known limits:\n\
               - Send may fail (WS keepalive)\n\
               - No group chats\n\
               - No images / attachments\n\
               - No history scroll / search\n\n\
-             File a bug:\n\
-             github.com/tunnell/\n\
-              xous-app-signal/issues\n\n\
+             File a bug: github.com/tunnell/xous-app-signal/issues\n\n\
              Full FAQ: see FAQ.md in repo.\n\n\
              Press Enter to return."
         )
@@ -614,20 +607,15 @@ impl App {
             out,
             "No internet\n\n\
              {}\n\n\
-             Connect Wi-Fi from\n\
-             shellchat (run there,\n\
-             not here):\n\n\
+             Connect Wi-Fi from shellchat (run there, not here):\n\n\
                wlan off\n\
                wlan on\n\
                ssid scan\n\
-               wlan status   (until\n\
-                 'Connected')\n\
+               wlan status   (until 'Connected')\n\
                net ping 1.1.1.1\n\n\
-             2.4 GHz networks only —\n\
-             5 GHz isn't supported.\n\
-             Use a saved SSID, or set\n\
-             one with `wlan setssid`\n\
-             and `wlan setpass`.\n\n\
+             2.4 GHz networks only — 5 GHz isn't supported. \
+             Use a saved SSID, or set one with `wlan setssid` and \
+             `wlan setpass`.\n\n\
              Press Enter to retry.",
             reason
         )

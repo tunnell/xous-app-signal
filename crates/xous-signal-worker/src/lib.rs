@@ -596,7 +596,7 @@ async fn handle_link_device(
     log::info!("worker/link: link_secondary_device returned");
 
     match link_result {
-        Ok(mut manager) => {
+        Ok(manager) => {
             let data = manager.registration_data();
             let device_name = data.device_name.clone().unwrap_or_default();
             let aci = data.service_ids.aci.to_string();
@@ -1322,6 +1322,9 @@ async fn handle_send(
     use presage::store::ContentsStore;
 
     let timestamp = send.timestamp;
+    let _perf_handle_send_start = std::time::Instant::now();
+    log::info!("perf/cold-send: START ts={} body_len={}", timestamp, send.body.len());
+    log::info!("perf/send: handle_send entry ts={} body_len={}", timestamp, send.body.len());
     log::info!(
         "worker/send: handle_send entered; recipient_raw={:?} body_len={} ts={}",
         send.recipient,
@@ -1433,12 +1436,44 @@ async fn handle_send(
         std::time::Duration::from_secs(secs)
     }
 
+    // Clone the store handle so we can open a send-time batch
+    // alongside the `&mut manager` borrow needed for `send_message`.
+    // The clone is shallow (Arc-based) — it shares the same
+    // `BufferingBackend` so begin_send_batch on the clone toggles
+    // the same buffer state the Store-trait impls reach through
+    // `manager.store().backend`.
+    let store_for_batch = manager.store().clone();
+
     let mut last_err: Option<String> = None;
     for attempt in 1..=SEND_MAX_ATTEMPTS {
         log::info!(
             "worker/send: attempt {}/{} ts={}",
             attempt, SEND_MAX_ATTEMPTS, timestamp,
         );
+
+        // Open a send-time write batch. Each attempt gets its own
+        // batch scope; on retry the previous attempt's guard has
+        // already dropped (abort = no replay).
+        //
+        // `begin_send_batch` returns `Ok(None)` for stores built
+        // without buffering (e.g. the MockBackend used in some
+        // hosted tests); in that case writes pass through as
+        // before. Treat begin errors as a hard failure — they only
+        // happen if a nested batch is requested, which is a logic
+        // bug worth surfacing.
+        let batch_guard = match store_for_batch.begin_send_batch() {
+            Ok(g) => g,
+            Err(e) => {
+                log::error!("worker/send: begin_send_batch failed: {}", e);
+                let _ = event_tx
+                    .send(Event::SendError {
+                        reason: format!("internal: begin_send_batch: {e}"),
+                        timestamp: Some(timestamp),
+                    })
+                    .await;
+                return;
+            }
+        };
 
         // catch_unwind so a panic inside libsignal/presage's send path
         // doesn't kill manager_task. AssertUnwindSafe is needed because
@@ -1448,11 +1483,21 @@ async fn handle_send(
         // subsequent send returns "manager task died") is worse. The
         // surfaced panic message goes to the UI as a normal SendError.
         let pipeline_start = std::time::Instant::now();
+        log::info!(
+            "perf/send: batch_scope_enter ts={} attempt={} buffered={}",
+            timestamp, attempt,
+            batch_guard.as_ref().map(|g| g.buffered_len()).unwrap_or(0)
+        );
         let send_fut = std::panic::AssertUnwindSafe(
             manager.send_message(recipient.clone(), content_body.clone(), timestamp),
         );
         let outcome = send_fut.catch_unwind().await;
         let pipeline_ms = pipeline_start.elapsed().as_millis() as u64;
+        log::info!(
+            "perf/send: manager.send_message returned ts={} attempt={} pipeline_ms={} result={:?}",
+            timestamp, attempt, pipeline_ms,
+            match &outcome { Ok(Ok(())) => "ok", Ok(Err(_)) => "err", Err(_) => "panic" }
+        );
         let result_kind = match &outcome {
             Ok(Ok(())) => "ok",
             Ok(Err(_)) => "err",
@@ -1465,7 +1510,62 @@ async fn handle_send(
 
         match outcome {
             Ok(Ok(())) => {
+                // Flush sessions FIRST, then commit the batch. The
+                // BufferingBackend that sits in front of PddbBackend
+                // (for `pddb-real` builds) intercepts `put` while a
+                // batch is open, so calling `flush_sessions` here
+                // routes its read-modify-write through the same
+                // buffer as the other in-flight writes. Commit then
+                // replays everything via a single
+                // `inner.put_batch` — which the upstream PDDB packs
+                // into one `Opcode::WriteKeyBatch` IPC with one
+                // trailing basis sync.
+                //
+                // Before this reorder, `flush_sessions` ran after
+                // `commit()`, so its writes went directly through
+                // `PddbBackend::put` and got chunked into N
+                // `Opcode::WriteKey` IPCs (one per ≤4072-byte
+                // KeyHandle::write chunk; refs #21 for the iter-2
+                // UART evidence). The ratchet bundle is the
+                // largest single write per send, so this is the
+                // load-bearing reorder.
+                //
+                // Order still puts the durability barrier before
+                // `SendComplete` is emitted, matching the previous
+                // semantics: the ratchet step that pairs with the
+                // just-sent message remains durable before the UI
+                // is told the send succeeded.
+                let _perf_pre_flush = std::time::Instant::now();
+                if let Err(e) = store_for_batch.flush_sessions() {
+                    log::warn!("worker/send: flush_sessions inside batch failed: {}", e);
+                }
+                let _perf_flush_ms = _perf_pre_flush.elapsed().as_millis();
+
+                let _perf_pre_commit = std::time::Instant::now();
+                let _perf_buffered_at_commit = batch_guard.as_ref().map(|g| g.buffered_len()).unwrap_or(0);
+                if let Some(g) = batch_guard {
+                    match g.commit() {
+                        Ok(n) => log::info!(
+                            "worker/send: batch committed (sessions inside) ts={} (n={})",
+                            timestamp, n
+                        ),
+                        Err(e) => log::warn!(
+                            "worker/send: batch commit failed ts={}: {}",
+                            timestamp, e
+                        ),
+                    }
+                }
+                let _perf_commit_ms = _perf_pre_commit.elapsed().as_millis();
+                log::info!(
+                    "perf/send: batch_scope_commit ts={} attempt={} buffered_at_commit={} flush_sessions_ms={} commit_ms={}",
+                    timestamp, attempt, _perf_buffered_at_commit,
+                    _perf_flush_ms, _perf_commit_ms
+                );
                 log::info!("worker/send: SendComplete ts={} (attempt {})", timestamp, attempt);
+                log::info!(
+                    "perf/cold-send: END ts={} attempt={} handle_send_total_ms={}",
+                    timestamp, attempt, _perf_handle_send_start.elapsed().as_millis()
+                );
                 let _ = event_tx.send(Event::SendComplete { timestamp }).await;
                 return;
             }

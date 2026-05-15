@@ -16,11 +16,10 @@ use presage::libsignal_service::protocol::{
 };
 use presage::libsignal_service::push_service::DEFAULT_DEVICE_ID;
 
-use super::session_store::{SessionBundle, session_key};
-use super::{
-    PddbProtocolStore, backend_get_json_protocol, backend_put_json_protocol, dict_session,
-    protocol_backend_err,
+use super::session_store::{
+    backend_get_session_bundle_protocol, backend_put_session_bundle_protocol, session_key,
 };
+use super::{PddbProtocolStore, dict_session, protocol_backend_err};
 
 #[async_trait(?Send)]
 impl SessionStoreExt for PddbProtocolStore {
@@ -48,12 +47,9 @@ impl SessionStoreExt for PddbProtocolStore {
         }
 
         let dict = dict_session(self.identity);
-        if let Some(bundle) = backend_get_json_protocol::<SessionBundle>(
-            &*self.store.backend,
-            &dict,
-            &uuid,
-            "decode session bundle",
-        )? {
+        if let Some(bundle) =
+            backend_get_session_bundle_protocol(&*self.store.backend, &dict, &uuid)?
+        {
             for dev in bundle.keys() {
                 if *dev != main {
                     device_ids.push(*dev);
@@ -88,12 +84,8 @@ impl SessionStoreExt for PddbProtocolStore {
         // bundle becomes empty, delete the whole key so a future
         // `list_keys` doesn't return a stale empty entry.
         let dict = dict_session(self.identity);
-        let Some(mut bundle) = backend_get_json_protocol::<SessionBundle>(
-            &*self.store.backend,
-            &dict,
-            &key.1,
-            "decode session bundle",
-        )?
+        let Some(mut bundle) =
+            backend_get_session_bundle_protocol(&*self.store.backend, &dict, &key.1)?
         else {
             return Ok(());
         };
@@ -106,12 +98,11 @@ impl SessionStoreExt for PddbProtocolStore {
                 .delete(&dict, &key.1)
                 .map_err(protocol_backend_err)?;
         } else {
-            backend_put_json_protocol(
+            backend_put_session_bundle_protocol(
                 &*self.store.backend,
                 &dict,
                 &key.1,
                 &bundle,
-                "encode session bundle",
             )?;
         }
         Ok(())
@@ -144,12 +135,9 @@ impl SessionStoreExt for PddbProtocolStore {
             });
         }
 
-        if let Some(bundle) = backend_get_json_protocol::<SessionBundle>(
-            &*self.store.backend,
-            &dict,
-            &uuid,
-            "decode session bundle",
-        )? {
+        if let Some(bundle) =
+            backend_get_session_bundle_protocol(&*self.store.backend, &dict, &uuid)?
+        {
             for dev in bundle.keys() {
                 affected.insert(*dev);
             }

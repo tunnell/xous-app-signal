@@ -18,8 +18,21 @@ presage = { git = "https://github.com/whisperfish/presage", rev = "600c4ed" }
 # on-disk format is debuggable from `pddbcli` dumps. Same choice
 # presage-store-sqlite makes; cost is small for the < 1 KiB state blobs
 # we serialize.
+#
+# `SessionBundle` is the exception — it's the hot, large blob written
+# per receive (`HashMap<u32, Vec<u8>>` where the `Vec<u8>` is
+# libsignal's already-binary `SessionRecord::serialize()` output). JSON
+# encodes `Vec<u8>` as a decimal-int array (`[1,2,3,...]`) which
+# inflates the bytes 3-4×, pushing a single logical `put` over the
+# per-IPC chunk size so it splits into ~6 chunked `Opcode::WriteKey`
+# IPCs (each paying its own server-side basis sync). We route only
+# the SessionBundle through bincode (compact binary, already in the
+# transitive dep tree via libsignal); legacy JSON blobs already on
+# disk are detected and decoded on read, then re-written as bincode.
+# See `protocol/session_store.rs::{serialize,deserialize}_session_bundle`.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+bincode = "1"
 
 # Used to derive the per-uuid+profilekey lookup key for the
 # `signal.profiles` dict. Same pattern as presage-store-sled

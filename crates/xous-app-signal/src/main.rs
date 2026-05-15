@@ -152,8 +152,22 @@ fn main() -> std::io::Result<()> {
     #[cfg(all(feature = "probe-pddb", target_os = "xous"))]
     probe_pddb();
 
-    #[cfg(all(feature = "probe-pddb-real", target_os = "xous"))]
-    probe_pddb_real();
+    #[cfg(all(feature = "probe-send-batch", target_os = "xous"))]
+    probe_send_batch();
+
+    // NOTE: the former `probe-pddb-real` and `probe-bulk-ab` auto-fire
+    // probes have been removed. Hitting `presage_store_pddb::PddbBackend::
+    // connect()` immediately after `run_signal_worker()` raced with
+    // xous-names server registration during boot and produced a
+    // `ServerNotFound` cascade in unrelated services (llio, trng,
+    // modals, susres) on Precursor PVT2 hardware, eventually crashing
+    // the boot with a watchdog reboot loop. Hardware evidence:
+    // 2026-05-13. xous-names itself documents this race —
+    // `api/xous-api-names/src/lib.rs:124`.
+    //
+    // The bulk-write A/B benchmark now lives in shellchat as `pddb
+    // bulk_probe [N]`, exercised by the user AFTER PIN entry and PDDB
+    // mount. See research/2026-05-14-shellchat-probe-results.md.
 
     // PDDB put-truncate smoke test (refs #14). Runtime-gated; exits
     // 0 PASS / 1 FAIL so a shell wrapper can assert the regression.
@@ -388,82 +402,137 @@ fn probe_pddb() {
     log::info!("probe-pddb: probe done in {:?}", start.elapsed());
 }
 
-/// Put/get/list/delete/list cycle against the real PDDB-backed
-/// `KvBackend`. Verifies the buffered IPC path (the `lend_mut`
-/// calls that the scalar-only `probe-pddb` couldn't exercise)
-/// actually works on the wire.
+
+/// Exercise `BufferingBackend` + `BatchGuard` against a fresh
+/// `MockBackend` and log UART lines for the `xas-send-batch.robot`
+/// Renode test.
 ///
-/// Requires the image to be built with `pddb/autobasis` so PDDB is
-/// pre-mounted on boot — otherwise every op returns `NotMounted`
-/// and we just log that finding.
+/// Why MockBackend rather than the real PDDB: the real backend
+/// can't actually mount in Renode (gen1 `Opcode::TryMount` requires
+/// rootkeys + password modal which isn't injected). This probe
+/// exists to validate that the abstraction compiles for rv32 and
+/// runs under the real xous executor — the wrapper's semantics are
+/// the same regardless of inner backend. The host-side
+/// `cargo test -p presage-store-pddb` covers the same semantics in
+/// 15 tests; this probe adds rv32 build + boot + run coverage on
+/// top.
 ///
-/// All outcomes are logged through `xous-api-log`; the Robot test
-/// at `tests/renode/xas-pddb-real-probe.robot` waits on each line.
-#[cfg(all(feature = "probe-pddb-real", target_os = "xous"))]
-fn probe_pddb_real() {
+/// Synthetic "send-shaped" sequence:
+///   1. Construct BufferingBackend wrapping a fresh MockBackend.
+///   2. begin_batch.
+///   3. Three writes simulating a cold send: recipient identity,
+///      sender certificate, outbound message.
+///   4. Intra-batch read-through: verify the buffer is visible.
+///   5. Commit. Verify counts.
+///   6. Post-commit reads: verify durability through the inner.
+///   7. Abort path: begin a second batch, write, drop without
+///      commit, verify the writes are gone.
+#[cfg(all(feature = "probe-send-batch", target_os = "xous"))]
+fn probe_send_batch() {
+    use std::sync::Arc;
     use std::time::Instant;
 
-    log::info!("probe-pddb-real: starting put/get/delete cycle");
+    use presage_store_pddb::{BufferingBackend, KvBackend, MockBackend};
+
+    log::info!("probe-send-batch: starting");
     let start = Instant::now();
 
-    let backend = match presage_store_pddb::PddbBackend::connect() {
-        Ok(b) => b,
+    let backend = BufferingBackend::new(Arc::new(MockBackend::new()));
+    log::info!("probe-send-batch: backend constructed");
+
+    // --- 1. Begin a batch.
+    let guard = match backend.begin_batch() {
+        Ok(g) => g,
         Err(e) => {
-            log::warn!("probe-pddb-real: connect FAIL: {}", e);
+            log::warn!("probe-send-batch: FAIL: begin_batch error: {}", e);
             return;
         }
     };
-    log::info!("probe-pddb-real: connected in {:?}, mounted={}", start.elapsed(), backend.is_mounted());
+    if !backend.is_batching() {
+        log::warn!("probe-send-batch: FAIL: is_batching false after begin");
+        return;
+    }
+    log::info!("probe-send-batch: batch begin OK in {:?}", start.elapsed());
 
-    use presage_store_pddb::KvBackend;
-    let dict = "xas.probe";
-    let key = "hello";
-    let value: &[u8] = b"world";
-
-    // Keep going even if individual ops fail. The failure mode
-    // itself is informative (which is what the probe is for);
-    // aborting early masks downstream IPC behavior we want to see.
+    // --- 2. Three writes simulating a cold-send protocol-store
+    //        update.
     let phase = Instant::now();
-    match backend.put(dict, key, value) {
-        Ok(()) => log::info!("probe-pddb-real: put OK in {:?}", phase.elapsed()),
-        Err(e) => log::warn!("probe-pddb-real: put FAIL after {:?}: {}", phase.elapsed(), e),
+    backend.put("signal.protocol.aci.identity", "peer.1", b"identity-bytes").unwrap();
+    backend.put("signal.state", "sender_certificate", b"sender-cert-bytes").unwrap();
+    backend
+        .put("signal.contents.thread.peer", "00000000000186A0", b"hello world")
+        .unwrap();
+    let buffered = guard.buffered_len();
+    log::info!(
+        "probe-send-batch: 3 writes buffered in {:?} (count={})",
+        phase.elapsed(),
+        buffered
+    );
+    if buffered != 3 {
+        log::warn!("probe-send-batch: FAIL: expected 3 buffered, got {}", buffered);
+        return;
     }
 
-    let phase = Instant::now();
-    match backend.get(dict, key) {
-        Ok(Some(v)) => log::info!(
-            "probe-pddb-real: get OK len={} match={} in {:?}",
-            v.len(),
-            v == value,
-            phase.elapsed()
-        ),
-        Ok(None) => log::warn!("probe-pddb-real: get returned None unexpectedly"),
-        Err(e) => log::warn!("probe-pddb-real: get FAIL: {}", e),
+    // --- 3. Intra-batch read-through.
+    let read = backend.get("signal.protocol.aci.identity", "peer.1").unwrap();
+    if read.as_deref() != Some(b"identity-bytes".as_slice()) {
+        log::warn!("probe-send-batch: FAIL: intra-batch read mismatch");
+        return;
     }
+    log::info!("probe-send-batch: intra-batch read-through OK");
 
+    // --- 4. Commit.
     let phase = Instant::now();
-    match backend.list_keys(dict) {
-        Ok(keys) => log::info!("probe-pddb-real: list_keys OK {:?} in {:?}", keys, phase.elapsed()),
-        Err(e) => log::warn!("probe-pddb-real: list_keys FAIL: {}", e),
-    }
-
-    let phase = Instant::now();
-    match backend.delete(dict, key) {
-        Ok(()) => log::info!("probe-pddb-real: delete OK in {:?}", phase.elapsed()),
-        Err(e) => log::warn!("probe-pddb-real: delete FAIL: {}", e),
-    }
-
-    let phase = Instant::now();
-    match backend.list_keys(dict) {
-        Ok(keys) if keys.is_empty() => {
-            log::info!("probe-pddb-real: post-delete list empty in {:?}", phase.elapsed());
+    let n = match guard.commit() {
+        Ok(n) => n,
+        Err(e) => {
+            log::warn!("probe-send-batch: FAIL: commit error: {}", e);
+            return;
         }
-        Ok(keys) => log::warn!("probe-pddb-real: post-delete list still has {:?}", keys),
-        Err(e) => log::warn!("probe-pddb-real: post-delete list FAIL: {}", e),
+    };
+    if backend.is_batching() {
+        log::warn!("probe-send-batch: FAIL: still batching after commit");
+        return;
     }
+    log::info!(
+        "probe-send-batch: commit OK in {:?} (replayed {})",
+        phase.elapsed(),
+        n
+    );
 
-    log::info!("probe-pddb-real: probe done in {:?}", start.elapsed());
+    // --- 5. Post-commit reads.
+    let r1 = backend.get("signal.protocol.aci.identity", "peer.1").unwrap();
+    let r2 = backend.get("signal.state", "sender_certificate").unwrap();
+    let r3 = backend.get("signal.contents.thread.peer", "00000000000186A0").unwrap();
+    if r1.as_deref() != Some(b"identity-bytes".as_slice())
+        || r2.as_deref() != Some(b"sender-cert-bytes".as_slice())
+        || r3.as_deref() != Some(b"hello world".as_slice())
+    {
+        log::warn!("probe-send-batch: FAIL: post-commit read mismatch");
+        return;
+    }
+    log::info!("probe-send-batch: post-commit reads match");
+
+    // --- 6. Abort path: open a second batch, write, drop without
+    //        commit, verify nothing landed.
+    {
+        let _abort_guard = backend.begin_batch().unwrap();
+        backend.put("signal.state", "sender_certificate", b"transient-cert").unwrap();
+        // _abort_guard drops at end of block without commit -> abort.
+    }
+    let after_abort = backend.get("signal.state", "sender_certificate").unwrap();
+    if after_abort.as_deref() != Some(b"sender-cert-bytes".as_slice()) {
+        log::warn!(
+            "probe-send-batch: FAIL: abort didn't restore inner ({:?})",
+            after_abort
+        );
+        return;
+    }
+    log::info!("probe-send-batch: abort path OK");
+
+    log::info!("probe-send-batch: probe done in {:?}", start.elapsed());
 }
+
 
 /// Hardware auto-link probe.
 ///
