@@ -1,24 +1,22 @@
 :name: xas-smoke
 
-# Stage 9b-deploy Phase B — Renode boot script for the xas Signal
-# client smoke test.
+# Renode boot script for the xas Signal client smoke test.
 #
-# This script delegates to xous-core's `betrusted.resc` for all
-# SoC peripheral wiring, kernel + image load, and reset. The image
-# at xous-core/target/.../xous.img has the xas binary bundled (PID
-# 27 per the build output, registered via apps/manifest.json's
-# `"xas"` entry). xas starts at boot like every other PID, so the
-# `log::info!("xas: starting")` line at the top of `main()` appears
-# on the UART without any user interaction — which is what the
-# Robot test asserts on.
+# Delegates to xous-core's `betrusted.resc` for all SoC peripheral
+# wiring, kernel + image load, and reset. The xas binary is bundled
+# in the image via apps/manifest.json's `"xas"` entry. xas starts
+# at boot like every other PID, so the `log::info!("xas: starting")`
+# line at the top of `main()` appears on the UART without any user
+# interaction — which is what the Robot test asserts on.
 #
-# Dependencies (verified at Phase B build time):
+# Build dependencies:
 #   - xous-core's xtask has been run with our prebuilt ELF:
 #       cargo xtask app-image xas:$XAS_DIST_DIR/xas --git-describe v0.9.21-0-g0000000
 #   - The resulting `loader.bin` and `xous.img` live in
 #       xous-core/target/riscv32imac-unknown-xous-elf/release/
 #   - The xous-core repo path is at the location the variable below
-#     points to. Override via Robot test's setup or `renode -e $xous_core_root=@/other/path` if needed.
+#     points to. Override via the Robot test's setup or
+#     `renode -e $xous_core_root=@/other/path` if needed.
 
 # --- Variables ---
 $xous_core_root ?= @/home/tunnell/precursor-signal/repos/xous-core
@@ -29,4 +27,4 @@ $xous_core_root ?= @/home/tunnell/precursor-signal/repos/xous-core
 # `runMacro $reset` which loads loader.bin + xous.img and sets PC.
 include $xous_core_root/emulation/betrusted.resc
 
-echo "xas-smoke: machine ready (xas bundled as PID 27)"
+echo "xas-smoke: machine ready (xas bundled per apps/manifest.json)"

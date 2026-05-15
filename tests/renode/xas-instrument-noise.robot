@@ -1,7 +1,7 @@
 *** Comments ***
-iter-1 instrumentation noise smoke.
+Performance-instrumentation smoke test.
 
-Confirms that the `perf/...` log lines added in iter-1 actually
+Confirms that the `perf/...` log lines compiled into xas + xous-core
 fire during boot AND don't crash the kernel/app. Specifically,
 this proves the PDDB-side instrumentation reaches the
 `Requesting login password` line (so all the per-opcode timing
@@ -43,8 +43,8 @@ Should Boot With Perf Instrumentation Without Crashing
     Start Emulation
     # Boot reaches xas + PDDB password prompt: same regression-guard
     # assertion as `xas-bulk-write-boot.robot`. If any of the
-    # iter-1 perf/* log lines panics on rv32 (e.g. format-string
-    # mismatch, missing import), boot wedges short of this line.
+    # perf/* log lines panics on rv32 (e.g. format-string mismatch,
+    # missing import), boot wedges short of this line.
     Wait For Line On Uart    xas: starting
     Wait For Line On Uart    xas: worker started
     Wait For Line On Uart    Requesting login password
@@ -57,4 +57,4 @@ Should Boot With Perf Instrumentation Without Crashing
     # prompt" assertion above — which proves all instrumented
     # functions compiled correctly and their code paths are
     # reachable. Real perf-line coverage comes from the hardware
-    # cold-send run; see the iter-1 handoff doc.
+    # cold-send run.

@@ -1,21 +1,20 @@
 *** Comments ***
-Stage 13a — exploratory network reachability probe.
+Exploratory network-reachability probe.
 
 Boots the same Xous image as xas-smoke.robot, but expects the
-binary to have been built with --features probe-flow. The probe
+binary to have been built with `--features probe-flow`. The probe
 fires after `xas: worker started` and runs three TCP-connect
 attempts: Google DNS (8.8.8.8:53), Cloudflare HTTPS (1.1.1.1:443),
 and Signal prod (chat.signal.org:443). The Robot test only waits
 on the probe's `done` line — the per-probe outcomes are captured
-in the renode-test log either way (xas-probe.fail0.log on fail,
-or via the Hold Output keyword pattern below for success).
+in the renode-test log either way (xas-probe.fail0.log on fail).
 
 Run via:    renode-test tests/renode/xas-probe.robot
 
 Prerequisites:
   - Same as xas-smoke.robot (Renode, image with xas bundled).
-  - The bundled xas binary must be built with `cargo build
-    --features probe-flow` and then redist'd via the manual flow:
+  - The bundled xas binary must be built with `--features
+    probe-flow` and then redist'd via the manual flow:
         cargo build --target=riscv32imac-unknown-xous-elf --release \
                     -p xous-app-signal --features probe-flow
         cp target/riscv32imac-unknown-xous-elf/release/xas \

@@ -1,12 +1,11 @@
 *** Comments ***
-xas Stage 9b-deploy Phase B smoke test (Robot Framework + Renode).
+xas boot-smoke test (Robot Framework + Renode).
 
 Boots a Xous image containing the xas Signal client app (bundled
-into xous-core as PID 27 via the `xas` entry in apps/manifest.json
-and apps/i18n.json) and asserts on UART output. The two log lines
-asserted come from log::info! calls at the top of xas's main()
-function. Like every other Xous PID, xas starts at boot — no user
-interaction required to reach the asserted lines.
+into xous-core via the `xas` entry in apps/manifest.json) and
+asserts that the two log lines emitted at the top of xas's main()
+appear on the UART console. Like every other Xous PID, xas starts
+at boot — no user interaction required to reach the asserted lines.
 
 Run via:    renode-test tests/renode/xas-smoke.robot
             (or `cargo xtask renode-test` from the workspace root,
@@ -14,8 +13,8 @@ Run via:    renode-test tests/renode/xas-smoke.robot
              rebuilds the dist artifact first)
 
 Prerequisites:
-  - Renode 1.16+ on PATH (verified: 1.16.1.4499 in this dev env).
-  - A Xous image with xas bundled. Build via Phase B step 3:
+  - Renode 1.16+ on PATH.
+  - A Xous image with xas bundled. Build via:
         cd ~/precursor-signal/repos/xous-core
         cargo xtask app-image \
             xas:~/precursor-signal/xous-app-signal/dist/xas-rv32/xas \
