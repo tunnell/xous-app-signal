@@ -1234,7 +1234,6 @@ dependencies = [
  "qrcode",
  "rkyv 0.8.16",
  "sha2",
- "subtle",
  "trng",
  "tts-frontend",
  "utralib",
@@ -2886,6 +2885,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "bincode",
  "chrono",
  "futures-lite",
  "phonenumber",

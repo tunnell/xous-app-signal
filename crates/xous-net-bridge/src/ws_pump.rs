@@ -151,6 +151,7 @@ fn reader_loop(
         // letting the writer thread acquire it (so periodic
         // libsignal-service-rs keepalives can actually go out), then
         // re-loop.
+        let _perf_read_start = std::time::Instant::now();
         let msg = {
             let mut guard = match ws.lock() {
                 Ok(g) => g,
@@ -161,6 +162,7 @@ fn reader_loop(
             };
             guard.read()
         };
+        let _perf_read_ms = _perf_read_start.elapsed().as_millis();
 
         let (kind, payload_len, frame) = match msg {
             Ok(Message::Binary(b)) => {
@@ -227,6 +229,10 @@ fn reader_loop(
         // Successful (or err-as-frame) reception: bump and log.
         frame_count += 1;
         tracing::info!(frame_count, kind, payload_len, "ws reader: recv frame");
+        tracing::info!(
+            "perf/net: ws recv kind={} payload_len={} read_ms={}",
+            kind, payload_len, _perf_read_ms
+        );
 
         if tx.send_blocking(frame).is_err() {
             // Receiver dropped; close the connection.
@@ -264,6 +270,7 @@ fn writer_loop(ws: Arc<Mutex<WebSocket<RustlsStream>>>, rx: async_channel::Recei
             })),
         };
 
+        let _perf_send_start = std::time::Instant::now();
         let send_result = {
             let mut guard = match ws.lock() {
                 Ok(g) => g,
@@ -274,13 +281,30 @@ fn writer_loop(ws: Arc<Mutex<WebSocket<RustlsStream>>>, rx: async_channel::Recei
             };
             guard.send(msg)
         };
+        let _perf_send_ms = _perf_send_start.elapsed().as_millis();
 
         match send_result {
             Ok(()) => {
                 tracing::info!(frame_count, kind, payload_len, "ws writer: send ok");
+                tracing::info!(
+                    "perf/net: ws send kind={} payload_len={} send_ms={}",
+                    kind, payload_len, _perf_send_ms
+                );
             }
             Err(e) => {
-                tracing::warn!(frame_count, kind, ?e, "ws writer: send failed, exiting");
+                // Distinguish OS-level write-timeout (i.e. `set_write_timeout`
+                // firing on the inner TCP socket — refs #16) from protocol
+                // errors so future hardware traces can grep for write-timeout
+                // firings.
+                let write_timed_out = matches!(&e,
+                    tungstenite::Error::Io(io_err)
+                        if io_err.kind() == std::io::ErrorKind::TimedOut
+                            || io_err.kind() == std::io::ErrorKind::WouldBlock);
+                tracing::warn!(frame_count, kind, ?e, write_timed_out, "ws writer: send failed, exiting");
+                tracing::info!(
+                    "perf/net: ws send_err kind={} payload_len={} send_ms={} write_timed_out={} err={:?}",
+                    kind, payload_len, _perf_send_ms, write_timed_out, e
+                );
                 break;
             }
         }
