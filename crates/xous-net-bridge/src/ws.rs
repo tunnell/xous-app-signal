@@ -20,12 +20,31 @@ use tungstenite::protocol::WebSocket;
 
 use crate::tls::{RustlsStream, tls_connect};
 
-/// Open a WSS connection to `host:port`+`path`, validating the server's
-/// certificate against the supplied root CA store. Returns the WebSocket
-/// and the server's HTTP handshake response.
+/// Open a WSS connection to `wss://host:port/path` and return the
+/// established [`WebSocket`] plus the server's HTTP-upgrade
+/// [`Response`].
 ///
-/// For Signal endpoints, pass [`crate::signal_production_roots()`]; for
-/// general endpoints, [`crate::webpki_roots()`].
+/// `roots` is the *complete* trust anchor set — system roots are not
+/// consulted. For Signal endpoints, pass [`crate::signal_production_roots`];
+/// for general public endpoints, [`crate::webpki_roots`]. Passing the
+/// wrong store silently downgrades the security posture; see
+/// [`crate::tls::build_tls_config`] for the full caveat.
+///
+/// # ALPN
+///
+/// Always offers `http/1.1`. Signal's chat WS endpoint expects this;
+/// no current Signal-Server endpoint negotiates anything else over a
+/// WSS upgrade.
+///
+/// # Errors
+///
+/// - Invalid URL components or [`IntoClientRequest`] failures surface
+///   as [`io::Error::other`].
+/// - TLS connect / handshake failures bubble through from
+///   [`tls_connect`] unchanged.
+/// - Tungstenite client errors (HTTP status != 101, malformed upgrade
+///   response, etc.) are wrapped as [`io::Error::other`] with the
+///   tungstenite display string.
 pub fn ws_connect(
     host: &str,
     port: u16,

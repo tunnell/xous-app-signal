@@ -84,41 +84,65 @@ use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, NamedGroup, RootCertStore, StreamOwned};
 
 /// A handshake-completed sync TLS stream over TCP.
+///
+/// Returned by [`tls_connect`] / [`tls_connect_with_config`]. The stream
+/// is `Read + Write` (via rustls's [`StreamOwned`]), is plaintext on
+/// the application side, ciphertext on the wire side, and carries the
+/// full [`ClientConnection`] state (resumption ticket, cipher suite,
+/// half-close state). Drop terminates the connection abruptly; callers
+/// that need a clean TCP close should issue an explicit close-notify
+/// via the inner `ClientConnection` first.
 pub type RustlsStream = StreamOwned<ClientConnection, TcpStream>;
 
-/// Counting wrapper around the rustls `ClientSessionMemoryCache(8)` used by
-/// [`build_tls_config`]. Forwards every `ClientSessionStore` method to the
-/// inner cache verbatim; on top of that it increments a monotonically-
-/// increasing counter every time `take_tls13_ticket` returns `Some` (i.e.,
-/// a cached TLS 1.3 session ticket was consumed to offer PSK resumption on
-/// an outgoing handshake).
+/// Counting wrapper around [`ClientSessionMemoryCache`], installed by
+/// [`build_tls_config`].
 ///
-/// `tls_connect_with_config` snapshots the counter immediately before
-/// driving `complete_io`, then again after; if the second snapshot is
-/// greater than the first, this connection's handshake consumed a ticket
-/// and we log `was_resumed=true`. The single global counter means
-/// concurrent handshakes against the same `Arc<ClientConfig>` can in
-/// principle mis-attribute resumption between connections — but xas only
-/// ever holds one `ClientConfig` at a time and the WS pump / HTTP poller
-/// connect to distinct hosts, so the race is theoretical.
+/// Forwards every [`ClientSessionStore`] method to the inner cache
+/// verbatim. On top of that it increments a monotonic counter every
+/// time `take_tls13_ticket` returns `Some` — i.e., a cached TLS 1.3
+/// session ticket was consumed to offer PSK resumption on an outgoing
+/// handshake.
 ///
-/// Why not the `peer_certificates()` heuristic that the iter-2 prototype
-/// used (commit f162828): per the TLS 1.3 spec
-/// (RFC 8446 §4.2.11), a server MAY still send a Certificate message on
-/// a resumed connection depending on its `psk_key_exchange_modes`. The
-/// observation "peer_certs > 0" therefore doesn't disprove resumption,
-/// only "peer_certs > 0 AND handshake_ms is full-handshake-shaped" does
-/// — and that's already covered by `handshake_ms`. A direct hook into
-/// the resumption store is unambiguous and removes one item from the
-/// interpretation matrix.
+/// [`tls_connect_with_config`] snapshots the counter immediately
+/// before driving the handshake, then again after, and logs
+/// `was_resumed=true` if the post snapshot is greater. A single global
+/// counter is shared across all hosts; concurrent handshakes against
+/// the same `Arc<ClientConfig>` can in principle mis-attribute
+/// resumption, but xas only ever holds one config and the WS pump /
+/// HTTP poller connect to distinct hosts in sequence, so the race is
+/// theoretical.
+///
+/// # Why a direct hook rather than a heuristic
+///
+/// Per RFC 8446 §4.2.11, a TLS 1.3 server MAY still send a Certificate
+/// message on a resumed connection depending on its
+/// `psk_key_exchange_modes`. The observation "peer certificates > 0"
+/// therefore does not disprove resumption — only the conjunction of
+/// "peer certs > 0 AND handshake_ms is full-handshake-shaped" does,
+/// and `handshake_ms` already captures that. A direct hook into the
+/// resumption store removes the interpretation matrix entirely.
+///
+/// # Why `AtomicUsize`, not `AtomicU64`
+///
+/// `rv32imac` (Precursor) lacks 64-bit atomics. A 32-bit counter wraps
+/// after ~4 billion handshakes; the device will never issue that many
+/// in its service life.
+///
+/// # Security note
+///
+/// This store holds opaque session-ticket bytes from rustls. The
+/// tickets are encrypted under server-side keys and reveal nothing
+/// about identity or content on inspection, but they ARE bearer tokens
+/// for the resumed PSK secret — an attacker with read access to
+/// process memory and an outbound connection to the same Signal
+/// endpoint could re-offer one. The store is process-memory-only and
+/// dropped on exit; tickets are never written to PDDB.
 pub struct CountingResumptionStore {
     inner: ClientSessionMemoryCache,
     /// Total `take_tls13_ticket(...) -> Some(...)` calls observed across
-    /// every host. Snapshotted by `tls_connect_with_config` for the
-    /// `was_resumed` diagnostic. `AtomicUsize` instead of `AtomicU64`
-    /// because `rv32imac` (Precursor target) lacks 64-bit atomics; the
-    /// 32-bit-on-rv32 counter would only wrap after ~4 billion
-    /// handshakes, far more than the device will ever issue.
+    /// every host. Snapshotted by [`tls_connect_with_config`] for the
+    /// `was_resumed` diagnostic. See the struct docs for the
+    /// `AtomicUsize`-vs-`AtomicU64` choice.
     take_some_count: AtomicUsize,
 }
 
@@ -131,7 +155,11 @@ impl CountingResumptionStore {
     }
 
     /// Monotonic count of `take_tls13_ticket(...) -> Some(...)` calls
-    /// observed across the lifetime of this store. Public for test access.
+    /// observed across the lifetime of this store.
+    ///
+    /// Intended for tests and the diagnostic snapshot in
+    /// [`tls_connect_with_config`]; not part of any production
+    /// decision-making.
     pub fn take_some_count(&self) -> usize {
         self.take_some_count.load(Ordering::Acquire)
     }
@@ -146,6 +174,10 @@ impl fmt::Debug for CountingResumptionStore {
     }
 }
 
+/// Every method except `take_tls13_ticket` is a verbatim forward to the
+/// inner [`ClientSessionMemoryCache`]. `take_tls13_ticket` additionally
+/// bumps [`CountingResumptionStore::take_some_count`] on a hit, which
+/// is the entire purpose of the wrapper.
 impl ClientSessionStore for CountingResumptionStore {
     fn set_kx_hint(&self, server_name: ServerName<'static>, group: NamedGroup) {
         self.inner.set_kx_hint(server_name, group)
@@ -185,34 +217,80 @@ impl ClientSessionStore for CountingResumptionStore {
     }
 }
 
-/// Active counting store, installed by [`build_tls_config`]. `OnceLock` so
-/// the first build wins; subsequent calls to `build_tls_config` keep using
-/// it (xas only ever builds one `ClientConfig`, so this is fine — the
-/// diagnostic just observes resumption activity across the whole
-/// process). Read by `tls_connect_with_config`'s before/after snapshot.
+/// Process-wide handle to the counting store installed by
+/// [`build_tls_config`].
 ///
-/// Tests that bypass `build_tls_config` (e.g. `tls_resumption.rs` which
-/// wires its own `Resumption::store`) leave this unset; the handshake log
-/// in that case reports `was_resumed=unknown` rather than `true`/`false`.
+/// `OnceLock` so the first build wins; subsequent calls to
+/// `build_tls_config` keep using it. xas only ever builds one
+/// `ClientConfig`, so the global is shared across every Signal endpoint
+/// the process touches in its lifetime. Read by
+/// [`tls_connect_with_config`]'s before/after handshake snapshot.
+///
+/// Tests that bypass [`build_tls_config`] (e.g. `tests/tls_resumption.rs`
+/// which wires its own `Resumption::store`) leave this unset; the
+/// handshake log in that case reports `was_resumed=unknown` rather than
+/// `true`/`false`.
 static ACTIVE_COUNTER: OnceLock<Arc<CountingResumptionStore>> = OnceLock::new();
 
-/// Test helper. Returns the global counter installed by `build_tls_config`,
-/// or `None` if no config has been built yet. Production code never reads
-/// this directly — `tls_connect_with_config` snapshots internally.
+/// Returns the global counter installed by [`build_tls_config`], or
+/// `None` if no config has been built yet.
+///
+/// Test-only entry point. Production code never reads this directly —
+/// [`tls_connect_with_config`] snapshots internally.
 #[doc(hidden)]
 pub fn active_counter_for_tests() -> Option<Arc<CountingResumptionStore>> {
     ACTIVE_COUNTER.get().cloned()
 }
 
-/// Build a `ClientConfig` once and share it across many `tls_connect_with_config`
-/// calls. The config carries an in-memory session-ticket cache; reusing the
-/// same `Arc<ClientConfig>` across reconnects to the same host is what enables
-/// TLS 1.3 session resumption (PSK ticket reuse instead of a full handshake
-/// every time). The default rustls 0.22 cache is `in_memory_sessions(256)`,
-/// which we shrink to 8: xas only ever talks to a handful of Signal endpoints
-/// plus an occasional CDN, and a smaller cache makes ticket-eviction less
-/// likely if Signal's load balancer happens to issue tickets pinned to
-/// different backends.
+/// Build a [`ClientConfig`] suitable for sharing across many
+/// [`tls_connect_with_config`] calls.
+///
+/// The returned [`Arc`] is the unit of TLS 1.3 PSK session-ticket
+/// reuse: as long as the same `Arc<ClientConfig>` is passed to
+/// subsequent connects against the same host, the in-memory cache of
+/// up to 8 tickets survives reconnects, allowing PSK resumption
+/// instead of a full ECDHE handshake every time.
+///
+/// # Trust roots
+///
+/// `roots` is the *complete* set of trust anchors for any connection
+/// using the returned config — system roots are NOT consulted. For
+/// Signal endpoints, callers must pass [`signal_production_roots`] (or
+/// [`signal_staging_roots`]). Passing [`webpki_roots()`] silently
+/// downgrades to the public Mozilla bundle and allows a misissued
+/// certificate from any public CA to MITM the connection. Mirrors what
+/// `libsignal-service-rs/src/push_service/mod.rs` does for its own
+/// reqwest-based path.
+///
+/// # ALPN
+///
+/// `alpn` is sent as the offered protocol list. Empty disables ALPN.
+/// HTTPS callers pass `&[b"http/1.1"]`; WSS upgrades use the same
+/// protocol (the upgrade happens after the HTTP/1.1 handshake).
+///
+/// # Cipher suite
+///
+/// Defaults to rustls 0.22's stock suite list (TLS 1.3 preferred).
+/// Signal-Server negotiates TLS 1.3 in production; a TLS 1.2
+/// negotiation indicates either a MITM or a misconfigured staging
+/// endpoint and the resulting `proto=...` line in the post-handshake
+/// log should be treated as a finding.
+///
+/// # Resumption cache size
+///
+/// rustls's default cache holds 256 tickets; we shrink to 8 because
+/// xas only ever talks to a handful of Signal endpoints plus an
+/// occasional CDN, and a smaller cache reduces ticket-eviction
+/// pressure if Signal's load balancer happens to issue tickets pinned
+/// to different backends.
+///
+/// # Idempotence
+///
+/// `ACTIVE_COUNTER` is `OnceLock`-backed, so the first call wins.
+/// Subsequent calls return new `ClientConfig`s that all point at the
+/// same [`CountingResumptionStore`], which is what enables the
+/// `was_resumed` diagnostic to observe activity across the whole
+/// process.
 pub fn build_tls_config(roots: RootCertStore, alpn: &[&[u8]]) -> Arc<ClientConfig> {
     let mut config = ClientConfig::builder()
         .with_root_certificates(roots)
@@ -220,12 +298,10 @@ pub fn build_tls_config(roots: RootCertStore, alpn: &[&[u8]]) -> Arc<ClientConfi
     if !alpn.is_empty() {
         config.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
     }
-    // Same on-the-wire behavior as the prior
-    // `Resumption::in_memory_sessions(8)` — `CountingResumptionStore` wraps
-    // exactly one `ClientSessionMemoryCache::new(8)`. The wrapper only
-    // adds a fetch_add on the take-some path so the post-handshake log
-    // in `tls_connect_with_config` can emit `was_resumed=true/false`
-    // without relying on the unreliable `peer_certificates()` heuristic.
+    // On-the-wire behaviour is identical to a plain
+    // `Resumption::in_memory_sessions(8)`; the wrapper only adds a
+    // fetch_add on the take-some path so `tls_connect_with_config` can
+    // emit `was_resumed=true|false` directly rather than inferring it.
     let counter = ACTIVE_COUNTER
         .get_or_init(|| Arc::new(CountingResumptionStore::new(8)))
         .clone();
@@ -233,30 +309,56 @@ pub fn build_tls_config(roots: RootCertStore, alpn: &[&[u8]]) -> Arc<ClientConfi
     Arc::new(config)
 }
 
-/// Mozilla NSS-bundle root CAs from `webpki-roots`. Suitable for general
-/// HTTPS to public endpoints (example.com, etc.). Not suitable for
-/// Signal endpoints, which pin their own CA — use [`signal_production_roots`].
+/// Public Mozilla NSS-bundle root CAs, taken from the `webpki-roots`
+/// crate.
+///
+/// Suitable for general HTTPS to public endpoints (CDN smoke tests
+/// in `examples/`, etc.). **NOT suitable for Signal endpoints** — those
+/// pin their own CA via [`signal_production_roots`]. A connection
+/// established with this root store and pointed at chat.signal.org
+/// would accept a certificate from any public CA, defeating the
+/// project's MITM-resistance assumptions.
 pub fn webpki_roots() -> RootCertStore {
     RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
     }
 }
 
-/// Signal's production root CA, pinned. Mirrors what `libsignal-service-rs`
-/// does at `src/push_service/mod.rs:90-96`: disable system roots, use only
-/// this CA. The PEM is vendored at `certs/signal-production.pem` from
-/// upstream `whisperfish/libsignal-service-rs/certs/production-root-ca.pem`.
+/// Signal's production root CA, pinned.
+///
+/// Mirrors `libsignal-service-rs/src/push_service/mod.rs` (the
+/// reqwest-based upstream path): disable system roots, trust only this
+/// CA. The PEM is bundled at `certs/signal-production.pem` and is a
+/// vendored copy of
+/// `whisperfish/libsignal-service-rs/certs/production-root-ca.pem`.
+///
+/// # Panics
+///
+/// Panics if the bundled PEM fails to parse. That is a build-time
+/// invariant — the bytes are baked in by `include_bytes!` and verified
+/// by the test suite — so a panic here means a bad release artifact.
 pub fn signal_production_roots() -> RootCertStore {
     parse_pem_roots(include_bytes!("../certs/signal-production.pem"))
         .expect("Signal production root CA bundled at build time should parse")
 }
 
-/// Same for Signal's staging environment.
+/// Signal's staging root CA, pinned. Same shape as
+/// [`signal_production_roots`] but targets the staging environment.
+///
+/// # Panics
+///
+/// Panics if the bundled PEM fails to parse; see
+/// [`signal_production_roots`] for rationale.
 pub fn signal_staging_roots() -> RootCertStore {
     parse_pem_roots(include_bytes!("../certs/signal-staging.pem"))
         .expect("Signal staging root CA bundled at build time should parse")
 }
 
+/// Parse a PEM byte slice into a [`RootCertStore`].
+///
+/// Each `-----BEGIN CERTIFICATE-----` block is added as a trust anchor.
+/// Returns the first underlying IO or rustls parse error if any
+/// certificate fails to decode.
 fn parse_pem_roots(pem: &[u8]) -> io::Result<RootCertStore> {
     let mut reader = std::io::BufReader::new(pem);
     let mut store = RootCertStore::empty();
@@ -268,20 +370,64 @@ fn parse_pem_roots(pem: &[u8]) -> io::Result<RootCertStore> {
 }
 
 /// Open a sync TLS connection to `host:port` using a pre-built shared
-/// `ClientConfig`. Hot-path callers that reconnect to the same host should
-/// build the config once via [`build_tls_config`] and reuse the resulting
-/// `Arc<ClientConfig>` so the in-memory session-ticket cache survives
-/// across reconnects (this is what enables TLS 1.3 PSK resumption).
+/// [`ClientConfig`].
 ///
-/// The TLS handshake is driven to completion here, before the function
-/// returns. Previously it was lazy (rustls completed it on the caller's
-/// first I/O via `StreamOwned`), but the iter-1 instrumentation could
-/// not measure handshake cost in isolation — so iter-3 needs to see the
-/// handshake as its own distinct phase. All current callers issue I/O
-/// immediately after this returns, so making it eager changes no
-/// observable behavior; it just relocates the wall-clock cost (and the
-/// failure mode for handshake errors) from the caller's first read/write
-/// to this function.
+/// Hot-path callers that reconnect to the same host should build the
+/// config once via [`build_tls_config`] and reuse the resulting
+/// `Arc<ClientConfig>` so the in-memory session-ticket cache survives
+/// across reconnects — that is what enables TLS 1.3 PSK resumption.
+///
+/// The TLS handshake is driven to completion before this function
+/// returns, so the returned [`RustlsStream`] is immediately usable for
+/// application-layer I/O. Any handshake failure (cert verification,
+/// suite mismatch, peer close, network error) surfaces here rather
+/// than on a later `read`/`write`.
+///
+/// # Socket timeouts
+///
+/// The underlying [`TcpStream`] is configured with:
+///
+/// - `set_read_timeout(5s)` — the WebSocket pump in
+///   [`crate::ws_pump`] holds a mutex across the blocking
+///   `WebSocket::read()` in its reader thread; without a short
+///   timeout the writer thread could never inject keepalives.
+/// - `set_write_timeout(30s)` — bounds the writer's TCP retransmit
+///   budget so a server-initiated `Close` mid-write does not block the
+///   thread for ~89 s on hardware. Acts as defense-in-depth alongside
+///   the `services/net` socket-reaper fix that addresses the root
+///   cause kernel-side.
+///
+/// # Logging
+///
+/// Emits two `tracing::info!` lines per call on the `perf/net` channel:
+///
+/// - `tls_connect exit ... server_name_ms=... client_conn_ms=... tcp_ms=... setup_total_ms=...`
+/// - `tls_handshake ... handshake_ms=... was_resumed=true|false|unknown proto=... cipher=...`
+///
+/// Neither line contains any keying material, certificate fingerprint,
+/// or session-ticket content — only timing, the peer hostname (already
+/// known to anyone seeing the connection on the wire), the negotiated
+/// TLS version, and the cipher suite name. Safe to ship to UART.
+///
+/// On handshake failure, the log line is `tls_handshake_error ... err=<display>`
+/// — rustls's error display contains no secret material, but does
+/// surface the certificate's subject CN on a verification failure, which
+/// is metadata-class information.
+///
+/// # Errors
+///
+/// Returns `io::Error` for invalid hostnames, TCP connect failures, or
+/// any error returned by rustls's `complete_io` (cert verification,
+/// protocol downgrade rejection, peer reset).
+///
+/// # Security
+///
+/// The TLS configuration in `config` is authoritative for what
+/// certificates this connection will accept. Callers are responsible
+/// for ensuring `config` was built with the appropriate pinned roots
+/// for the endpoint (see [`build_tls_config`]). Mismatching them is
+/// the most likely way to silently degrade the security posture of
+/// this transport.
 pub fn tls_connect_with_config(
     host: &str,
     port: u16,
@@ -298,32 +444,29 @@ pub fn tls_connect_with_config(
     let sock = TcpStream::connect((host, port))?;
     let setup_ms = t_start.elapsed().as_millis() as u64;
     tracing::info!(host, port, setup_ms, "tls_connect: setup-phase complete");
-    // Restored from pre-f162828: kept verbatim so log-grep tools that
-    // match `perf/net: tls_connect exit host=...` continue to fire.
-    // f162828 had consolidated this with the post-handshake fields onto
-    // one line; splitting them back out keeps the existing grep contract
-    // and lets the new `perf/net: tls_handshake` line below carry the
-    // strictly-additive diagnostic.
+    // Split from the post-handshake `tls_handshake` line below so external
+    // log-grep tools that match on this exact format stay decoupled from
+    // the additive resumption diagnostic.
     tracing::info!(
         "perf/net: tls_connect exit host={} port={} server_name_ms={} client_conn_ms={} tcp_ms={} setup_total_ms={}",
         host, port, _perf_sn_ms, _perf_conn_ms - _perf_sn_ms,
         setup_ms - _perf_conn_ms, setup_ms
     );
 
-    // Short TCP read timeout. WebSocket users (`ws_pump.rs::reader_loop`)
+    // Short TCP read timeout. WebSocket users (`ws_pump::reader_loop`)
     // hold a mutex across the blocking `WebSocket::read()`; without a
     // timeout, the reader would block forever waiting for an inbound
     // frame and the writer thread could never acquire the mutex to
     // send keepalives. Signal's provisioning WS times out clients at
-    // ~60s of idle, so missing keepalives means the link drops before
+    // ~60 s of idle, so missing keepalives means the link drops before
     // the user finishes scanning. The timeout makes `read()` return
     // `Err(WouldBlock|TimedOut)` periodically; the reader catches that
     // and re-loops, briefly releasing the mutex.
     sock.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
-    // Bound writer's TCP retransmit budget; without this, a server-initiated
-    // Close mid-write blocks ~89 s on hardware. Refs #16. (Kept as
-    // defense-in-depth alongside the xous-core services/net reaper fix that
-    // is the actual root-cause cure.)
+    // Bound the writer's TCP retransmit budget; without this, a
+    // server-initiated Close mid-write blocks ~89 s on hardware.
+    // Defense-in-depth alongside the kernel-side socket-reaper fix in
+    // xous-core's services/net.
     sock.set_write_timeout(Some(std::time::Duration::from_secs(30)))?;
 
     let mut stream = StreamOwned::new(conn, sock);
@@ -338,14 +481,14 @@ pub fn tls_connect_with_config(
     // `ACTIVE_COUNTER` is `None` only when the caller wired a custom
     // `Resumption::store` directly (e.g. the integration test in
     // `tests/tls_resumption.rs`); in that case `was_resumed` reports
-    // `unknown` and the test's own `CountingStore` is the source of truth.
+    // `unknown` and the test's own counting store is the source of truth.
     let counter_before = ACTIVE_COUNTER.get().map(|c| c.take_some_count());
 
     // Drive the handshake to completion. On TLS 1.3 PSK resumption rustls
     // performs ~1 RTT of symmetric crypto + HKDF; on a full handshake it
     // does ECDHE + cert verification, which on rv32 with software crypto
-    // is roughly an order of magnitude more wall-time. handshake_ms by
-    // itself is sufficient to distinguish the two; was_resumed below
+    // is roughly an order of magnitude more wall-time. `handshake_ms` by
+    // itself is sufficient to distinguish the two; `was_resumed` below
     // removes any ambiguity at the cost of one extra Acquire load.
     let hs_start = std::time::Instant::now();
     if let Err(e) = stream.conn.complete_io(&mut stream.sock) {
@@ -388,12 +531,19 @@ pub fn tls_connect_with_config(
     Ok(stream)
 }
 
-/// Convenience wrapper for one-shot callers (examples, tests). Builds a
-/// fresh `ClientConfig` per call — the in-memory session-ticket cache lives
-/// inside the config and is therefore wasted. Hot-path callers (everything
-/// inside `SyncHttpClient`/`ws_pump`) MUST go through [`build_tls_config`] +
-/// [`tls_connect_with_config`] instead, otherwise TLS resumption is silently
-/// disabled.
+/// Convenience wrapper for one-shot callers (examples, tests).
+///
+/// Builds a fresh [`ClientConfig`] per call. Because the in-memory
+/// session-ticket cache lives inside the config — and the global
+/// counter installed by [`build_tls_config`] is `OnceLock`-backed, so
+/// the second call still observes the original counter — this is
+/// effectively non-resuming when used repeatedly.
+///
+/// **Hot-path callers** (everything inside [`crate::http::SyncHttpClient`]
+/// and [`crate::ws_pump`]) must go through [`build_tls_config`] +
+/// [`tls_connect_with_config`] explicitly; constructing the
+/// `Arc<ClientConfig>` once and reusing it is what allows TLS 1.3
+/// resumption across reconnects.
 pub fn tls_connect(
     host: &str,
     port: u16,

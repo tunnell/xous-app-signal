@@ -83,8 +83,57 @@ use tungstenite::protocol::{CloseFrame, Message, WebSocket};
 
 use crate::tls::{RustlsStream, tls_connect_with_config};
 
+/// Bounded capacity of the frame channels between the async caller and
+/// the sync reader/writer threads.
+///
+/// 16 frames is a balance between memory cost on rv32 (each frame is a
+/// `WsFrame` enum holding a `Vec<u8>` of WS payload bytes) and the
+/// observed `SignalWebSocketProcess::run` traffic patterns
+/// (back-to-back send bursts during link, infrequent idle reads
+/// otherwise).
 const FRAME_CHANNEL_CAPACITY: usize = 16;
 
+/// Establish a WSS connection and return a [`WebSocketChannels`] pair
+/// the async caller can use for bidirectional frame traffic.
+///
+/// Used by [`crate::http::SyncHttpClient::connect_websocket`] as the
+/// implementation of [`libsignal_service::transport::HttpClient::connect_websocket`].
+///
+/// # Pipeline
+///
+/// 1. Spawn the setup thread, which drives the TLS handshake via
+///    [`crate::tls::tls_connect_with_config`] and then the tungstenite
+///    HTTP/1.1 upgrade with `headers` and (optional) `auth`.
+/// 2. On handshake success, the setup thread wraps the `WebSocket` in
+///    `Arc<Mutex<_>>`, spawns the reader and writer threads, and
+///    signals success on `handshake_done_rx`.
+/// 3. This `async fn` resumes, returns the [`WebSocketChannels`] pair
+///    to the caller, and returns.
+/// 4. The reader and writer threads run until the WS closes, the
+///    socket errors, the mutex is poisoned, or `in_tx` / `out_rx`
+///    closes. On exit, the setup thread joins both and drops `in_tx`,
+///    which the async executor sees as channel-closed.
+///
+/// # Errors
+///
+/// - `HttpError::Network` if the setup thread fails to spawn or dies
+///   before the handshake completes.
+/// - Any error from [`handshake`] (TLS connect, tungstenite upgrade)
+///   propagates through the `handshake_done_rx` channel and is
+///   returned here.
+///
+/// # Auth
+///
+/// `auth` is encoded as an HTTP `Authorization: Basic <b64(user:pass)>`
+/// header and merged with `headers`. Same algorithm tungstenite would
+/// use natively; we do it here so the credentials live with the
+/// per-connection headers rather than the URL.
+///
+/// `password` is the post-link Signal-server credential, not a
+/// long-lived account secret. It is transmitted over TLS and is the
+/// same value `libsignal-service-rs` would have sent via reqwest;
+/// stripping it from logs is the caller's responsibility (none of the
+/// tracing lines in this module emit headers).
 pub(crate) async fn connect_websocket(
     config: Arc<ClientConfig>,
     url: url::Url,
@@ -150,6 +199,24 @@ pub(crate) async fn connect_websocket(
     })
 }
 
+/// Drive the TLS handshake then the tungstenite WSS upgrade.
+///
+/// Runs on the setup thread, off the async executor. Returns the
+/// handshake-complete [`WebSocket`]; the caller then wraps it in
+/// `Arc<Mutex<_>>` and hands it to the reader/writer pair.
+///
+/// `headers` are passed through verbatim; `auth` is encoded as `Basic`
+/// and inserted as an `Authorization` header (see
+/// [`connect_websocket`] for the security note on this).
+///
+/// # Errors
+///
+/// - `HttpError::InvalidUrl` if `url` lacks a host.
+/// - `HttpError::Network` for any TLS or tungstenite handshake
+///   failure. The display of the inner error is included; rustls and
+///   tungstenite error strings contain peer hostname, error category,
+///   and (on cert verification) certificate subject — no secret
+///   material — so the message is safe to log.
 fn handshake(
     config: Arc<ClientConfig>,
     url: url::Url,
@@ -187,16 +254,29 @@ fn handshake(
     Ok(ws)
 }
 
+/// Reader thread body. Owns half of the shared mutex; pulls frames
+/// off the WS and forwards them on `tx`.
+///
+/// Terminates on any of:
+///
+/// - `Message::Close` from the peer (forwards a `WsFrame::Close` to
+///   the caller before exiting).
+/// - `tungstenite::Error::ConnectionClosed` / `AlreadyClosed`.
+/// - Mutex poisoning (another thread panicked while holding it).
+/// - `tx.send_blocking` returning `Err` (the async caller dropped its
+///   receiver).
+/// - Any tungstenite read error other than the WouldBlock / TimedOut
+///   pair, which are absorbed as keepalive yield points.
+///
+/// Each frame is logged on the `ws reader:` and `perf/net:` channels;
+/// see the module-level docs for what's in those lines.
 fn reader_loop(
     ws: Arc<Mutex<WebSocket<RustlsStream>>>,
     tx: async_channel::Sender<Result<WsFrame, HttpError>>,
 ) {
-    // Diagnostic: count + log every frame the reader gets off the wire.
-    // Mirrors the writer-side instrumentation. The combined trace tells
-    // us whether KA responses are arriving from the server (matched by
-    // the timing of writer "send ok ka" lines and reader "recv frame
-    // kind=Binary" lines, plus the libsignal "ka response received"
-    // log added in this same image).
+    // Count every frame the reader gets off the wire. Combined with
+    // the writer-side counter this lets a trace correlate keepalive
+    // responses to outbound keepalive requests.
     let mut frame_count: u64 = 0;
     loop {
         // Pull one message from the WS. read() blocks on the underlying
@@ -298,10 +378,26 @@ fn reader_loop(
     tracing::info!(frame_count, "ws reader: loop exited");
 }
 
+/// Writer thread body. Owns the other half of the shared mutex; pulls
+/// frames off `rx` and sends them on the WS.
+///
+/// Terminates on any of:
+///
+/// - `rx` closing (the async caller dropped its sender — typically
+///   because `SignalWebSocketProcess::run` exited).
+/// - Mutex poisoning.
+/// - A `WebSocket::send` error. The error is logged with
+///   `write_timed_out` separated out so traces can distinguish the
+///   OS-level write-timeout firing on the inner TCP socket (the
+///   defense-in-depth bound set by [`crate::tls::tls_connect_with_config`])
+///   from a protocol-level tungstenite error.
+///
+/// Each enqueued and each emitted frame is logged on the
+/// `ws writer:` and `perf/net:` channels.
 fn writer_loop(ws: Arc<Mutex<WebSocket<RustlsStream>>>, rx: async_channel::Receiver<WsFrame>) {
-    // Diagnostic: count frames seen + sent so we can correlate with
-    // the keepalive-side instrumentation in libsignal-service-rs and
-    // tell whether queued KA frames actually leave the host.
+    // Count outgoing frames. Combined with the reader counter, this
+    // tells a trace whether queued keepalives are actually leaving the
+    // host or merely being enqueued.
     let mut frame_count: u64 = 0;
     while let Ok(frame) = rx.recv_blocking() {
         frame_count += 1;
@@ -347,10 +443,11 @@ fn writer_loop(ws: Arc<Mutex<WebSocket<RustlsStream>>>, rx: async_channel::Recei
                 );
             }
             Err(e) => {
-                // Distinguish OS-level write-timeout (i.e. `set_write_timeout`
-                // firing on the inner TCP socket — refs #16) from protocol
-                // errors so future hardware traces can grep for write-timeout
-                // firings.
+                // Distinguish OS-level write-timeout (the
+                // `set_write_timeout` set in `tls_connect_with_config`
+                // firing on the inner TCP socket) from a protocol-level
+                // tungstenite error. Hardware traces can then grep for
+                // write-timeout firings separately from other failures.
                 let write_timed_out = matches!(&e,
                     tungstenite::Error::Io(io_err)
                         if io_err.kind() == std::io::ErrorKind::TimedOut
