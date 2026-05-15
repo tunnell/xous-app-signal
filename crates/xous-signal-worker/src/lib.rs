@@ -28,6 +28,16 @@
 //! the `Send` requirement; the same pattern is used by
 //! Whisperfish-Qt on Linux.
 //!
+//! The `thread_local!` installations below
+//! ([`presage::libsignal_service::transport::set_http_client`] and
+//! [`presage::set_executor`]) are per-thread; any future contributor
+//! that spawns a second thread which calls libsignal/presage APIs
+//! must repeat these installations at the new thread's startup or
+//! libsignal-service-rs panics on first WS construction. WS frame I/O
+//! itself runs on [`xous_net_bridge`]'s `ws_pump` thread pair (setup
+//! + reader + writer), not on this thread; the worker only sees
+//! `WebSocketChannels` ends.
+//!
 //! # Trust boundary
 //!
 //! This crate sees libsignal-decrypted plaintext on the inbound

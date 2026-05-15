@@ -47,6 +47,10 @@
 //! stack pages eagerly. The Signal worker holds at most one identified
 //! WS plus one unidentified WS plus a small number of HTTPS requests
 //! in flight, so peak thread count stays well under double digits.
+//! Combined with the worker thread itself (single
+//! `xous_signal_worker::run_signal_worker` thread holding the
+//! `LocalExecutor`), peak concurrent threads in the worker process at
+//! a typical xas session run ≈ 7 (1 worker + 3 × 2 WSS pumps).
 //!
 //! # Logging surface
 //!
@@ -98,6 +102,13 @@ const FRAME_CHANNEL_CAPACITY: usize = 16;
 ///
 /// Used by [`crate::http::SyncHttpClient::connect_websocket`] as the
 /// implementation of [`libsignal_service::transport::HttpClient::connect_websocket`].
+/// The returned channel pair is what
+/// `libsignal-service-rs::SignalWebSocketProcess::run` polls — the
+/// async-side caller never touches the underlying `Mutex<WebSocket>`
+/// or the reader/writer threads. The Signal worker
+/// (`xous_signal_worker::manager_task`) does not own this socket
+/// directly; it interacts with libsignal-service-rs, which interacts
+/// with the channel pair returned here.
 ///
 /// # Pipeline
 ///

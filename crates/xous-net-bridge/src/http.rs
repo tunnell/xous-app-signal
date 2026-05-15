@@ -111,6 +111,19 @@ impl HttpClient for SyncHttpClient {
     /// `async_channel::bounded(1)` oneshot. The async future blocks on
     /// `rx.recv().await`.
     ///
+    /// # rv32 / 16 MiB constraint
+    ///
+    /// Thread-per-request. The Signal worker runs single-digit HTTP
+    /// requests per user action (link, profile fetch, prekey bundle
+    /// fetch, credential refresh), so the spawn cost stays bounded by
+    /// the worker's command rate. A flurry of inbound messages from N
+    /// first-touch contacts produces N profile fetches and therefore
+    /// N spawns; if that workload ever dominates, a fixed-size worker
+    /// pool with a bounded queue would convert the unbounded behaviour
+    /// into a documentable back-pressure point (REFACTOR_NOTES NB.5
+    /// is the related cap on response body size; W8 is the heapless
+    /// budgeting follow-up).
+    ///
     /// # Timeouts
     ///
     /// `req.timeout` takes precedence; falls back to the client-level

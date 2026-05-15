@@ -332,6 +332,22 @@ pub fn webpki_roots() -> RootCertStore {
 /// vendored copy of
 /// `whisperfish/libsignal-service-rs/certs/production-root-ca.pem`.
 ///
+/// # Security
+///
+/// This is the single most consequential trust-boundary input in the
+/// worker process: it is the *only* set of trust anchors every Signal
+/// HTTP and WSS connection is validated against. Construction is
+/// build-time (the PEM bytes are baked into the binary by
+/// `include_bytes!`); a parse failure is therefore a release-artifact
+/// bug, not a runtime input-validation failure. Constructed once by
+/// `xous_signal_worker::worker_main` at thread start and handed to
+/// [`crate::SyncHttpClient::new`]; never replaced at runtime.
+///
+/// Substituting [`webpki_roots`] here would silently downgrade the
+/// MITM-resistance posture to "any public CA can issue a valid cert
+/// for chat.signal.org" — see [`webpki_roots`] for the deliberate
+/// staging-only intent.
+///
 /// # Panics
 ///
 /// Panics if the bundled PEM fails to parse. That is a build-time
