@@ -154,22 +154,29 @@ mkdir -p ~/code/xas && cd ~/code/xas
 #     cd xous-app-signal && git checkout dev
 git clone https://github.com/tunnell/xous-app-signal.git
 
-# xous-core (kernel + services). The `xas` branch is the canonical
-# integration branch — it registers `xas` in apps/manifest.json
-# (so `services/gam` knows to expose Signal as a launchable app),
-# carries DNS / net / gam fixes the Signal app needs, and includes
-# the apps/xas/ subtree.
+# xous-core (kernel + services). The `xas-v0.2` branch is the v0.2
+# frozen release branch (see RELEASING.md for how releases pin
+# xous-core) — it registers `xas` in apps/manifest.json (so
+# `services/gam` knows to expose Signal as a launchable app),
+# carries DNS / net / gam fixes the Signal app needs (including
+# the services/net reaper fix from tunnell/xous-core#26), and
+# includes the apps/xas/ subtree.
+#
+# Future xas releases will pin to their own frozen branches
+# (`xas-v0.3`, etc.). The floating `xas` integration branch on
+# tunnell/xous-core continues to advance for development, but
+# released xas versions always build against a pinned snapshot.
 #
 # An older `xous-app-signal` branch also exists with similar
-# content; it's kept around for historical compatibility but `xas`
-# has the more recent fixes (DNS CNAME chains, net-service
-# instrumentation, gam Enter-key alias, etc.).
+# content; it's kept around for historical compatibility but
+# `xas-v0.2` has the more recent fixes (DNS CNAME chains,
+# net-service instrumentation, gam Enter-key alias, etc.).
 #
 # Note: --depth 1 keeps the clone small (~250 MB vs ~2 GB full).
 # If you want to verify the branch's commit history matches the
 # table in §1's 'What each clone contributes', drop --depth 1
 # here OR run `git fetch --unshallow` after cloning.
-git clone --depth 1 -b xas https://github.com/tunnell/xous-core.git
+git clone --depth 1 -b xas-v0.2 https://github.com/tunnell/xous-core.git
 
 # xous-app-signal's workspace Cargo.toml uses paths like
 # `../repos/xous-core/...`, i.e. relative to xous-app-signal's
@@ -363,7 +370,7 @@ Three things conspire to make this awkward:
 (`generate_app_menus()` in `xtask/src/app_manifest.rs`) from
 `xous-core/apps/manifest.json`, and is gitignored.
 
-The `xas` branch of `tunnell/xous-core` (cloned in §1) already
+The `xas-v0.2` branch of `tunnell/xous-core` (cloned in §1) already
 registers `xas` in `manifest.json` (alongside `vault`), so once
 you've invoked xtask once (`cargo xtask run` in §2.3, or
 `cargo xtask app-image-xip` in §3.2), `apps.rs` self-maintains
@@ -626,8 +633,9 @@ without it.
 
 **Branch selection in xous-core matters.** Hardware builds need
 the xous-core checkout on a branch whose `apps/manifest.json`
-registers xas (`tunnell/xous-core@xas` is the canonical one;
-historically `xous-app-signal`). Building against `dev` (or any
+registers xas (`tunnell/xous-core@xas-v0.2` is the canonical one
+for v0.2 builds; future releases will pin to `xas-v0.3`, etc. —
+see RELEASING.md). Building against `dev` (or any
 branch that doesn't register xas) will silently produce an
 image that bundles the xas binary but where the launcher menu
 doesn't list Signal — see the "Re-bootstrap on branch switches"
@@ -800,7 +808,7 @@ When the Precursor boots into Xous:
 | `usb_update.py` permission denied (Linux host) | udev rule missing | Add `tools/49-precursor.rules` to `/etc/udev/rules.d/` and `udevadm control --reload`, or run with sudo (not recommended) |
 | Hosted xas shows "OOM during link" | Default heap cap too low | Run with `RUST_LOG=info` to see allocator messages; rebuild with `--features pddb-real,hosted` (the dist build is otherwise too lean) |
 | Hardware link succeeds but no messages flow | Wi-Fi connected to 5 GHz, or DNS broken | Re-run the wlan recipe; verify `net ping chat.signal.org` works before opening xas |
-| Send fails with "WebSocket closing" within 30s | Older xous-core without the encoding fix | Confirm you cloned the `xas` branch of `tunnell/xous-core`, not upstream `betrusted-io/xous-core`. Relevant upstream PRs: [#877](https://github.com/betrusted-io/xous-core/pull/877) (encoding fix) and [tunnell/xous-core#26](https://github.com/tunnell/xous-core/pull/26) (services/net reaper fix shipped with v0.2). |
+| Send fails with "WebSocket closing" within 30s | Older xous-core without the encoding fix | Confirm you cloned the `xas-v0.2` branch of `tunnell/xous-core`, not upstream `betrusted-io/xous-core`. Relevant upstream PRs: [#877](https://github.com/betrusted-io/xous-core/pull/877) (encoding fix) and [tunnell/xous-core#26](https://github.com/tunnell/xous-core/pull/26) (services/net reaper fix shipped with v0.2). |
 | Flash completes but device boots into the old image | Loader didn't validate the new signature | Re-flash; if it persists, check `tools/usb_update.py` log for verification errors |
 
 ---
