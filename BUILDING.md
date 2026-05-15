@@ -562,8 +562,7 @@ cargo test --features hosted -p xous-app-signal --bins
 
 ~50 tests covering the dialogue model, message rendering,
 contact-name resolution, the stdin UI state machine, and link/
-send/receive event dispatch. Should all pass green. (Verified
-2026-05: `test result: ok. 53 passed`.)
+send/receive event dispatch. Should all pass green.
 
 ### 2.7 Renode test environment gotchas
 
@@ -598,7 +597,7 @@ xtask aborts (or emits a kernel whose embedded version is the
 empty string and trips the bootloader's sanity check). The
 exact value doesn't matter so long as it parses; the literal
 `v0.9.21-0-g0000000` above matches upstream's format and is
-what Track F verified against.
+the value the hardware harness pins against.
 
 **(c) `xas-pddb-real-probe.robot` needs two extra build flags.**
 This test exercises the real PDDB backend instead of the
@@ -842,9 +841,9 @@ grep -F '"xas":' apps/manifest.json   # expect: 1 hit
 
 **(Hardware path only.)** A successful hardware build produces an
 image of size ~12.89 MB (12,886,056 bytes give or take a few KB
-across toolchain bumps; verified at 12,931,112 bytes on a 2026-05
-fresh build). md5sum is non-deterministic (timestamp embedded in
-the build) but the size should be within ~50 KB of the baseline.
+across toolchain bumps). md5sum is non-deterministic (timestamp
+embedded in the build) but the size should be within ~50 KB of
+the baseline.
 Hosted-mode builds don't produce a `xous.img` — they produce a
 `target/release/xas` binary at ~58 MB.
 
