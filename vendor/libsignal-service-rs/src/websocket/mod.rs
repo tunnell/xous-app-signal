@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use std::future::Future;
@@ -88,6 +89,14 @@ pub struct SignalWebSocket<C: WebSocketType> {
         WebSocketRequestMessage,
         oneshot::Sender<Result<WebSocketResponseMessage, ServiceError>>,
     )>,
+    /// Last WebSocket close-frame code observed by the process loop, or
+    /// `0` if no close has been observed yet. RFC 6455 reserves `0` and
+    /// it never appears on the wire, so 0 unambiguously means "still
+    /// open or never closed". See [`SignalWebSocket::last_close_code`].
+    /// Added for xas issue #13 (Bug B: distinguish 4401 reauth from
+    /// 1001 idle close so the worker can apply a settling delay and
+    /// emit `Event::SignalAuthExpired` after N terminal 403s).
+    last_close_code: Arc<AtomicU16>,
 }
 
 struct SignalWebSocketInner {
@@ -125,6 +134,10 @@ struct SignalWebSocketProcess {
     ws_outgoing: async_channel::Sender<WsFrame>,
     ws_incoming:
         async_channel::Receiver<Result<WsFrame, crate::transport::HttpError>>,
+
+    /// Shared with `SignalWebSocket::last_close_code`. The process loop
+    /// writes the close-frame code here before logging + breaking out.
+    last_close_code: Arc<AtomicU16>,
 }
 
 impl SignalWebSocketProcess {
@@ -266,7 +279,119 @@ impl SignalWebSocketProcess {
         let mut ka_last: Option<std::time::Instant> = None;
 
         loop {
-            futures::select! {
+            // select_biased! with deterministic arm order — incoming
+            // first, outgoing next, KA last. The KA-timer arm only
+            // fires when neither the incoming nor outgoing arm had
+            // work that poll, which means a queued KA *response* is
+            // always drained off ws_incoming before the timer arm
+            // re-checks outgoing_keep_alive_set. Removes the random-
+            // dispatch race that previously needed MAX_OUTSTANDING
+            // _KEEPALIVES=3 as a tolerance hack on rv32 hardware.
+            // Per [#8].
+            futures::select_biased! {
+                // Drain inbound WS frames first — including KA responses —
+                // so outgoing_keep_alive_set is up-to-date before the KA
+                // timer arm could possibly fire.
+                web_socket_item = self.ws_incoming.recv().fuse() => {
+                    match web_socket_item {
+                        Ok(Ok(WsFrame::Close { code, reason })) => {
+                            // Capture the close code BEFORE logging so the
+                            // sequence is deterministic for diagnostics:
+                            // any subsequent `last_close_code()` reader is
+                            // guaranteed to see this value if it observes
+                            // the "websocket closed" log line. xas issue
+                            // #13 (Bug B) uses this to distinguish 4401
+                            // "Reauthentication required" from 1001 idle
+                            // closes and apply a settling delay before
+                            // reconnect.
+                            self.last_close_code.store(code, Ordering::Release);
+                            tracing::warn!(%code, reason, "websocket closed");
+                            break;
+                        },
+                        Ok(Ok(WsFrame::Binary(frame))) => {
+                            self.process_frame(frame).await?;
+                        }
+                        Ok(Ok(WsFrame::Ping(_))) => {
+                            tracing::trace!("received ping");
+                        }
+                        Ok(Ok(WsFrame::Pong(_))) => {
+                            tracing::trace!("received pong");
+                        }
+                        Ok(Ok(WsFrame::Text(_))) => {
+                            tracing::trace!("received text (unsupported, skipping)");
+                        }
+                        Ok(Err(e)) => return Err(ServiceError::HttpTransport(e)),
+                        Err(_closed) => {
+                            return Err(ServiceError::WsClosing {
+                                reason: "end of web request stream; socket closing"
+                            });
+                        }
+                    }
+                }
+                // Process requests from the application, forward them to Signal
+                x = self.requests.next() => {
+                    match x {
+                        Some((mut request, responder)) => {
+                            use prost::Message;
+
+                            // Regenerate ID if already in the table
+                            request.id = Some(
+                                request
+                                    .id
+                                    .filter(|x| !self.outgoing_requests.contains_key(x))
+                                    .unwrap_or_else(|| self.next_request_id()),
+                            );
+                            tracing::trace!(
+                                request.id,
+                                request.verb,
+                                request.path,
+                                request_body_size_bytes = request.body.as_ref().map(|x| x.len()),
+                                ?request.headers,
+                                "sending WebSocketRequestMessage",
+                            );
+
+                            self.outgoing_requests.insert(request.id.unwrap(), responder);
+                            let msg = WebSocketMessage {
+                                r#type: Some(web_socket_message::Type::Request.into()),
+                                request: Some(request),
+                                ..Default::default()
+                            };
+                            let buffer = msg.encode_to_vec();
+                            self.ws_outgoing.send(WsFrame::Binary(buffer)).await
+                                .map_err(|_| ServiceError::WsClosing { reason: "ws sink closed" })?;
+                        }
+                        None => {
+                            debug!("end of application request stream; websocket closing");
+                            return Ok(());
+                        }
+                    }
+                }
+                // Process outgoing responses to incoming Signal requests
+                response = self.outgoing_responses.next() => {
+                    use prost::Message;
+                    match response {
+                        Some(Ok(response)) => {
+                            tracing::trace!("sending response {:?}", response);
+
+                            let msg = WebSocketMessage {
+                                r#type: Some(web_socket_message::Type::Response.into()),
+                                response: Some(response),
+                                ..Default::default()
+                            };
+                            let buffer = msg.encode_to_vec();
+                            self.ws_outgoing.send(WsFrame::Binary(buffer)).await
+                                .map_err(|_| ServiceError::WsClosing { reason: "ws sink closed" })?;
+                        }
+                        Some(Err(error)) => {
+                            tracing::error!(%error, "could not generate response to a Signal request; responder was canceled. continuing.");
+                        }
+                        None => {
+                            unreachable!("outgoing responses should never fuse")
+                        }
+                    }
+                }
+                // KA timer fires LAST in biased order: we only get here
+                // when neither incoming nor outgoing had work this poll.
                 _ = (&mut ka_delay).fuse() => {
                     let now = std::time::Instant::now();
                     let since_start = now.duration_since(ka_loop_start);
@@ -282,27 +407,20 @@ impl SignalWebSocketProcess {
                     // Reset the timer for the next tick.
                     ka_delay = futures_timer::Delay::new(push_service::KEEPALIVE_TIMEOUT_SECONDS);
                     use prost::Message;
-                    // Tolerate N=3 outstanding keepalives before
-                    // closing. KA roundtrips succeed reliably on
-                    // rv32 ("ka response received status_code=200"
-                    // appears for every queued KA), but the
-                    // outgoing_keep_alive_set check is racy: the
-                    // futures::select! arm scheduling can pick the
-                    // KA-timer arm before draining a queued
-                    // ws_incoming response, so outstanding looks
-                    // like 1 momentarily even though the response
-                    // is milliseconds away. Closing on the very
-                    // first unacked keepalive collapses healthy
-                    // WSes on any platform with non-zero scheduling
-                    // jitter (rv32 in particular). Tolerating up to
-                    // 3 outstanding gives the response a couple of
-                    // KA cycles' worth of grace before we conclude
-                    // the WS is genuinely dead. Real TCP failures
-                    // surface independently as
-                    // ServiceError::HttpTransport via the io::Error
-                    // path, so this only relaxes the application-
-                    // level keepalive watchdog, not the actual
-                    // dead-connection detection.
+                    // Threshold=3 even though select_biased! removes the
+                    // *dispatch race*: rv32 hardware test on 2026-05-11
+                    // showed select_biased! alone is not sufficient because
+                    // on rv32 the KA round-trip can exceed the 55s KA
+                    // interval under traffic (PQXDH on first send + slow
+                    // wlan can push a single send to 90-170 s). With
+                    // threshold=1, the WS gets closed by us while the
+                    // response is still legitimately in flight; that self-
+                    // DoSes every send. PR #431's constant=3 tolerance
+                    // turned out to be addressing two independent
+                    // problems: (a) dispatch race (now fixed by
+                    // select_biased!) and (b) network-RTT-vs-interval (now
+                    // mitigated by keeping threshold=3). See issue #8
+                    // commentary for the full reasoning.
                     const MAX_OUTSTANDING_KEEPALIVES: usize = 3;
                     if self.outgoing_keep_alive_set.len() >= MAX_OUTSTANDING_KEEPALIVES {
                         tracing::warn!(
@@ -345,97 +463,6 @@ impl SignalWebSocketProcess {
                         }
                     }
                 },
-                // Process requests from the application, forward them to Signal
-                x = self.requests.next() => {
-                    match x {
-                        Some((mut request, responder)) => {
-                            use prost::Message;
-
-                            // Regenerate ID if already in the table
-                            request.id = Some(
-                                request
-                                    .id
-                                    .filter(|x| !self.outgoing_requests.contains_key(x))
-                                    .unwrap_or_else(|| self.next_request_id()),
-                            );
-                            tracing::trace!(
-                                request.id,
-                                request.verb,
-                                request.path,
-                                request_body_size_bytes = request.body.as_ref().map(|x| x.len()),
-                                ?request.headers,
-                                "sending WebSocketRequestMessage",
-                            );
-
-                            self.outgoing_requests.insert(request.id.unwrap(), responder);
-                            let msg = WebSocketMessage {
-                                r#type: Some(web_socket_message::Type::Request.into()),
-                                request: Some(request),
-                                ..Default::default()
-                            };
-                            let buffer = msg.encode_to_vec();
-                            self.ws_outgoing.send(WsFrame::Binary(buffer)).await
-                                .map_err(|_| ServiceError::WsClosing { reason: "ws sink closed" })?;
-                        }
-                        None => {
-                            debug!("end of application request stream; websocket closing");
-                            return Ok(());
-                        }
-                    }
-                }
-                // Incoming websocket message. async_channel::Receiver's
-                // recv() returns Result<T, RecvError> (not Option<T> like
-                // Stream::next), so the outer Err here is "channel closed",
-                // and the inner Err is "transport error from the pump".
-                web_socket_item = self.ws_incoming.recv().fuse() => {
-                    match web_socket_item {
-                        Ok(Ok(WsFrame::Close { code, reason })) => {
-                            tracing::warn!(%code, reason, "websocket closed");
-                            break;
-                        },
-                        Ok(Ok(WsFrame::Binary(frame))) => {
-                            self.process_frame(frame).await?;
-                        }
-                        Ok(Ok(WsFrame::Ping(_))) => {
-                            tracing::trace!("received ping");
-                        }
-                        Ok(Ok(WsFrame::Pong(_))) => {
-                            tracing::trace!("received pong");
-                        }
-                        Ok(Ok(WsFrame::Text(_))) => {
-                            tracing::trace!("received text (unsupported, skipping)");
-                        }
-                        Ok(Err(e)) => return Err(ServiceError::HttpTransport(e)),
-                        Err(_closed) => {
-                            return Err(ServiceError::WsClosing {
-                                reason: "end of web request stream; socket closing"
-                            });
-                        }
-                    }
-                }
-                response = self.outgoing_responses.next() => {
-                    use prost::Message;
-                    match response {
-                        Some(Ok(response)) => {
-                            tracing::trace!("sending response {:?}", response);
-
-                            let msg = WebSocketMessage {
-                                r#type: Some(web_socket_message::Type::Response.into()),
-                                response: Some(response),
-                                ..Default::default()
-                            };
-                            let buffer = msg.encode_to_vec();
-                            self.ws_outgoing.send(WsFrame::Binary(buffer)).await
-                                .map_err(|_| ServiceError::WsClosing { reason: "ws sink closed" })?;
-                        }
-                        Some(Err(error)) => {
-                            tracing::error!(%error, "could not generate response to a Signal request; responder was canceled. continuing.");
-                        }
-                        None => {
-                            unreachable!("outgoing responses should never fuse")
-                        }
-                    }
-                }
             }
         }
         Ok(())
@@ -460,6 +487,12 @@ impl<C: WebSocketType> SignalWebSocket<C> {
             mpsc::unbounded();
         let (outgoing_request_sink, outgoing_requests) = mpsc::channel(1);
 
+        // Shared close-code slot. The process loop stores into it on the
+        // WsFrame::Close arm; the SignalWebSocket clone exposes it via
+        // `last_close_code()`. RFC 6455 reserves 0 and it never appears
+        // on the wire, so 0 = "no close observed yet".
+        let last_close_code = Arc::new(AtomicU16::new(0));
+
         let process = SignalWebSocketProcess {
             keep_alive_path,
             requests: outgoing_requests,
@@ -475,6 +508,7 @@ impl<C: WebSocketType> SignalWebSocket<C> {
             .collect(),
             ws_outgoing: channels.outgoing,
             ws_incoming: channels.incoming,
+            last_close_code: last_close_code.clone(),
         };
         let process = process.run().map(|x| match x {
             Ok(()) => (),
@@ -493,6 +527,7 @@ impl<C: WebSocketType> SignalWebSocket<C> {
                         inner: incoming_request_stream,
                     }),
                 })),
+                last_close_code,
             },
             process,
         )
@@ -504,6 +539,22 @@ impl<C: WebSocketType> SignalWebSocket<C> {
 
     pub fn is_closed(&self) -> bool {
         self.request_sink.is_closed()
+    }
+
+    /// Returns the WebSocket close-frame code observed by the process
+    /// loop, or `None` if no close has been observed yet. RFC 6455
+    /// reserves `0` (it never appears on the wire), which is used as
+    /// the sentinel for "still open or never closed".
+    ///
+    /// Used by the xas worker for issue #13 (Bug B) to distinguish
+    /// `4401 "Reauthentication required"` from `1001 "Idle timeout"`
+    /// and `4409 "Connected elsewhere"` (issue #1 Bug A), since the
+    /// follow-up reconnect strategy differs per close code.
+    pub fn last_close_code(&self) -> Option<u16> {
+        match self.last_close_code.load(Ordering::Acquire) {
+            0 => None,
+            code => Some(code),
+        }
     }
 
     pub fn is_used(&self) -> bool {

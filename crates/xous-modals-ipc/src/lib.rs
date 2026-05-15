@@ -3,7 +3,7 @@
 //! Replicates just `show_notification` from xous-core's
 //! `services/modals` so we can put a QR code on the LCD without
 //! pulling in the full `gam`/`blitstr2`/`ux-api` dep cascade. Same
-//! pattern as `xous-pddb-ipc`.
+//! pattern as [`xous_pddb_ipc`].
 //!
 //! The wire structs (`ManagedNotification`, `Opcode::GetMutex`,
 //! `Opcode::Notification`) are byte-compatible verbatim copies from
@@ -16,6 +16,20 @@
 //! 336×536 monochrome LCD. Capacity: a Type 40 (177×177) QR with
 //! Medium ECC encodes up to 3391 alphanumeric characters — comfortably
 //! fits Signal's `tsdevice://` provisioning URLs.
+//!
+//! # Trust boundary
+//!
+//! Different shape from [`xous_pddb_ipc`]: no secret value bytes
+//! cross this boundary, but the rendered text — typically a
+//! provisioning URL or a status message — is GAM-rendered on the
+//! local screen and contributes to the UX trust path. The
+//! `message` and `qrtext` fields **are** caller-controlled
+//! plaintext, so the caller is responsible for not routing
+//! attacker-influenced bytes here. For xas the only production
+//! caller is `xous_app_signal::main::auto_link`, which displays the
+//! Signal-server-issued provisioning URL — see W-W.1 in
+//! `~/REFACTOR_NOTES.md` for the open log-discipline item around
+//! that URL.
 
 #![cfg(target_os = "xous")]
 

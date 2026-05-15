@@ -1,24 +1,51 @@
-//! Linking-flow screens.2-5.5.
+//! Linking-flow screens.
 //!
-//! Four sub-states: `Starting` (waiting for the URL), `ShowUrl` (URL
-//! received; user scans/copies), `Confirming` (phone scanned;
-//! user-confirm in flight), `Done` (linked, transitions to empty
-//! list), `Error` (error string + retry/cancel choice).
+//! Five sub-states cover the device-linking flow:
 //!
-//! All four are passive — they show what the worker emitted via
-//! `Event::LinkUrl` / `LinkComplete` / `LinkError`. The driver
+//! - `LinkStarting` — waiting for the worker to emit the
+//!   provisioning URL.
+//! - `LinkShowUrl` — URL received; user scans or copies it from the
+//!   linked phone.
+//! - `LinkConfirming` — phone has scanned; user-confirm round trip
+//!   in flight.
+//! - `LinkDone` — link complete; ready to transition into the
+//!   message list.
+//! - `LinkError` — link failed; user picks Retry or Cancel.
+//!
+//! All five are passive: they render what the worker has emitted via
+//! `Event::LinkUrl` / `LinkComplete` / `LinkError`, and the driver
 //! transitions between them based on those events.
+//!
+//! # Trust boundary
+//!
+//! The provisioning URL ([`LinkShowUrlScreen::url`]) is the
+//! high-value secret of this flow. While displayed, anyone with a
+//! camera trained on the screen (or with stdout access in hosted
+//! mode) who completes the QR scan before the legitimate phone does
+//! ends up paired against the xas-side identity that the worker just
+//! generated. The window is short (typically tens of seconds, bounded
+//! by the provisioning WebSocket) but real.
+//!
+//! # Security
+//!
+//! `LinkShowUrlScreen` holds the URL as a bare [`String`]. The
+//! workspace REFACTOR_NOTES (item W-W.1) tracks a planned migration
+//! to a zeroizing wrapper.
 
 use crate::stdin_ui::key::Key;
 use crate::stdin_ui::screen::Transition;
 
 // ---------------------------------------------------------------
-// LinkStarting — shown immediately after the user hits "Link this
-// device". The driver will Replace this with LinkShowUrl once the
-// worker's `Event::LinkUrl` arrives. `Cancel` (Left) sends
-// `Cmd::LinkCancel` and Pops back to splash.
+// LinkStarting
 // ---------------------------------------------------------------
 
+/// Transient screen shown immediately after the user picks "Link
+/// this device". The driver issues `Cmd::LinkDevice` when this
+/// screen lands on top of the stack and replaces it with
+/// [`LinkShowUrlScreen`] once the worker emits `Event::LinkUrl`.
+///
+/// `Left` / `Esc` pops back to the splash, which the driver treats
+/// as a cancel.
 #[derive(Debug, Clone, Default)]
 pub struct LinkStartingScreen;
 
@@ -51,13 +78,26 @@ impl LinkStartingScreen {
 }
 
 // ---------------------------------------------------------------
-// LinkShowUrl. URL has arrived. Rendered as monospaced
-// text in this stdin-driven UI; QR rendering happens in `gam_app.rs`
-// for the GAM-driven path.
+// LinkShowUrl
 // ---------------------------------------------------------------
 
+/// Shown after `Event::LinkUrl` arrives. Renders the URL as
+/// monospaced text in this stdin-driven UI; QR rendering happens in
+/// `gam_app.rs` for the GAM-driven path.
+///
+/// # Security
+///
+/// The URL is the link credential during its window — see the
+/// module-level "Trust boundary" note. Anyone who completes the QR
+/// scan first ends up paired against the xas-side identity. Treat
+/// stdout in hosted mode as if it were a public bulletin board.
 #[derive(Debug, Clone)]
 pub struct LinkShowUrlScreen {
+    /// The `tsdevice://` provisioning URL emitted by libsignal.
+    ///
+    /// Bearer credential during the link window. Do not log this
+    /// field beyond the worker's existing trace lines, do not
+    /// `Debug`-print structs wrapping it, and do not persist it.
     pub url: String,
 }
 
@@ -110,12 +150,14 @@ fn chunk_str(s: &str, width: usize) -> Vec<&str> {
 }
 
 // ---------------------------------------------------------------
-// LinkConfirming. Phone has scanned; user must confirm
-// on phone. We can't peek into presage's internal state to know
-// when this happens; the screen shows a static "confirm on phone"
-// message until the worker emits LinkComplete or LinkError.
+// LinkConfirming
 // ---------------------------------------------------------------
 
+/// Shown after the phone has scanned the QR, while the user is
+/// confirming the device-name prompt on the phone. xas cannot peek
+/// into presage's internal state to know when this transition
+/// happens, so the screen displays a static "confirm on phone"
+/// message until the worker emits `LinkComplete` or `LinkError`.
 #[derive(Debug, Clone, Default)]
 pub struct LinkConfirmingScreen;
 
@@ -147,14 +189,30 @@ impl LinkConfirmingScreen {
 }
 
 // ---------------------------------------------------------------
-// LinkDone. Linking complete. Shows registration data
-// for verifiability. Home transitions to the empty-list screen.
+// LinkDone
 // ---------------------------------------------------------------
 
+/// Linking has completed. Shows the registration data so the user
+/// can verify which phone they paired against. `Home` / `Right`
+/// transitions into the conversation list, which sends
+/// `Cmd::StartReceive` to the worker.
+///
+/// # Security
+///
+/// The ACI is account-identifying — see workspace REFACTOR_NOTES
+/// W-W.2 on PII-redaction across the UART log surface. The phone
+/// field is the user's E.164 number. Both are displayed because the
+/// user needs to confirm the link landed on the right account; do
+/// not extend the display by adding a `Debug` print of the whole
+/// struct to a log line.
 #[derive(Debug, Clone)]
 pub struct LinkDoneScreen {
+    /// Device name confirmed by the linked phone.
     pub device_name: String,
+    /// ACI (Signal account UUID). PII; display only, do not log.
     pub aci: String,
+    /// E.164 phone number associated with the linked account. PII;
+    /// display only, do not log.
     pub phone: String,
 }
 
@@ -208,14 +266,20 @@ fn short(s: &str, max: usize) -> String {
 }
 
 // ---------------------------------------------------------------
-// LinkError. Linking failed. Shows the error string +
-// a Retry/Cancel choice.
+// LinkError
 // ---------------------------------------------------------------
 
+/// Linking failed. Shows the worker-supplied error string and a
+/// Retry / Cancel choice. Retry replaces this screen with a fresh
+/// [`LinkStartingScreen`], which re-issues `Cmd::LinkDevice`; Cancel
+/// pops back to the splash.
 #[derive(Debug, Clone)]
 pub struct LinkErrorScreen {
+    /// Free-form error string from the worker. Surfaces upstream
+    /// transport / libsignal failures verbatim; do not assume any
+    /// stable structure.
     pub reason: String,
-    /// 0 = Retry, 1 = Cancel.
+    /// Current cursor position: 0 = Retry, 1 = Cancel.
     pub focus: usize,
 }
 

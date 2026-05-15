@@ -154,16 +154,29 @@ mkdir -p ~/code/xas && cd ~/code/xas
 #     cd xous-app-signal && git checkout dev
 git clone https://github.com/tunnell/xous-app-signal.git
 
-# xous-core (kernel + services). The xous-app-signal branch
-# carries the net-service encoding fix and DNS CNAME fix described
-# in the README's Upstream patches section.
+# xous-core (kernel + services). The `xas-v0.2` branch is the v0.2
+# frozen release branch (see RELEASING.md for how releases pin
+# xous-core) — it registers `xas` in apps/manifest.json (so
+# `services/gam` knows to expose Signal as a launchable app),
+# carries DNS / net / gam fixes the Signal app needs (including
+# the services/net reaper fix from tunnell/xous-core#26), and
+# includes the apps/xas/ subtree.
+#
+# Future xas releases will pin to their own frozen branches
+# (`xas-v0.3`, etc.). The floating `xas` integration branch on
+# tunnell/xous-core continues to advance for development, but
+# released xas versions always build against a pinned snapshot.
+#
+# An older `xous-app-signal` branch also exists with similar
+# content; it's kept around for historical compatibility but
+# `xas-v0.2` has the more recent fixes (DNS CNAME chains,
+# net-service instrumentation, gam Enter-key alias, etc.).
 #
 # Note: --depth 1 keeps the clone small (~250 MB vs ~2 GB full).
 # If you want to verify the branch's commit history matches the
-# table in §1's 'What each clone contributes' (e.g. that
-# `cfcc12eee` is in the history), drop --depth 1 here OR run
-# `git fetch --unshallow` after cloning.
-git clone --depth 1 -b xous-app-signal https://github.com/tunnell/xous-core.git
+# table in §1's 'What each clone contributes', drop --depth 1
+# here OR run `git fetch --unshallow` after cloning.
+git clone --depth 1 -b xas-v0.2 https://github.com/tunnell/xous-core.git
 
 # xous-app-signal's workspace Cargo.toml uses paths like
 # `../repos/xous-core/...`, i.e. relative to xous-app-signal's
@@ -357,7 +370,7 @@ Three things conspire to make this awkward:
 (`generate_app_menus()` in `xtask/src/app_manifest.rs`) from
 `xous-core/apps/manifest.json`, and is gitignored.
 
-The `xous-app-signal` branch of `tunnell/xous-core` already
+The `xas-v0.2` branch of `tunnell/xous-core` (cloned in §1) already
 registers `xas` in `manifest.json` (alongside `vault`), so once
 you've invoked xtask once (`cargo xtask run` in §2.3, or
 `cargo xtask app-image-xip` in §3.2), `apps.rs` self-maintains
@@ -394,6 +407,28 @@ full manifest-derived version (both `APP_NAME_XAS` and
 `APP_NAME_VAULT` plus a vault submenu constant) — no further
 hand-edits needed.
 
+**Re-bootstrap on branch switches.** If you switch the xous-core
+checkout to a branch whose `apps/manifest.json` differs (for
+example, branching off `dev` to test a fix without the xas entry),
+the cached `apps.rs` from the previous build can disagree with the
+new manifest. Two failure modes to watch for:
+
+- The build fails with `error[E0425]: cannot find value
+  APP_NAME_XAS` (cached `apps.rs` was written on a manifest that
+  doesn't have xas; cargo build runs before xtask in
+  `tests/precursor/build-and-bundle.sh`). Re-bootstrap as above.
+- The build *succeeds* but the device boots without `Signal` in
+  the launcher menu (manifest has xas, cached `apps.rs` doesn't,
+  bundle includes the xas binary but gam never registers it).
+  Same fix: re-bootstrap.
+
+Sanity check before flashing:
+```sh
+grep APP_NAME_XAS xous-core/services/gam/src/apps.rs
+```
+If this returns nothing, the launcher won't see Signal regardless
+of what's in the bundled image. Hand-bootstrap and rebuild.
+
 ### 2.2 Build
 
 ```sh
@@ -419,6 +454,20 @@ plus all required services, with xas bundled as the application.
 A small minifb window labelled "Precursor" appears.
 
 ### 2.4 First-run flow inside the hosted window
+
+**Required env var for human-driven hosted runs**: set
+`XAS_BYPASS_PREFLIGHT=1` before launching xtask. Hosted has no
+real WF200 radio; `com.wlan_status()` always returns
+`LinkState::Unknown`; xas's no-internet preflight then routes
+`Link device` → `Screen::NoInternet` and the link flow never
+proceeds. The env var is the documented escape hatch
+(`gam_app.rs::check_internet`); production code on hardware still
+runs the preflight as designed. The §2.5 smoke-test script sets
+this env var itself; for human walkthroughs you have to set it:
+
+```sh
+XAS_BYPASS_PREFLIGHT=1 cargo xtask run xas:.../xas
+```
 
 1. **Unlock PDDB**: enter any password the first time (it
    bootstraps a fresh encrypted store).
@@ -513,8 +562,64 @@ cargo test --features hosted -p xous-app-signal --bins
 
 ~50 tests covering the dialogue model, message rendering,
 contact-name resolution, the stdin UI state machine, and link/
-send/receive event dispatch. Should all pass green. (Verified
-2026-05: `test result: ok. 53 passed`.)
+send/receive event dispatch. Should all pass green.
+
+### 2.7 Renode test environment gotchas
+
+If you're running the robot-framework tests under renode
+(`xas-smoke.robot`, `xas-pddb-real-probe.robot`, etc.), three
+pitfalls the wrapper script does not paper over:
+
+**(a) `xas-smoke.resc` hardcodes `$xous_core_root`.** The
+`.resc` file resolves the xous-core checkout via a literal path
+near the top of the script; the wrapper does not export or
+override that variable. If your `xous-core` lives anywhere
+other than the hardcoded path, renode loads no symbols and
+every assertion that depends on them fails in confusing ways.
+Either edit `$xous_core_root` in the `.resc` to your local
+layout, or pass `-e '$xous_core_root = @<path>'` ahead of
+`include @<resc>` in the wrapper.
+
+**(b) Robot tests need a pre-built `xous.img` + `loader.bin`.**
+The wrapper does not build the kernel image; it expects the
+artifacts to already exist. Build them yourself:
+
+```sh
+cd ~/code/xas/xous-core
+cargo xtask app-image xas:/path/to/xas/target/release/xas \
+    --git-describe v0.9.21-0-g0000000
+```
+
+`--git-describe` is **mandatory on forks**. The xtask runs
+`git describe --tags` to embed a version string into the image
+header, and a fork branch generally has no reachable tag — the
+xtask aborts (or emits a kernel whose embedded version is the
+empty string and trips the bootloader's sanity check). The
+exact value doesn't matter so long as it parses; the literal
+`v0.9.21-0-g0000000` above matches upstream's format and is
+the value the hardware harness pins against.
+
+**(c) `xas-pddb-real-probe.robot` needs two extra build flags.**
+This test exercises the real PDDB backend instead of the
+in-memory shim, and the wrapper sets neither flag the run
+needs to terminate:
+
+```sh
+# xas binary
+cargo build --release --features probe-pddb-real
+
+# kernel image
+cargo xtask app-image xas:... \
+    --feature pddb/autobasis \
+    --git-describe v0.9.21-0-g0000000
+```
+
+Without `pddb/autobasis` the first-boot path waits for a
+user-typed password to unlock the system basis; renode does
+not inject keystrokes on that screen, so the test hangs until
+the wrapper's outer timeout fires. Without `probe-pddb-real`
+xas takes the in-memory shim path, never touches the real
+PDDB, and the test is silently a no-op even when it "passes."
 
 ---
 
@@ -524,6 +629,18 @@ If you skipped section 2 entirely, you still need the
 `apps.rs` bootstrap from §2.1 — the standalone `cargo build`
 in 3.1 has the same gam dependency and fails the same way
 without it.
+
+**Branch selection in xous-core matters.** Hardware builds need
+the xous-core checkout on a branch whose `apps/manifest.json`
+registers xas (`tunnell/xous-core@xas-v0.2` is the canonical one
+for v0.2 builds; future releases will pin to `xas-v0.3`, etc. —
+see RELEASING.md). Building against `dev` (or any
+branch that doesn't register xas) will silently produce an
+image that bundles the xas binary but where the launcher menu
+doesn't list Signal — see the "Re-bootstrap on branch switches"
+note in §2.1. Sanity-check with
+`grep APP_NAME_XAS xous-core/services/gam/src/apps.rs` before
+flashing.
 
 ### 3.1 Build the rv32 xas binary
 
@@ -563,6 +680,7 @@ cd ~/code/xas/xous-core
 cargo xtask app-image-xip \
     xas:../xous-app-signal/target/riscv32imac-unknown-xous-elf/release/xas \
     vault \
+    transientdisk \
     --kernel-feature big-heap \
     --gdb-stub \
     --git-describe v0.9.8-791-gc707f9d8 \
@@ -575,7 +693,8 @@ Notes on the flags:
   doc revisions said `dist/xas-rv32/xas`; that path doesn't
   exist — cargo writes directly to `target/<triple>/release/xas`,
   and `tests/precursor/build-and-bundle.sh` reads it from there.)
-  `vault` is bundled alongside as a co-resident app (xas's
+  `vault` and `transientdisk` are bundled as co-resident apps
+  (xas's
   launcher navigation lives inside vault's launcher conventions).
 - `--kernel-feature big-heap` raises the per-process heap cap
   from 512 KiB → 12 MiB. Required because the libsignal +
@@ -688,7 +807,7 @@ When the Precursor boots into Xous:
 | `usb_update.py` permission denied (Linux host) | udev rule missing | Add `tools/49-precursor.rules` to `/etc/udev/rules.d/` and `udevadm control --reload`, or run with sudo (not recommended) |
 | Hosted xas shows "OOM during link" | Default heap cap too low | Run with `RUST_LOG=info` to see allocator messages; rebuild with `--features pddb-real,hosted` (the dist build is otherwise too lean) |
 | Hardware link succeeds but no messages flow | Wi-Fi connected to 5 GHz, or DNS broken | Re-run the wlan recipe; verify `net ping chat.signal.org` works before opening xas |
-| Send fails with "WebSocket closing" within 30s | Older xous-core without the encoding fix | Confirm you cloned the `xous-app-signal` branch of `tunnell/xous-core`, not upstream `betrusted-io/xous-core`. Upstream PR is [betrusted-io/xous-core#877](https://github.com/betrusted-io/xous-core/pull/877); pull stock once it merges. |
+| Send fails with "WebSocket closing" within 30s | Older xous-core without the encoding fix | Confirm you cloned the `xas-v0.2` branch of `tunnell/xous-core`, not upstream `betrusted-io/xous-core`. Relevant upstream PRs: [#877](https://github.com/betrusted-io/xous-core/pull/877) (encoding fix) and [tunnell/xous-core#26](https://github.com/tunnell/xous-core/pull/26) (services/net reaper fix shipped with v0.2). |
 | Flash completes but device boots into the old image | Loader didn't validate the new signature | Re-flash; if it persists, check `tools/usb_update.py` log for verification errors |
 
 ---
@@ -722,9 +841,9 @@ grep -F '"xas":' apps/manifest.json   # expect: 1 hit
 
 **(Hardware path only.)** A successful hardware build produces an
 image of size ~12.89 MB (12,886,056 bytes give or take a few KB
-across toolchain bumps; verified at 12,931,112 bytes on a 2026-05
-fresh build). md5sum is non-deterministic (timestamp embedded in
-the build) but the size should be within ~50 KB of the baseline.
+across toolchain bumps). md5sum is non-deterministic (timestamp
+embedded in the build) but the size should be within ~50 KB of
+the baseline.
 Hosted-mode builds don't produce a `xous.img` — they produce a
 `target/release/xas` binary at ~58 MB.
 

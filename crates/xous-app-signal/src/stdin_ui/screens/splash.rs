@@ -1,7 +1,9 @@
 //! Splash / first-run screen.
 //!
-//! Four menu items: Link this device / Register a phone number (greyed)
-//! / About / Quit. Up/Down moves focus, Home selects.
+//! Four menu items: "Link this device", "Register a phone number"
+//! (greyed; CDSI / boring-sys is not available on rv32), "About",
+//! and "Quit". Up/Down moves the focus cursor; Home selects;
+//! `'m'` opens the global menu; `'q'` quits.
 
 use crate::stdin_ui::key::Key;
 use crate::stdin_ui::screen::{Screen, Transition};

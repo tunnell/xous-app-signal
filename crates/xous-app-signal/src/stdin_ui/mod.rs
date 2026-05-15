@@ -1,33 +1,39 @@
-//! UI layer for `xas`.
+//! Stdin-driven fallback UI for `xas`.
 //!
-//! Holds the screen stack, runs the input loop, and (in hosted mode)
-//! renders to stdout. The `Ui` struct's API is just `new` + `run`; all
-//! state lives behind it. Screens never see the cmd/event channels
-//! directly — the driver decides when a `Cmd::Hello` is sent and when
-//! an `Event::Pong` updates which screen is on top.
+//! Holds the screen stack, runs the input loop, and renders to
+//! stdout. The [`Ui`] type's public surface is just [`Ui::new`] and
+//! [`Ui::run`]; all state lives behind it.
 //!
-//! Audit-friendly invariants:
+//! Used when the GAM-rendered UI cannot start (hosted mode, unit
+//! tests, standalone `cargo run` outside Xous). On the device the
+//! GAM-rendered UI in `gam_app.rs` is the primary surface.
+//!
+//! # Trust boundary
+//!
+//! In hosted mode, output goes to stdout — visible to anything that
+//! reads the user's terminal. Inbound message bodies, sender ACIs,
+//! and the provisioning URL are all rendered here as plaintext.
+//! The hosted UI is a development surface, not a production-secure
+//! one; treat stdout as if it were a public bulletin board for the
+//! duration of any link / send / receive flow.
+//!
+//! # Audit-friendly invariants
 //!
 //! - One screen on top at a time. The stack only grows via
-//!   `Transition::Push` and only shrinks via `Transition::Pop` /
-//!   `Replace`.
+//!   [`Transition::Push`] and only shrinks via [`Transition::Pop`]
+//!   or [`Transition::Replace`].
 //! - All input goes through `Screen::handle_key` (one method, one
-//!   match). No screen has a side channel into the worker — only the
-//!   driver does.
-//! - Render is `Vec<String>`-shaped. The hosted renderer wraps it in
-//!   a box; a future GAM renderer wraps it in `TextView`s. No screen
-//!   knows which.
-//!
-//! Implements the four MVP screens (Splash, Menu, About, EmptyList).
-//! Subsequent work fills in `Screen::Link*` / `Conversation` /
-//! `Compose` placeholders.
+//!   match). No screen has a side channel into the worker — only
+//!   the driver does.
+//! - Render is `Vec<String>`-shaped. The hosted renderer wraps it
+//!   in a box.
 
 // This module previously lived in its own crate (xous-app-signal-ui)
 // and exposed every screen + helper as `pub` for cross-crate use.
-// After the collapse into xous-app-signal/src/stdin_ui/, some of that
-// surface (e.g. screen constructors that the old test crate
+// After the collapse into xous-app-signal/src/stdin_ui/, some of
+// that surface (screen constructors the old test crate
 // instantiated directly) is no longer reached — but the surface is
-// kept whole so the fallback UI can later be reactivated end-to-end
+// kept whole so the fallback UI can be reactivated end-to-end
 // without re-exposing internals one-by-one.
 #![allow(dead_code)]
 
@@ -47,7 +53,16 @@ use std::time::Duration;
 use async_channel::{Receiver, Sender};
 use xous_signal_worker::{Cmd, Event};
 
-/// Driver. Owns the screen stack and routes input/events.
+/// Stdin-driven UI driver. Owns the screen stack and routes input
+/// and worker events.
+///
+/// # Trust boundary
+///
+/// Owns `cmd_tx` and `event_rx` and is the sole consumer of the
+/// latter once [`Ui::run`] enters its loop. The screens never see
+/// the channels directly — every cross-boundary effect (sending a
+/// `Cmd::LinkDevice`, applying an `Event::Message` to the
+/// conversation list) is routed through this struct.
 #[derive(Debug)]
 pub struct Ui {
     stack: Vec<Screen>,
@@ -65,20 +80,27 @@ impl Ui {
         }
     }
 
-    /// Hosted-mode loop. The main thread renders + handles events;
-    /// a background thread reads stdin and forwards each line via
-    /// `std::sync::mpsc`. The main loop polls both channels with a
-    /// short timeout, redrawing whenever a worker `Event` arrives so
-    /// the linking flow's state changes are visible without forcing
-    /// the user to press a key.
+    /// Hosted-mode driver loop.
     ///
-    /// Earlier screens were synchronous on stdin alone; the
-    /// two-channel poll matters once the linking flow lands.
-    /// It is intentionally minimal: no termios, no escape-code
-    /// parsing, no select primitive. A full keyboard binding
-    /// (arrow-key escape sequences, printable chars in real-time)
-    /// lives in the GAM renderer the on-device build uses; the
-    /// hosted-mode loop just needs enough to drive integration tests.
+    /// The main thread renders to stdout and handles events; a
+    /// background thread reads stdin line by line and forwards each
+    /// line via `std::sync::mpsc`. The main loop polls both
+    /// channels with a short (50 ms) timeout, redrawing whenever a
+    /// worker event arrives so the linking flow's state changes are
+    /// visible without forcing the user to press a key.
+    ///
+    /// Intentionally minimal: no termios, no escape-code parsing,
+    /// no select primitive. Enough to drive integration tests; the
+    /// per-char keyboard handling lives in the GAM renderer that
+    /// the on-device build uses.
+    ///
+    /// # Errors
+    ///
+    /// Propagates `std::io::Error` from `render_frame` writes and
+    /// from `Cmd::Shutdown` if the worker channel is closed
+    /// abnormally on exit (the latter is benign — the worker is
+    /// already gone). Returns `Ok(())` on graceful quit (stdin EOF
+    /// or `Transition::Quit` clearing the stack).
     pub fn run(mut self) -> io::Result<()> {
         let mut stdout = io::stdout().lock();
         let (line_tx, line_rx) = std_mpsc::channel::<String>();
@@ -120,6 +142,17 @@ impl Ui {
             // Drain any pending worker events. Each one may transition
             // the stack and forces a re-render before we go back to
             // waiting for input.
+            //
+            // LOGGING / SECURITY: the `{evt:?}` shape below renders
+            // the entire `xous_signal_worker::Event` via its derived
+            // Debug impl. That includes `Event::LinkUrl(_)` (the
+            // provisioning credential during its window, W-W.1 in
+            // `~/REFACTOR_NOTES.md`), `Event::Message { body, ... }`
+            // (decrypted plaintext, W-W.3), and `Event::LinkComplete
+            // { aci, phone, .. }` (account identifiers, W-W.2).
+            // Stdout in hosted mode is the developer's terminal —
+            // treat it as a public bulletin board, as documented in
+            // the module-level Trust boundary note.
             let mut got_event = false;
             while let Ok(evt) = self.event_rx.try_recv() {
                 writeln!(stdout, "[event] {evt:?}")?;
@@ -171,10 +204,22 @@ impl Ui {
         Ok(())
     }
 
-    /// Apply a worker `Event` to the screen stack. Acts on the
-    /// link-flow events; other events are logged but ignored (they
-    /// were emitted by side channels — `Event::Pong` etc. — and
-    /// don't affect the user-visible screen).
+    /// Apply a worker [`Event`] to the screen stack.
+    ///
+    /// Acts on the link flow (`LinkUrl` / `LinkComplete` /
+    /// `LinkError`), the receive loop (`ReceiveStarted` / `Message`
+    /// / `ReceiveError`), and the send loop (`SendComplete` /
+    /// `SendError`). Other events (`Pong`, `Whoami`,
+    /// `ShuttingDown`, etc.) are dropped silently — they were
+    /// emitted via side channels and do not affect the user-visible
+    /// screen.
+    ///
+    /// # Trust boundary
+    ///
+    /// Receives plaintext post-decrypt payloads. Inbound bodies are
+    /// appended to the conversation list as bare strings; the
+    /// `MessageSummary` type documents the same logging discipline
+    /// the rest of the UI follows.
     fn handle_event(&mut self, evt: Event) {
         use crate::stdin_ui::screens::conversation_list::{MessageSummary, ReceiveStatus};
         use crate::stdin_ui::screens::link::{LinkDoneScreen, LinkErrorScreen, LinkShowUrlScreen};
@@ -265,13 +310,14 @@ impl Ui {
         }
     }
 
-    /// Visible-for-tests entry point. Apply a single key event to the
-    /// current screen and return how many screens are on the stack
-    /// after. Tests use this to assert on transitions without
-    /// touching stdin/stdout. Side-effects (e.g. sending
-    /// `Cmd::LinkDevice` when the user enters the LinkStarting screen)
-    /// are dispatched here too so test invocations exercise the same
-    /// path the live driver takes.
+    /// Apply a single key event to the current screen and return
+    /// the new stack depth.
+    ///
+    /// Tests use this to assert on transitions without touching
+    /// stdin / stdout. Side-effects (e.g. sending `Cmd::LinkDevice`
+    /// when the user enters the LinkStarting screen) are dispatched
+    /// here too so test invocations exercise the same path the live
+    /// driver takes.
     pub fn dispatch(&mut self, key: Key) -> usize {
         let prev_top_id = top_id(self.stack.last());
         let transition = match self.stack.last_mut() {
@@ -285,10 +331,17 @@ impl Ui {
         self.stack.len()
     }
 
-    /// Entry point for whole-line input. Currently used by
-    /// the Compose screen — typing a message and pressing Enter
-    /// sends the line as the message body. If the top screen isn't
-    /// Compose, the line is silently dropped.
+    /// Apply a whole-line input. Used by the Compose screen —
+    /// typing a message and pressing Enter sends the line as the
+    /// message body via `Cmd::SendMessage`. If the top screen is
+    /// not Compose, the line is silently dropped.
+    ///
+    /// # Security
+    ///
+    /// The `line` parameter is the message plaintext the user just
+    /// typed. It is moved through `Compose::submit` into a
+    /// `Cmd::SendMessage` and the original local `String` is
+    /// dropped. Do not log this argument.
     pub fn dispatch_line(&mut self, line: String) -> usize {
         if let Some(Screen::Compose(c)) = self.stack.last_mut() {
             if let Some((recipient, body)) = c.submit(line) {
@@ -304,11 +357,17 @@ impl Ui {
         self.stack.len()
     }
 
-    /// Called by `dispatch` when the top screen changes. If the new
-    /// top is a screen with a one-shot side-effect (currently:
-    /// `LinkStarting` triggers `Cmd::LinkDevice`), emit the Cmd here.
-    /// Audit story: every screen→Cmd binding lives in this one
-    /// function.
+    /// Called by [`Self::dispatch`] when the top screen has just
+    /// changed. If the new top screen has a one-shot side-effect
+    /// (`LinkStarting` → `Cmd::LinkDevice`,
+    /// `ConversationList` → `Cmd::StartReceive`), emit the matching
+    /// command here.
+    ///
+    /// # Audit story
+    ///
+    /// Every screen → Cmd binding lives in this one function. A
+    /// reviewer can read the match arms to enumerate every place
+    /// the UI sends a command to the worker.
     fn on_screen_entered(&self) {
         match self.stack.last() {
             Some(Screen::LinkStarting(_)) => {
@@ -329,7 +388,8 @@ impl Ui {
         }
     }
 
-    /// Visible-for-tests: peek the top screen's discriminant.
+    /// Peek the top screen on the stack. Test-facing helper; the
+    /// driver itself uses `stack.last()` directly.
     pub fn top(&self) -> Option<&Screen> {
         self.stack.last()
     }
@@ -356,9 +416,9 @@ impl Ui {
     }
 }
 
-/// Discriminant id for a `Screen`. Used by `dispatch` to detect
-/// "top changed" without comparing whole `Screen` values (which
-/// would require `PartialEq` on every payload).
+/// Discriminant id for a [`Screen`]. Used by [`Ui::dispatch`] to
+/// detect "top changed" without comparing whole `Screen` values
+/// (which would require `PartialEq` on every payload).
 fn top_id(s: Option<&Screen>) -> u8 {
     match s {
         None => 0,
@@ -377,10 +437,14 @@ fn top_id(s: Option<&Screen>) -> u8 {
     }
 }
 
-/// Translate a stdin-line into a `Key`. Conventions: bare `\n` =
-/// Home; first char of any other input is the key; `j`/`k`/arrow-
-/// names spelled out (`up`/`down`/`left`/`right`) work too for
-/// scriptability.
+/// Translate a stdin line into a [`Key`].
+///
+/// Conventions:
+/// - Bare `\n` → [`Key::Home`].
+/// - Arrow names spelled out (`up`/`down`/`left`/`right`) for
+///   scriptability.
+/// - Vim-style `j`/`k`/`h`/`l` mapped to the corresponding arrows.
+/// - Any other input: first char becomes [`Key::Char`].
 fn parse_key(line: &str) -> Key {
     let trimmed = line.trim_end_matches('\n');
     if trimmed.is_empty() {

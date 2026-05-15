@@ -27,6 +27,22 @@ if [[ ! -d "$XOUS_CORE_DIR" ]]; then
     exit 1
 fi
 
+# Preflight: gam's apps.rs must already register APP_NAME_XAS or the
+# cargo build will fail with E0425 (or, worse, succeed with a bundle
+# whose launcher doesn't see Signal — see CHORES.md "Trap 3" and
+# BUILDING.md §2.1 / §3.1). Most common cause: xous-core checked out
+# on a branch (e.g. dev) whose apps/manifest.json doesn't list xas.
+APPS_RS="$XOUS_CORE_DIR/services/gam/src/apps.rs"
+if [[ ! -f "$APPS_RS" ]] || ! grep -q '\bAPP_NAME_XAS\b' "$APPS_RS"; then
+    echo "ERROR: $APPS_RS missing or lacks APP_NAME_XAS." >&2
+    echo "  This is required by crates/xous-app-signal/src/gam_app.rs." >&2
+    echo "  Likely cause: xous-core is on a branch whose apps/manifest.json" >&2
+    echo "  doesn't register xas (e.g. dev). Switch to a branch that does" >&2
+    echo "  (tunnell/xous-core@xas), or hand-bootstrap apps.rs per" >&2
+    echo "  BUILDING.md §2.1." >&2
+    exit 1
+fi
+
 XAS_BIN="$REPO_ROOT/target/riscv32imac-unknown-xous-elf/release/xas"
 
 echo "==> Building xas (release, hardware target)"
@@ -56,15 +72,17 @@ fi
 
 echo "==> xas built: $XAS_BIN ($(du -h "$XAS_BIN" | cut -f1))"
 
-# Step 2: bundle into a xous.img alongside vault. Matches §3.2 of
-# BUILDING.md exactly. Note `xas:$XAS_BIN` (with the `xas:` prefix) —
-# without it, xtask's CrateSpec parser records `name = None` and never
-# adds xas to app_names.
+# Step 2: bundle into a xous.img alongside vault + transientdisk.
+# `xas:$XAS_BIN` (with the `xas:` prefix) is required — without it,
+# xtask's CrateSpec parser records `name = None` and never adds xas
+# to app_names. `vault` and `transientdisk` are co-resident apps
+# matched by manifest.json entries on the xous-core fork.
 echo "==> Bundling kernel image (cargo xtask app-image-xip)"
 cd "$XOUS_CORE_DIR"
 cargo xtask app-image-xip \
     "xas:$XAS_BIN" \
     vault \
+    transientdisk \
     --kernel-feature big-heap \
     --gdb-stub \
     --git-describe "$GIT_DESCRIBE" \

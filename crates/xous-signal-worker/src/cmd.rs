@@ -1,13 +1,38 @@
-//! IPC vocabulary between the app's main thread and the
-//! `presage::Manager` worker.
+//! Channel vocabulary between the app's main thread and the
+//! [`presage::Manager`] worker.
 //!
-//! `Cmd` flows main → worker, `Event` flows worker → main. The
-//! async-channel duality (`send_blocking`/`recv_blocking` from sync,
-//! `send`/`recv` from async) lets the same channel pair work from
-//! both sides without `block_on` gymnastics.
+//! [`Cmd`] flows main -> worker; [`Event`] flows worker -> main. The
+//! same pair of `async-channel` channels serves both directions: the
+//! sync UI side uses `send_blocking`/`recv_blocking`, the async
+//! worker side uses `send`/`recv`. No `block_on` round-trips, no
+//! locks across the boundary.
 //!
-//! New variants for linking, incoming messages, and send-message are
-//! contained additive changes here.
+//! # Trust boundary
+//!
+//! This module defines the *only* IPC surface between the worker and
+//! the rest of xas. Everything in it is the audit checkpoint between
+//! UI code that may run untrusted UTF-8 (user input, contact strings)
+//! and the worker that holds the [`PddbStore`](presage_store_pddb::PddbStore)
+//! and the Signal-Protocol session state. Variants are deliberately
+//! string- and primitive-typed so the boundary remains
+//! readable in code review; richer typed payloads must stay inside
+//! the worker.
+//!
+//! # Sensitive data crossing this boundary
+//!
+//! - [`Cmd::SendMessage`] carries the outgoing plaintext `body`
+//!   (still unencrypted at this point: libsignal does the
+//!   X3DH/PQXDH + double-ratchet encryption *after* this command
+//!   is consumed by the worker).
+//! - [`Event::Message`] carries the *decrypted* plaintext `body`
+//!   of an inbound message — the libsignal trust witness for "this
+//!   text was authentically sent by `sender`."
+//! - [`Event::LinkUrl`] carries the secondary-device provisioning
+//!   URL. Anyone able to read this URL within its window can claim
+//!   the link.
+//! - [`Event::LinkComplete`] / [`AccountInfoData`] surface ACI,
+//!   phone number, and device name — Signal account identifiers
+//!   that link the device to its real-world account.
 
 /// Commands sent from the app (main thread) to the Manager worker.
 #[derive(Debug, Clone)]
@@ -25,12 +50,25 @@ pub enum Cmd {
 
     /// Link this device as a secondary to a phone-resident Signal
     /// account. The worker calls
-    /// `presage::Manager::link_secondary_device`, which streams a
-    /// provisioning URL out (we forward as `Event::LinkUrl`) and
+    /// [`presage::Manager::link_secondary_device`], which streams a
+    /// provisioning URL out (forwarded as [`Event::LinkUrl`]) and
     /// blocks until the phone confirms. On success the worker emits
-    /// `Event::LinkComplete` and *retains the resulting `Manager` for
-    /// subsequent receive/send calls*. On failure it emits
-    /// `Event::LinkError` and the worker stays unregistered.
+    /// [`Event::LinkComplete`] and *retains the resulting `Manager`
+    /// for subsequent receive/send calls*. On failure it emits
+    /// [`Event::LinkError`] and the worker stays unregistered.
+    ///
+    /// # Trust boundary
+    ///
+    /// Triggers the only path that writes identity and root keys to
+    /// PDDB. After `LinkComplete`, the worker holds a registered
+    /// Manager whose Signal-Protocol session state derives from
+    /// material handshaked with the primary phone during this call.
+    ///
+    /// # Security
+    ///
+    /// `device_name` is sent to the primary device (the Signal
+    /// server forwards it) and shown to the user there; treat as
+    /// user-controlled UTF-8 that ends up in another party's UI.
     LinkDevice { device_name: String },
 
     /// Cancel an in-flight link. Best-effort — if the
@@ -51,25 +89,43 @@ pub enum Cmd {
     /// `Manager::send_message`, then re-opens the stream.
     StartReceive,
 
-    /// Send a 1:1 text message to the named recipient.
-    /// Routed through the same manager task that owns the receive
-    /// stream. `recipient` is a `service_id_string()` (e.g.
-    /// `"00000000-0000-4000-8000-000000000001"` for an Aci); the
-    /// worker parses it back into `ServiceId` before calling
-    /// `Manager::send_message`. `body` is the plaintext UTF-8
-    /// message body. `timestamp` is the client-generated unix-ms
-    /// timestamp the UI used when it optimistically appended the
-    /// outgoing message to its in-RAM history; the worker echoes
-    /// this same value back in `Event::SendComplete { timestamp }`
-    /// and `Event::SendError { timestamp: Some(_) }` so the UI
-    /// can correlate event-to-pending-message in its optimistic-
-    /// render path. Worker also uses this as the Signal-protocol
+    /// Send a 1:1 text message to the named recipient. Routed through
+    /// the same manager task that owns the receive stream.
+    ///
+    /// `recipient` is either a `service_id_string()` (e.g.
+    /// `"00000000-0000-4000-8000-000000000001"` for an Aci) or a
+    /// `+e164` phone number; the worker parses it into a
+    /// libsignal `ServiceId` before calling
+    /// [`presage::Manager::send_message`]. Phone-number recipients
+    /// are resolved against the contacts store (which is empty until
+    /// `Cmd::SyncContacts` has run successfully).
+    ///
+    /// `body` is the plaintext UTF-8 message body. `timestamp` is the
+    /// client-generated unix-ms timestamp the UI used when it
+    /// optimistically appended the outgoing message to its in-RAM
+    /// history; the worker echoes this same value back in
+    /// [`Event::SendComplete`] and [`Event::SendError`] so the UI can
+    /// correlate event-to-pending-message in its optimistic-render
+    /// path. The worker also uses this as the Signal-protocol
     /// timestamp on the wire.
     ///
-    /// Requires `Cmd::StartReceive` to have run first — the manager
+    /// Requires [`Cmd::StartReceive`] to have run first — the manager
     /// task is the only place the Manager is reachable. Sending
     /// before receive starts gets a `SendError { reason: "not
     /// receiving; ...", timestamp: None }`.
+    ///
+    /// # Trust boundary
+    ///
+    /// `body` is *plaintext* at this point. Encryption (X3DH/PQXDH +
+    /// double-ratchet seal) happens inside `Manager::send_message`
+    /// after the worker consumes this command.
+    ///
+    /// # Logging
+    ///
+    /// The worker emits `body_len` (length only, never the body
+    /// itself) to its log pipeline. `recipient` is logged in full —
+    /// see `xous-signal-worker` REFACTOR_NOTES for the logging-discipline
+    /// audit item covering recipient/ACI emission.
     SendMessage { recipient: String, body: String, timestamp: u64 },
 
     /// Read account-identity info from the loaded Manager and
@@ -96,19 +152,43 @@ pub enum Cmd {
     /// is the user-triggered way to populate contacts on demand.
     SyncContacts,
 
-    /// User-triggered: log out from the linked Signal account.
-    /// Tears down the manager (drops the WS pump, ends the receive
-    /// stream), wipes the PDDB-backed Store (registration data,
-    /// identity keypairs, sender cert, master key, all protocol-store
+    /// User-triggered: log out from the linked Signal account. Tears
+    /// down the manager (drops the WS pump, ends the receive stream),
+    /// wipes the PDDB-backed Store (registration data, identity
+    /// keypairs, sender cert, master key, all protocol-store
     /// dictionaries, all messages-by-thread, all profiles + contacts),
-    /// and emits `Event::LoggedOut`. The worker stays alive — the user
-    /// can immediately send a fresh `Cmd::LinkDevice` to relink.
+    /// and emits [`Event::LoggedOut`]. The worker stays alive — the
+    /// user can immediately send a fresh [`Cmd::LinkDevice`] to
+    /// relink.
     ///
-    /// Note: this does NOT remove the device from the primary phone's
-    /// Linked Devices list. The user must do that manually if they
-    /// want; otherwise the entry sits in the list as a stale link.
-    /// (Removing it from the primary requires `unlink_secondary`,
-    /// which is a primary-only API per presage.)
+    /// # Security
+    ///
+    /// Best-effort key destruction. The store wipe routes through
+    /// `Store::clear`, which deletes the PDDB dictionaries holding
+    /// the identity keypair, prekeys, signed prekeys, root/chain
+    /// keys, sender cert, and master key. Errors during the wipe are
+    /// logged but non-fatal — `Event::LoggedOut` fires anyway. Stale
+    /// material left by a failed wipe would still be encrypted at
+    /// rest by the PDDB master secret, but a subsequent re-link
+    /// could read it back; the warning log is the only signal an
+    /// operator currently has.
+    ///
+    /// `presage_store_pddb`'s `Store::clear` is not atomic across
+    /// dictionaries (see `presage-store-pddb/src/store.rs::clear`
+    /// and `~/REFACTOR_NOTES.md` PS.sec-E): a mid-clear error leaves
+    /// `session_cache` and `session_dirty` partially populated, and
+    /// downstream the PDDB free-list does **not** zero pages on
+    /// dictionary delete (PS.sec-C). Acquiring the flash post-wipe
+    /// can therefore recover ciphertext that the API surface
+    /// presents as gone. The W-W.7 refactor to surface partial-wipe
+    /// success per dictionary depends on this clear-semantics
+    /// contract; the secure-erase opcode the PDDB team would expose
+    /// is the deeper fix.
+    ///
+    /// This does **not** remove the device from the primary phone's
+    /// Linked Devices list — that requires `unlink_secondary`,
+    /// which is a primary-only API. The user must remove the entry
+    /// from the primary's UI to fully retire the link.
     Logout,
 
     /// User-triggered: lookup a Signal username (e.g., `alice.42`)
@@ -124,12 +204,29 @@ pub enum Cmd {
 }
 
 /// Identity fields read from `Manager::registration_data()`.
-/// Mirrors the shape of `Event::LinkComplete` but lives in its
-/// own struct since we now also surface it via `Event::AccountInfo`.
+///
+/// Mirrors the shape of [`Event::LinkComplete`] but lives in its own
+/// struct since the same data is also surfaced via
+/// [`Event::AccountInfo`].
+///
+/// # Security
+///
+/// Contains Signal account identifiers (ACI and registered phone
+/// number) and the user-supplied device name. None of these are
+/// secret in the cryptographic sense — they are public to the Signal
+/// server and to anyone the account communicates with — but they
+/// link the device to its real-world account. The `Debug` derive
+/// stringifies all three fields, so any `tracing::debug!(?info)` or
+/// panic backtrace involving this struct emits the account identity
+/// to the log pipeline.
 #[derive(Debug, Clone)]
 pub struct AccountInfoData {
+    /// Device label the user chose at link time (e.g. `"xas-phoenix"`).
+    /// Round-trips through the primary phone's Linked Devices list.
     pub device_name: String,
+    /// Account Identifier in UUID form (libsignal `Aci::to_string()`).
     pub aci: String,
+    /// Registered phone number in e164 form (`+<country><digits>`).
     pub phone: String,
 }
 
@@ -146,20 +243,59 @@ pub enum Event {
     /// outcome is what the UI ultimately needs.
     Whoami(Result<String, String>),
 
-    /// The provisioning URL the user must scan/copy with
-    /// their Signal phone. Emitted once per `Cmd::LinkDevice`,
+    /// The provisioning URL the user must scan or transcribe with
+    /// their Signal phone. Emitted once per [`Cmd::LinkDevice`],
     /// promptly after the worker calls `link_secondary_device`. The
     /// URL is a `tsdevice://...` deep-link — render as text or as a
     /// QR depending on the surface.
+    ///
+    /// # Security
+    ///
+    /// The URL carries the provisioning-session identifier libsignal
+    /// will accept to complete the link. Anyone who reads this string
+    /// during its window (until the primary phone scans it or the
+    /// libsignal call times out) can pair their own device against
+    /// this xas instance's pending link request — meaning the
+    /// attacker walks away with a Signal-Protocol session bound to
+    /// our generated identity. The string MUST be treated as
+    /// sensitive even though it expires:
+    ///
+    /// - Do not log the URL to any persistent surface (UART, PDDB
+    ///   diagnostic dump, screenshot uploader).
+    /// - Render directly to the user's display only; do not stage
+    ///   it through any in-memory buffer that may be later dumped.
+    ///
+    /// See `xous-signal-worker` REFACTOR_NOTES for the audit item
+    /// covering the current UART emission of this URL inside
+    /// `handle_link_device`.
     LinkUrl(String),
 
-    /// Linking succeeded. The worker has just transitioned
-    /// to `Manager<S, Registered>` internally and persisted the
-    /// registration data via `StateStore`. The fields below are
-    /// pulled from `RegistrationData` for display.
+    /// Linking succeeded. The worker has just transitioned to
+    /// `Manager<S, Registered>` internally and persisted the
+    /// registration data via `StateStore`. Fields are pulled from
+    /// `RegistrationData` for display.
+    ///
+    /// # Trust boundary
+    ///
+    /// Emission of this variant is the witness that the worker now
+    /// holds a `Manager<PddbStore, Registered>` whose Signal-Protocol
+    /// identity is provisioned and persisted. No code path emits this
+    /// variant without having received a successful link result from
+    /// libsignal-service.
+    ///
+    /// # Security
+    ///
+    /// Carries the same identifiers as `AccountInfoData` (the inner
+    /// type of [`Event::AccountInfo`]). See that struct's `# Security`
+    /// block for the disclosure caveat.
     LinkComplete {
+        /// Device label from `RegistrationData::device_name`. Empty
+        /// string if upstream stored `None` (rare — link flow always
+        /// supplies one).
         device_name: String,
+        /// Account Identifier as a UUID string.
         aci: String,
+        /// Registered phone number, e164 form.
         phone: String,
     },
 
@@ -182,27 +318,60 @@ pub enum Event {
     /// transition the status indicator from "starting" to "listening".
     ReceiveStarted,
 
-    /// A single decrypted incoming message. Fields are
-    /// flattened from `presage::libsignal_service::content::Content`
-    /// for the same IPC reason `LinkComplete` is — string-typed
-    /// payloads cross the boundary cleanly. Only `DataMessage`-style
-    /// text bodies are surfaced; control / sync / receipt messages
-    /// from the receive stream are silently dropped at the worker
-    /// (their effect on the store is already applied).
+    /// A single decrypted incoming message. Fields are flattened
+    /// from `presage::libsignal_service::content::Content` for the
+    /// same IPC reason `LinkComplete` is — string-typed payloads
+    /// cross the boundary cleanly. Only `DataMessage`-style text
+    /// bodies are surfaced; control / sync / receipt messages from
+    /// the receive stream are silently dropped at the worker (their
+    /// effect on the store is already applied).
+    ///
+    /// # Trust boundary
+    ///
+    /// Emission of this variant means libsignal-protocol has
+    /// authenticated the message: the double-ratchet MAC matched
+    /// the receiving chain, and the sealed-sender envelope was
+    /// signed by a sender certificate that chains to a server-
+    /// trusted root. `sender` is therefore the libsignal-authenticated
+    /// identity of the originator — not a network-controlled string.
+    ///
+    /// # Security
+    ///
+    /// `body` is decrypted plaintext from a remote party. Three
+    /// cautions:
+    ///
+    /// 1. The string content is attacker-influenceable — it is
+    ///    whatever the sender chose to type. UI code rendering it
+    ///    must treat as untrusted UTF-8 (display sanitization,
+    ///    no shell/format interpretation).
+    /// 2. The string MUST NOT be logged or persisted outside the
+    ///    PDDB-backed `Store`. The worker itself logs only the
+    ///    variant kind and `body_len`, never the body.
+    /// 3. The string lives in RAM only — `Drop` of this struct
+    ///    deallocates without zeroizing. Defense in depth would
+    ///    require a `Zeroizing<String>` wrapper here; out of scope
+    ///    for the channel surface but flagged in REFACTOR_NOTES.
     Message {
         /// `service_id_string()` of the sender — the thread key the
-        /// UI groups conversations by.
+        /// UI groups conversations by. libsignal-authenticated; see
+        /// the variant's `# Trust boundary`.
         sender: String,
-        /// Display-friendly sender label resolved from the contacts
-        /// store at the time the message was processed: `Some(phone)`,
-        /// `Some(name)`, or `None` when the contact isn't in the store
+        /// Display-friendly phone-number form of the sender, resolved
+        /// from the contacts store at the time the message was
+        /// processed. `None` when the contact isn't in the store
         /// (first-sight from a peer who isn't yet synced from the
         /// linked phone). UIs should fall back to `sender` (the UUID)
         /// when this is `None`.
         sender_phone: Option<String>,
+        /// Display-friendly profile name of the sender, same lookup
+        /// path as `sender_phone`. Empty profiles are surfaced as
+        /// `None`.
         sender_name: Option<String>,
         /// Plaintext body. Empty string means an attachment-only or
         /// reaction-only DataMessage that we can't render in MVP.
+        ///
+        /// MUST NOT be logged or persisted outside the PDDB-backed
+        /// `Store`.
         body: String,
         /// Server timestamp (UNIX millis), matches what `Content`
         /// carries.
@@ -265,6 +434,37 @@ pub enum Event {
     /// resets account state, clears messages/dialogues, transitions
     /// to `Screen::Menu` with `MenuItem::Link`.
     LoggedOut,
+
+    /// Server-forced auth expiry: Signal sent WS close code 4401
+    /// ("Reauthentication required") and our credential-refresh
+    /// path failed to recover (N consecutive 403s on the refreshed
+    /// WS). Emitted by `manager_task` after the reauth retry budget
+    /// is exhausted. UI mirrors the `LoggedOut` reset but surfaces
+    /// the reason as a banner so the user understands they need to
+    /// re-link rather than thinking the device is generally broken.
+    /// See #13 for the underlying bug. The String is a short
+    /// human-readable reason (typically the last 403 response body
+    /// or a synthesized "reauthentication failed after N retries").
+    SignalAuthExpired(String),
+
+    /// Server-forced displacement: Signal sent WS close code 4409
+    /// ("Connected elsewhere"). This fires when a different
+    /// authenticated WS for the same (accountIdentifier, deviceId)
+    /// pair connects to the server — Signal-Server's
+    /// `ConflictingMessageConsumerException` displaces the older
+    /// listener. Common scenario: another xas instance, or this
+    /// same xas's previous WS that got displaced by a fresh
+    /// reconnect while the server's slot hadn't cleared yet.
+    /// Emitted by `manager_task` when the receive stream sees
+    /// 4409 — treated as terminal rather than retried, because
+    /// auto-reconnect would just self-displace again. UI mirrors
+    /// the `LoggedOut` reset with a banner explaining that another
+    /// device or app instance took over. User re-links to use this
+    /// device. See #1 for the underlying bug. The String is a
+    /// short human-readable reason for diagnostics (typically
+    /// "Server reported 4409 'Connected elsewhere' — another
+    /// device with this Signal account is active.").
+    SignalConflictingDevice(String),
 
     /// `Cmd::ResolveUsername` finished. Result is `Some(aci)` if the
     /// username resolved (UI opens a Thread for that uuid),

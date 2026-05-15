@@ -1,9 +1,9 @@
 //! About screen.
 //!
-//! End-user verifiability surface: lists every upstream version we
-//! pin, so a photograph of this screen reproduces the build. All
-//! values are `static` strings so the screen is allocation-free at
-//! render time.
+//! End-user verifiability surface: lists every upstream version
+//! xas pins, so a photograph of this screen reproduces the build.
+//! All values are `static` strings so the screen is
+//! allocation-free at render time.
 
 use crate::stdin_ui::key::Key;
 use crate::stdin_ui::screen::Transition;

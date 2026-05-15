@@ -18,13 +18,20 @@ pub const WIDTH: usize = 50;
 #[allow(dead_code)]
 pub const HEIGHT: usize = 22;
 
-/// Render one frame to stdout, framed with the status bar and hint
-/// footer described in the original UI design (since superseded; see git log for the spec) Lines too long for `WIDTH` are
-/// truncated; lines shorter are padded out so the box-rendering
-/// stays aligned.
+/// Render one frame to stdout, framed with a status bar at the top
+/// and a hint footer at the bottom. Lines too long for `WIDTH` are
+/// truncated; shorter lines are padded out so the box-drawing stays
+/// aligned.
 ///
-/// `status_chips` are the inverted chips (`[WiFi]`, `[TLS]`, `[OFF]`).
-/// `hint` is the per-screen footer text.
+/// `status_chips` are inverted-style markers (`[WiFi]`, `[TLS]`,
+/// `[OFF]`) shown in the title row. `hint` is the per-screen footer
+/// text.
+///
+/// # Errors
+///
+/// Propagates any `std::io::Error` from `out`. The final `flush`
+/// ensures the frame reaches the terminal before the caller polls
+/// for input.
 pub fn render_frame(
     out: &mut impl Write,
     status_chips: &str,
