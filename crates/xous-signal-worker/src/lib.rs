@@ -56,38 +56,64 @@ use presage::manager::Registered;
 use presage_store_pddb::PddbStore;
 use xous_net_bridge::{SyncHttpClient, signal_production_roots};
 
-/// Initial worker-thread stack size.
+/// Worker-thread stack size.
 ///
-/// 2 MiB is the empirical floor for the link path, which is the
-/// deepest call stack the worker exercises: zkgroup credential batch
-/// + serde JSON build + rustls TLS write + tungstenite WS framing
-/// during `PUT /v1/accounts/attributes` on the post-link auto-reload
-/// blew a 1 MiB stack in hosted-mode testing.
+/// 2 MiB is the empirical floor for the deepest path in the link
+/// flow: a `PUT /v1/accounts/attributes` post-link call runs zkgroup
+/// credential batch construction + serde JSON build + rustls TLS
+/// write + tungstenite WS framing, deep enough to blow a 1 MiB stack.
+/// Xous commits stack pages eagerly via `map_memory`, so this is the
+/// RAM the worker thread permanently reserves from the 16 MiB SRAM
+/// budget — every increase here costs SRAM that cannot be reclaimed
+/// while the worker is alive.
 ///
-/// Xous commits stack pages eagerly via `map_memory`, so this whole
-/// reservation is taken from the process budget at spawn time. The
-/// kernel-level `big-heap` feature (used by `xtask app-image-xip
-/// --kernel-feature big-heap` for hardware builds) raises the
-/// per-process cap to 12 MiB, leaving plenty of headroom.
+/// # rv32 / 16 MiB constraint
 ///
-/// If a future flow stage overflows again, bump to 4 MiB.
+/// If a future flow stage overflows again, the next step is 4 MiB.
+/// Profile the failing call to confirm before adjusting; cheaper
+/// fixes (boxing large futures, shrinking serde build state) may
+/// land within the existing budget.
 const WORKER_STACK_BYTES: usize = 2 * 1024 * 1024;
 
-/// Spawn the Manager worker thread.
+/// Spawn the `presage::Manager` worker thread.
 ///
-/// Returns a `JoinHandle` for the worker thread itself. The worker
+/// Returns a [`JoinHandle`] for the worker thread itself. The worker
 /// terminates when either:
 ///
-/// - the `cmd_rx` channel returns `Err(RecvError)` (sender dropped), or
-/// - it processes a `Cmd::Shutdown` and emits `Event::ShuttingDown`.
+/// - `cmd_rx` returns `Err(RecvError)` (the main thread dropped its
+///   sender — implicit shutdown), or
+/// - it processes a [`Cmd::Shutdown`] and emits
+///   [`Event::ShuttingDown`].
 ///
 /// `event_tx` is held across `await` points so the executor parks on
-/// I/O rather than busy-waiting; cloning is cheap (it's an
-/// `Arc`-shaped channel handle).
+/// I/O rather than busy-waiting; cloning is cheap (the channel
+/// handle is `Arc`-shaped).
 ///
-/// The worker never panics on a `event_tx.send` failure — if the main
-/// thread has dropped its receiver, the right thing is to exit
-/// cleanly rather than abort the executor.
+/// On any `event_tx.send` failure, the worker exits cleanly rather
+/// than panicking — if the main thread has dropped its receiver, the
+/// right thing is to teardown, not to abort the executor.
+///
+/// # Trust boundary
+///
+/// Spawn-time only. The caller passes in a `PddbStore` that already
+/// owns access to the protocol-store dictionaries; the worker
+/// thread becomes the sole owner of that store handle for life. The
+/// channel pair (`cmd_rx`, `event_tx`) is the *only* surface through
+/// which the rest of xas exchanges work with the Signal-Protocol
+/// state machine — see [`crate::Cmd`] and [`crate::Event`].
+///
+/// # Panics
+///
+/// Panics if the OS refuses to spawn the worker thread (`thread::
+/// Builder::spawn` returning `Err`). The Xous kernel may run out of
+/// thread slots; on a healthy boot this is unreachable.
+///
+/// # rv32 / 16 MiB constraint
+///
+/// The worker permanently reserves 2 MiB of SRAM for its stack
+/// (`WORKER_STACK_BYTES`). Calling this twice produces two threads
+/// and two stack reservations — there is no intent for multiple
+/// workers to coexist; the binary spawns exactly one.
 pub fn run_signal_worker(
     store: PddbStore,
     cmd_rx: Receiver<Cmd>,
@@ -100,20 +126,40 @@ pub fn run_signal_worker(
         .expect("spawn signal-worker thread")
 }
 
+/// Worker-thread entry point invoked from inside the spawned thread.
+///
+/// Wires up the libsignal/presage thread-locals (HTTP client, task
+/// spawner, presage executor), then `block_on`s the [`LocalExecutor`]
+/// running the async dispatch loop. Returns when the dispatch loop
+/// breaks (shutdown path).
+///
+/// The [`LocalExecutor`] is allocated via `Box::leak` so async tasks
+/// spawned onto it can borrow it for `'static`. The executor is
+/// `!Send` and stays pinned to this thread for the process lifetime;
+/// because the worker thread itself never exits during normal
+/// operation, the leak is intentional and bounded — there is at most
+/// one executor allocation per process.
+///
+/// # rv32 / 16 MiB constraint
+///
+/// Single-threaded async on a single hart. Every spawned task runs
+/// on this same thread; there is no work-stealing and no
+/// `Send`-required future. presage's `#[async_trait(?Send)]` markers
+/// (per `libsignal/protocol/src/storage/traits.rs`) and the many
+/// `!Send` store-cache pointers depend on this.
 fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>) {
-    // Box::leak the executor so async tasks spawned on it can borrow
-    // it for `'static`. `LocalExecutor` itself is `!Send` so it stays
-    // pinned to this thread for life. Same pattern as the smoke
-    // test established.
+    // `Box::leak` is intentional: spawned tasks borrow the executor
+    // for `'static`. The leak is bounded (one allocation per process).
     let executor: &'static LocalExecutor<'static> = Box::leak(Box::new(LocalExecutor::new()));
 
-    // Register two thread-locals that libsignal-service-rs expects on
-    // every thread that touches its API. Both are set here because
-    // the worker is the only thread that ever does.
+    // Install the per-thread state that libsignal-service-rs and
+    // presage require on every thread that calls their async APIs.
+    // The worker is the only such thread.
     //
-    // 1. `HttpClient` — the sync HTTP/1.1 + WebSocket transport we
-    //    forked. Cloning is cheap (Arc-shaped).
-    // 2. `TaskSpawner` — a closure used by libsignal-service-rs's
+    // 1. `HttpClient` — the sync HTTP/1.1 + WebSocket transport
+    //    (`SyncHttpClient` from `xous-net-bridge`). Cloning is cheap
+    //    (Arc-shaped).
+    // 2. `TaskSpawner` — closure used by libsignal-service-rs's
     //    internals (`provisioning::link_device`, WS handlers) to
     //    fire-and-forget detached tasks onto our local executor.
     //
@@ -128,7 +174,7 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
     }));
     // presage's `receive_messages` and other long-running Manager
     // ops spawn their own background tasks via
-    // `presage::runtime::spawn_detached`. That goes through a separate
+    // `presage::runtime::spawn_detached`, which uses a separate
     // thread-local from libsignal-service's `task_spawner` and panics
     // if not configured. Wire to the same LocalExecutor.
     presage::set_executor(executor);
@@ -138,24 +184,31 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
 
         // When `LinkDevice` succeeds the resulting
         // `Manager<S, Registered>` is retained here so subsequent
-        // Cmds (StartReceive, SendMessage) reuse the same
+        // commands (StartReceive, SendMessage) reuse the same
         // session state instead of re-running `load_registered`.
-        // `None` means we haven't linked (or failed to).
+        // `None` means not linked (or link failed).
         let mut linked: Option<Manager<PddbStore, Registered>> = None;
 
         // Cached identity fields. Populated whenever the worker sees
-        // a successful Manager (load_registered or link_secondary_device);
-        // served back via Cmd::GetAccountInfo for the UI Profile screen
-        // on cold-start where Event::LinkComplete may have fired before
-        // the user navigated to Profile (or never fired because PDDB
-        // wasn't unlocked within the load_registered retry budget).
+        // a successful Manager (`load_registered` or
+        // `link_secondary_device`); served back via
+        // `Cmd::GetAccountInfo` for the UI Profile screen on
+        // cold-start where `Event::LinkComplete` may have fired
+        // before the user navigated to Profile (or never fired
+        // because PDDB wasn't unlocked within the `load_registered`
+        // retry budget).
         let mut cached_account_info: Option<crate::cmd::AccountInfoData> = None;
 
         // Auto-load existing registration so the user doesn't re-link
         // on every boot. PDDB may not be mounted at worker spawn time
         // (mount fires lazily on first IPC, racing with us); retry on
-        // transient errors until the store either returns a Manager or
-        // a definitive NotYetRegistered.
+        // transient errors until the store either returns a Manager
+        // or a definitive `NotYetRegistered`.
+        //
+        // LOGGING: the success arm below emits `device_name`, `aci`,
+        // and `phone` to the log pipeline at info level. All three
+        // are Signal account identifiers (PII). See REFACTOR_NOTES
+        // for the log-discipline audit item.
         log::info!("worker: attempting load_registered from PDDB");
         let mut linked_attempts = 0;
         loop {
@@ -201,10 +254,10 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
             }
         }
 
-        // Handle to the per-receive "manager task"'s
-        // internal send channel. `Some(tx)` means the manager task
-        // is running and `Cmd::SendMessage` should be forwarded;
-        // `None` means receive isn't started yet (or the task died).
+        // Handle to the per-receive `manager_task`'s internal send
+        // channel. `Some(tx)` means the task is running and
+        // `Cmd::SendMessage` should be forwarded to it; `None`
+        // means receive isn't started yet (or the task died).
         let mut send_to_manager: Option<Sender<InnerSend>> = None;
 
         loop {
@@ -229,13 +282,13 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                     use futures::pin_mut;
 
                     // Cancel primitive: a 1-slot async-channel. The
-                    // outer "race" loop below sends () on cancel_tx
-                    // when Cmd::LinkCancel arrives; the link future
-                    // is wrapped to race against cancel_rx.recv().
-                    // Dropping cancel_tx (e.g., shutdown path) also
-                    // closes the channel, which the recv() sees as
-                    // RecvError — the race interprets either signal
-                    // as "cancel."
+                    // outer "race" loop below sends `()` on
+                    // `cancel_tx` when `Cmd::LinkCancel` arrives;
+                    // the link future is wrapped to race against
+                    // `cancel_rx.recv()`. Dropping `cancel_tx` (the
+                    // shutdown path) also closes the channel — the
+                    // `recv()` sees `RecvError`, and the race
+                    // interprets either signal as "cancel."
                     let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
 
                     let store_for_link = store.clone();
@@ -303,12 +356,13 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
 
                     match outcome {
                         Ok(manager) => {
-                            // We already sent Event::LinkComplete from
-                            // inside handle_link_device. Retain the
-                            // Manager so subsequent Cmds can use it.
-                            // Cache the account info too so
-                            // Cmd::GetAccountInfo can serve it after
-                            // the manager is moved into manager_task.
+                            // `Event::LinkComplete` was already sent
+                            // from inside `handle_link_device`. Retain
+                            // the Manager so subsequent commands can
+                            // use it, and cache the account info so
+                            // `Cmd::GetAccountInfo` can serve it after
+                            // the manager is moved into
+                            // `manager_task` by `Cmd::StartReceive`.
                             let data = manager.registration_data();
                             cached_account_info = Some(crate::cmd::AccountInfoData {
                                 device_name: data.device_name.clone().unwrap_or_default(),
@@ -318,18 +372,19 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                             linked = Some(manager);
                         }
                         Err(()) => {
-                            // handle_link_device (or the cancel branch
-                            // above) already sent the appropriate
-                            // Event::LinkError. Drop any half-linked
-                            // state on the floor; retry by sending
-                            // another Cmd::LinkDevice.
+                            // `handle_link_device` (or the cancel
+                            // branch above) already sent the
+                            // appropriate `Event::LinkError`. Drop
+                            // any half-linked state on the floor;
+                            // retry by sending another
+                            // `Cmd::LinkDevice`.
                         }
                     }
                 }
                 Ok(Cmd::LinkCancel) => {
-                    // Outside an in-flight link this is a no-op — the
-                    // UI shouldn't be sending it from non-Linking
-                    // screens, but defensively log and ignore.
+                    // Outside an in-flight link this is a no-op —
+                    // the UI shouldn't send it from non-Linking
+                    // screens. Log and ignore defensively.
                     log::info!("worker: LinkCancel received outside in-flight link; no-op");
                 }
                 Ok(Cmd::GetAccountInfo) => {
@@ -433,21 +488,26 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                 }
                 Ok(Cmd::Logout) => {
                     log::info!("worker: Cmd::Logout received");
+                    // SECURITY: best-effort key destruction. See the
+                    // `Cmd::Logout` `# Security` block for the wipe's
+                    // failure-mode discussion.
+                    //
                     // 1. Drop the sender side of the manager_task's
-                    //    InnerSend channel. The task's select! sees
-                    //    its send_rx close and exits, releasing the
-                    //    Manager (and its WS pump).
+                    //    `InnerSend` channel. The task's `select!`
+                    //    sees `send_rx` close and exits, releasing
+                    //    the Manager (and its WS pump).
                     send_to_manager = None;
-                    // 2. If we still hold an unspawned manager
-                    //    (StartReceive never fired, but somehow
-                    //    Logout did), drop it too.
+                    // 2. If an unspawned manager is still held
+                    //    (`StartReceive` never fired, but `Logout`
+                    //    did), drop it too.
                     drop(linked.take());
-                    // 3. Wipe the PDDB-backed Store. Store::clear()
-                    //    chains clear_registration + clear_contents +
-                    //    delete_dict for both protocol stores. Errors
-                    //    are non-fatal — we still emit LoggedOut so
-                    //    the UI returns to the pre-link menu, but log
-                    //    a warning so a re-link doesn't silently mix
+                    // 3. Wipe the PDDB-backed Store. `Store::clear`
+                    //    chains `clear_registration` +
+                    //    `clear_contents` + `delete_dict` for both
+                    //    protocol stores. Errors are non-fatal —
+                    //    `LoggedOut` is still emitted so the UI
+                    //    returns to the pre-link menu, but a warning
+                    //    is logged so a re-link doesn't silently mix
                     //    new state with stale leftovers.
                     {
                         use presage::store::{Store, StateStore};
@@ -467,28 +527,30 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                 }
                 Ok(Cmd::SyncContacts) => {
                     log::info!("worker: Cmd::SyncContacts received");
-                    // Sync requires the manager. If it's already moved
-                    // into manager_task (post-StartReceive), we can't
-                    // call request_contacts directly — it needs &mut
-                    // manager which the receive stream holds. Defer
-                    // by sending an SyncError; future work could route
-                    // sync through manager_task the same way send goes
-                    // through InnerSend.
+                    // Sync requires `&mut manager`. Post-`StartReceive`
+                    // that borrow lives inside `manager_task`'s
+                    // receive stream and is unreachable from here.
+                    // Routing sync through `manager_task` via a new
+                    // `InnerSync` inner-channel variant is the
+                    // tracked follow-up; see REFACTOR_NOTES.
                     if linked.is_some() {
                         let m = linked.as_mut().expect("just checked is_some");
                         match m.request_contacts().await {
                             Ok(()) => {
                                 log::info!("worker/sync: request_contacts OK");
                                 // The contacts blob arrives as an
-                                // inbound SynchronizeMessage; presage's
-                                // existing handler writes them into
-                                // ContentsStore. We can't enumerate
-                                // newly-added entries here without a
-                                // store-level diff, so for now just
-                                // tell the UI we're done — the next
-                                // received message from any synced
-                                // contact will pick up the name via
-                                // contact_by_id (the existing path).
+                                // inbound `SynchronizeMessage`;
+                                // presage's existing handler writes
+                                // each entry into `ContentsStore`.
+                                // Enumerating the newly-added entries
+                                // from here would need a store-level
+                                // diff; instead, signal completion to
+                                // the UI and let the next received
+                                // message from any synced contact
+                                // pick up the name via
+                                // `contact_by_id` (the existing
+                                // resolution path in
+                                // `process_received`).
                                 let _ = event_tx.send(Event::SyncComplete).await;
                             }
                             Err(e) => {
@@ -499,11 +561,10 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                             }
                         }
                     } else {
-                        // Manager already moved into manager_task —
-                        // the contacts request needs to go through
-                        // there (similar to send). For now surface as
-                        // an error; the right fix is to route sync
-                        // through manager_task via an InnerSync variant.
+                        // Manager moved into `manager_task` —
+                        // requesting contacts from here is impossible
+                        // until the `InnerSync` routing lands. Surface
+                        // an actionable error so the user can recover.
                         log::warn!(
                             "worker/sync: manager already in receive task — sync after StartReceive not yet supported"
                         );
@@ -535,9 +596,9 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                                 }
                             }
                         } else {
-                            // Manager already moved into manager_task —
-                            // same situation as SyncContacts. Surface as
-                            // error.
+                            // Manager moved into `manager_task` —
+                            // same situation as `Cmd::SyncContacts`.
+                            // Surface as error.
                             Err(
                                 "Username lookup after receive starts isn't wired yet.\nRestart the app and try again."
                                     .to_string(),
@@ -560,26 +621,52 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
             }
         }
 
-        // `linked` drops here. Pre-Stage-11 we may want a graceful
-        // Manager teardown (close WS, flush sessions); for now drop
-        // semantics are sufficient.
+        // `linked` drops here. A graceful Manager teardown (close
+        // WS, flush sessions) would be nicer, but `Drop` semantics
+        // are sufficient for the current shutdown semantics — see
+        // REFACTOR_NOTES W-W.X for the graceful-teardown follow-up.
         drop(linked);
     }));
 }
 
-/// Run `Manager::link_secondary_device`. Forwards the
-/// provisioning URL to the UI as `Event::LinkUrl(...)` as soon as it
-/// arrives, then awaits the user-confirmation step. Returns the linked
-/// `Manager` on success (worker keeps it for subsequent Cmds) or `Err`
-/// after sending `Event::LinkError`.
+/// Run [`presage::Manager::link_secondary_device`] and forward the
+/// resulting provisioning URL to the UI as [`Event::LinkUrl`] as soon
+/// as it arrives, then await the user-confirmation step.
 ///
-/// We use `futures::channel::oneshot` for the URL handoff (same type
-/// presage's API expects) and `futures::future::join` to drive the
+/// Returns the linked `Manager` on success (the worker retains it
+/// for subsequent commands) or `Err(())` after sending
+/// [`Event::LinkError`].
+///
+/// Uses `futures::channel::oneshot` for the URL handoff (the type
+/// presage's API requires) and `futures::future::join` to drive the
 /// link future and the URL forwarder concurrently. The store is
 /// cloned for the call — `link_secondary_device` consumes its `S`
-/// argument by clearing the registration on entry, then writing fresh
-/// keys; cloning means the worker's outer `store` (still owned, used
-/// for `whoami`/etc. paths) stays usable if linking fails.
+/// argument: it clears the registration on entry and writes fresh
+/// keys. Cloning means the worker's outer `store` (still owned, used
+/// for `whoami` and similar paths) stays usable if linking fails.
+///
+/// # Trust boundary
+///
+/// This is the only path that originates a new Signal-Protocol
+/// identity for the worker. On success, freshly-generated identity
+/// keys and a registered `ServiceIds` triple have been written to
+/// the cloned store; the returned `Manager<PddbStore, Registered>`
+/// is the trust witness that those keys exist and the server
+/// accepted them.
+///
+/// # Security
+///
+/// The provisioning URL forwarded through `Event::LinkUrl` is
+/// short-lived but high-value — see that variant's `# Security`
+/// section. This function currently logs the URL at `log::info!`
+/// inside the `forwarder` closure; that is the audit finding called
+/// out in `xous-signal-worker` REFACTOR_NOTES.
+///
+/// # Logging
+///
+/// Emits the provisioning URL (`log::info!` "URL received from
+/// libsignal: {}") and the user-chosen `device_name` to the log
+/// pipeline. Both are security-relevant; see REFACTOR_NOTES.
 async fn handle_link_device(
     store: PddbStore,
     event_tx: Sender<Event>,
@@ -628,26 +715,20 @@ async fn handle_link_device(
                     phone,
                 })
                 .await;
-            // SKIP request_contacts on link.
+            // NOTE: load-bearing — do NOT auto-fetch contacts on link.
             //
-            // Previously: this called manager.request_contacts() to
-            // populate the ContentsStore with (uuid, phone_number,
-            // name) entries from the linked phone, so xas could send
-            // to e164 phone numbers. The call did multiple WS
-            // roundtrips (establish self-session, fetch own prekey
-            // bundle, send self-targeted contact-sync request) and
-            // BLOCKED the worker for 30-90s on rv32 — preventing
-            // Cmd::StartReceive from being processed in that window
-            // and racing the Signal-server WS-rotation problem that
-            // intermittently kills user sends.
+            // `manager.request_contacts()` does multiple WS round-trips
+            // (establish self-session, fetch own prekey bundle, send
+            // self-targeted contact-sync request) and BLOCKS the
+            // worker for 30-90s on rv32. During that window
+            // `Cmd::StartReceive` cannot be processed, and the
+            // self-targeted send races the Signal-server WS-rotation
+            // problem that intermittently kills user sends.
             //
-            // For now, dropping the call entirely. xas can already
-            // send to UUIDs (the working path), and the explicit
-            // F2 "Sync" UI item (currently a stub) is the
-            // user-triggered way to populate contacts on demand.
+            // xas can already send to UUIDs (the working path).
             // Phone-number recipient resolution stays broken until
-            // that lands — an acceptable trade for unblocking
-            // send entirely.
+            // the user runs the explicit `Cmd::SyncContacts` flow;
+            // see that variant's docs.
             log::info!("worker/link: skipping request_contacts (deferred to user-triggered Sync)");
             Ok(manager)
         }
@@ -659,32 +740,105 @@ async fn handle_link_device(
 }
 
 /// Inner-channel payload from the worker dispatcher to the
-/// `manager_task`. `Cmd::SendMessage` decomposes into this struct
-/// before being forwarded.
+/// [`manager_task`].
+///
+/// [`Cmd::SendMessage`] decomposes into this struct before being
+/// forwarded to the long-running manager task; the dispatcher cannot
+/// call `send_message` directly because the `&mut Manager` borrow is
+/// owned by the receive-stream loop inside `manager_task`.
+///
+/// # Security
+///
+/// `body` is plaintext at this point — see [`Cmd::SendMessage`]'s
+/// `# Trust boundary`. Logging discipline applies (length only,
+/// never the body itself).
 struct InnerSend {
+    /// Recipient string (`ACI UUID` or `+e164`); parsed by
+    /// [`handle_send`] before invoking `Manager::send_message`.
     recipient: String,
+    /// Plaintext message body. MUST NOT be logged.
     body: String,
     /// Client-generated unix-ms timestamp; carried through to
-    /// `manager.send_message` and echoed back in `Event::Send*`
-    /// so the UI can correlate the optimistic-render row with
-    /// the eventual outcome event.
+    /// `manager.send_message` and echoed back in
+    /// [`Event::SendComplete`] / [`Event::SendError`] so the UI can
+    /// correlate the optimistic-render row with the eventual
+    /// outcome event.
     timestamp: u64,
 }
 
-/// The long-running task that owns the linked Manager
+/// Long-running task that owns the linked `Manager` for its lifetime
 /// and multiplexes the receive stream with inbound send requests.
+///
+/// Spawned once on the local executor at [`Cmd::StartReceive`] and
+/// kept alive until either (a) the worker dispatcher drops the
+/// `send_rx` sender (`Cmd::Logout`, `Cmd::Shutdown`, or implicit
+/// teardown), or (b) the receive loop hits a terminal error
+/// (`MAX_CONSECUTIVE_FAILURES` reached, a fatal `4409` close code,
+/// or the `MAX_REAUTH_403S` budget exhausted).
+///
+/// # Why the multiplexer exists
 ///
 /// presage's API forces a difficult shape: both `receive_messages`
 /// and `send_message` take `&mut self`, and `receive_messages`
 /// returns a stream that holds the `&mut self` borrow for its
-/// lifetime. We can't simultaneously poll the stream and call
-/// `send_message`. The workaround: open the stream, `futures::select`
-/// between stream items and the inner send-cmd channel; when a send
-/// arrives, drop the stream (release the borrow), call
-/// `send_message`, then re-open the stream and loop. Re-opening the
-/// stream means presage re-establishes the WS read and replays
-/// pending Signal-server-side messages from the next batch — no
-/// data loss, just a brief reconnect cost.
+/// lifetime. The stream and a send cannot be in flight at the same
+/// time. The workaround: open the stream, `futures::select` between
+/// stream items and the inner send-cmd channel; when a send arrives,
+/// drop the stream (release the borrow), call `send_message`, then
+/// re-open the stream and loop. Re-opening the stream causes presage
+/// to re-establish the WS read and replay pending server-side
+/// messages from the next batch — no data loss, just a brief
+/// reconnect cost.
+///
+/// # Trust boundary
+///
+/// All inbound traffic flows through [`process_received`], which
+/// receives presage's already-decrypted-and-authenticated
+/// [`presage::model::messages::Received::Content`]; emission of
+/// [`Event::Message`] thus carries the libsignal trust witness
+/// (see that event's `# Trust boundary`). Outbound traffic flows
+/// through [`handle_send`], which receives plaintext that has not
+/// yet been encrypted (encryption happens inside libsignal's
+/// `send_message`).
+///
+/// # WS close-code semantics
+///
+/// The receive loop reads `manager.last_identified_close_code()` to
+/// distinguish three failure modes on a failed reconnect:
+///
+/// - `4409 "Connected elsewhere"` — another authenticated WS for
+///   the same `(account, deviceId)` displaced this one. Treated as
+///   terminal (auto-reconnect would self-displace again); emits
+///   [`Event::SignalConflictingDevice`] and exits.
+/// - `4401 "Reauthentication required"` followed by repeated
+///   `HTTP 403 Forbidden` handshakes — credential rotation has
+///   failed permanently. After `MAX_REAUTH_403S` attempts emits
+///   [`Event::SignalAuthExpired`] and exits.
+/// - `1001 "Connection Idle Timeout"` and other transient closes —
+///   exponential backoff (base 1s × 1.5^n, capped at 30s) plus a
+///   close-code-specific settling delay (10 s after `4401`, 1 s
+///   after `1001`/`4409`) to let the server-side `(account,
+///   deviceId)` listener-slot eviction complete before reconnecting.
+///
+/// # Pending-send grace window
+///
+/// When `handle_send` exhausts its retry budget against
+/// `WebSocket closing`-shaped errors, the cipher may have landed on
+/// the server even though the local future returned `Err`. Rather
+/// than emit `Event::SendError` immediately, the timestamp is
+/// recorded in `pending_unconfirmed_sends` with a 30-second
+/// deadline. If a Signal `DELIVERY` receipt for that timestamp
+/// arrives within the window, [`process_received`] surfaces
+/// `Event::SendComplete` instead. Stale entries are swept by
+/// [`sweep_expired_pending_sends`] on every 1-second select tick.
+///
+/// # Logging
+///
+/// Emits message kinds and per-stream-item progress markers at
+/// `log::info!` (`worker:`, `worker/send:`, `worker/profile:`
+/// prefixes). Does not log message bodies. ACI UUIDs and contact
+/// names are logged at info level — see REFACTOR_NOTES for the
+/// log-discipline audit item.
 async fn manager_task(
     mut manager: Manager<PddbStore, Registered>,
     store: PddbStore,
@@ -695,13 +849,12 @@ async fn manager_task(
     use futures::StreamExt;
     use futures::select;
 
-    // Why this exits the inner pump loop. The pump runs inside a
-    // single `loop { select! { ... } }`; we need to surface to the
-    // outer 'outer loop both "user sent something, drop the stream
-    // and call handle_send" and "stream died, drop everything and
-    // re-open with backoff" cases without using `continue 'outer`
-    // from inside the select! macro (which works syntactically but
-    // is awkward to read at this level of nesting).
+    // Reason why the inner `select!` pump exits. The pump runs inside
+    // a single `loop { select! { ... } }`; surfacing both "user sent
+    // something, drop the stream and invoke handle_send" and "stream
+    // died, drop everything and re-open with backoff" cases up to the
+    // outer loop is cleaner than `continue 'outer` from inside the
+    // macro.
     enum InnerExit {
         Send(InnerSend),
         Reopen { reason: String },
@@ -711,90 +864,87 @@ async fn manager_task(
     // Tell the UI we're listening (only on the first stream open).
     let mut announced = false;
 
-    // Consecutive failures since the last successful event. Used to
+    // Consecutive failures since the last real progress. Used to
     // (a) decide backoff before re-opening the stream and
     // (b) deduplicate the "receive error" event so the UI sees one
     // banner per outage, not one per retry. Reset to 0 after a
-    // successful `manager.receive_messages()` AND after we observe
-    // an actual stream item — opening Ok then immediately seeing
-    // None counts as a failure (we made no real progress).
+    // successful `manager.receive_messages()` AND after observing
+    // an actual stream item — opening `Ok` then immediately seeing
+    // `None` counts as a failure (no real progress).
     let mut consecutive_failures: u32 = 0;
 
-    // Bug B (issue #13): when the previous identified WS closed with
-    // code 4401 ("Reauthentication required") AND the immediate
-    // reconnect handshake returns HTTP 403, count those specifically.
-    // After `MAX_REAUTH_403S` in a row we treat it as terminal and
-    // emit `Event::SignalAuthExpired` — the c4b8fc8 UI handler resets
-    // to the pre-link Menu with a banner. The hosted run on
-    // 2026-05-11 captured 9+ consecutive 403s without recovery in the
-    // 5-minute window, so a low threshold beats waiting minutes for
-    // a never-arriving success. Reset to 0 on a successful reconnect
-    // and on real stream progress (mirrors `consecutive_failures`).
+    // Count of consecutive `4401`-then-`403` reauth failures. After
+    // `MAX_REAUTH_403S` in a row the worker treats the auth path as
+    // terminally rotten and emits `Event::SignalAuthExpired`. Reset
+    // on a successful reconnect or real stream progress (same
+    // semantics as `consecutive_failures`).
     let mut consecutive_reauth_403s: u32 = 0;
 
-    // First-touch profile-fetch queue. process_received pushes
-    // (aci_uuid, profile_key_bytes) for any inbound message whose
+    // First-touch profile-fetch queue. `process_received` pushes
+    // `(aci_uuid, profile_key_bytes)` for any inbound message whose
     // sender wasn't in the contacts store but whose DataMessage
-    // carried a profile_key. We drain this between receive-stream
-    // iterations (when the &mut manager borrow is released) and
-    // emit Event::ContactResolved on success. fetched_or_failed
-    // tracks ACIs we've already attempted in this worker run, so
-    // a 404 doesn't get retried on every cycle.
+    // carried a profile_key. The queue is drained between
+    // receive-stream iterations (when the `&mut manager` borrow is
+    // released) and emits `Event::ContactResolved` on success.
+    // `fetched_or_failed` tracks ACIs already attempted in this
+    // worker run so a 404 doesn't get retried on every cycle.
+    //
+    // SECURITY: the profile_key bytes (32 bytes per entry) are
+    // secret-derived material from the sender. Treated as opaque
+    // here and passed to `ProfileKey::create` without copying; never
+    // logged. See REFACTOR_NOTES for the open item on wrapping in
+    // `Zeroizing` for defense-in-depth.
     let mut pending_profile_fetches: Vec<(presage::libsignal_service::prelude::Uuid, [u8; 32])> = Vec::new();
     let mut fetched_or_failed: std::collections::HashSet<presage::libsignal_service::prelude::Uuid> =
         std::collections::HashSet::new();
 
-    // PLAN.md Stage -1 (refs xas#1): sends that exhaust the 6-attempt
-    // retry loop with a "websocket closing"-shaped error are deferred
-    // here instead of immediately surfacing as Event::SendError. The
-    // map is keyed by the message timestamp; the value is the deadline
-    // after which we give up and emit SendError. If a DELIVERY receipt
-    // arrives for that timestamp before the deadline, we remove the
-    // entry and emit Event::SendComplete instead — the recipient
-    // confirms the cipher actually landed despite the local error.
+    // Deferred-send map: sends that exhausted the retry loop with a
+    // "websocket closing"-shaped error are deferred here instead of
+    // immediately surfacing as `Event::SendError`. Key is the message
+    // timestamp; value is the deadline. If a DELIVERY receipt arrives
+    // for that timestamp before the deadline, the entry is removed
+    // and `Event::SendComplete` is emitted instead — the recipient
+    // confirms the cipher landed despite the local error.
     //
-    // Grace window of 30s is well above the worst-case observed
-    // pipeline (~4 min total but pipeline_ms per send ≪ that — the
-    // 4 min is dominated by the existing 62s retry-loop budget).
+    // The 30 s grace window is well above the worst-case observed
+    // per-send pipeline (~4 minutes total wallclock dominated by the
+    // 62-second retry-loop budget; the per-attempt `pipeline_ms` is
+    // sub-second).
     let mut pending_unconfirmed_sends: std::collections::HashMap<u64, std::time::Instant> =
         std::collections::HashMap::new();
     const PENDING_RECEIPT_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
 
     // Cap on how many consecutive failures we tolerate before giving
-    // up entirely. With backoff capped at 30s, this is roughly an
-    // 8-minute window of constant retries before we surface a fatal
-    // ReceiveError and exit. Empirically, the rv32 net stack
-    // recovers from idle-WS death in well under a minute, so any
-    // failure that persists past this is something we genuinely
-    // can't paper over.
+    // up entirely. With backoff capped at 30 s, this is roughly an
+    // 8-minute window of constant retries before a fatal
+    // `ReceiveError` is surfaced and the task exits. Empirically the
+    // rv32 net stack recovers from idle-WS death in well under a
+    // minute, so any failure that persists past this is something
+    // that cannot be papered over.
     const MAX_CONSECUTIVE_FAILURES: u32 = 20;
 
-    // Bug B (issue #13): cap on 4401-then-403 sequences before we
-    // surface `Event::SignalAuthExpired`. 3 is intentionally low —
-    // hosted evidence shows that once this storm starts it doesn't
-    // recover within the user's patience window. Better to prompt
-    // re-link early than to spin silently for minutes.
+    // Cap on `4401`-then-`403` sequences before `SignalAuthExpired`
+    // is surfaced. 3 is intentionally low — hosted evidence shows
+    // that once this storm starts it doesn't recover within the
+    // user's patience window. Prompting re-link early beats spinning
+    // silently for minutes.
     const MAX_REAUTH_403S: u32 = 3;
 
-    // Bug B settling delay: on top of the normal exponential backoff,
-    // wait an extra 10s after a 4401 close before reconnecting. The
-    // hypothesized cause of the 4401→403 storm is the same
-    // server-side `(account, deviceId)` listener-slot eviction race
-    // that drives Bug A's 4409; giving the eviction time to complete
-    // before reopening is the cheapest mitigation. 10s is a starting
-    // value — if the hosted-verification packet capture shows the
-    // 403s still firing inside this window, bump to 30s.
+    // Extra settling delay applied on top of the normal exponential
+    // backoff after a `4401` close. The 4401-then-403 storm is
+    // hypothesized to share a root cause with the `4409` displacement
+    // race: server-side `(account, deviceId)` listener-slot eviction.
+    // Giving the eviction time to complete before reopening is the
+    // cheapest mitigation. 10 s is a starting heuristic; bump if
+    // packet capture shows 403s still firing inside this window.
     const REAUTH_SETTLING_DELAY_MS: u64 = 10_000;
 
-    // Bug A (issue #1): server-side `(account, deviceId)` listener-slot
-    // eviction is asynchronous. When our WS closes (e.g. 1001 idle) and
-    // we reopen too quickly, the server's slot still holds the previous
-    // WS's listener and the new connection's auth handshake racing
-    // against the eviction can trigger displacement (4409) of our own
-    // previous WS. A small throttle on every non-zero-close-code
-    // reconnect gives the server time to clear the slot. 1 s is the
-    // starting heuristic; the hosted packet-capture pass will measure
-    // the actual eviction window and the maintainer may tune later.
+    // Throttle applied after non-zero close codes other than 4401.
+    // Server-side `(account, deviceId)` listener-slot eviction is
+    // asynchronous. When the WS closes (e.g. 1001 idle) and a
+    // reconnect races the eviction, the new auth handshake can
+    // displace its own previous WS (4409). 1 s is the starting
+    // heuristic.
     const RECONNECT_THROTTLE_MS: u64 = 1_000;
 
     log::info!("worker: manager_task entered");
@@ -818,23 +968,22 @@ async fn manager_task(
             // close code.
             let prev_close = manager.last_identified_close_code().await;
             let extra_delay_ms: u64 = match prev_close {
-                // Bug B (issue #13): 4401 "Reauthentication required".
-                // Add a settling delay so server-side (account,
-                // deviceId) listener-slot eviction completes before
-                // we reconnect.
+                // 4401 "Reauthentication required": settling delay so
+                // server-side (account, deviceId) listener-slot
+                // eviction completes before reconnect.
                 Some(4401) => REAUTH_SETTLING_DELAY_MS,
-                // Bug A (issue #1): 4409 "Connected elsewhere" should
-                // not normally appear here — the err-arm below treats
-                // it as terminal and emits SignalConflictingDevice
-                // before we reach this backoff. Defensive throttle
-                // in case the err-arm policy is ever loosened.
+                // 4409 "Connected elsewhere" should not normally
+                // reach this backoff path — the err-arm below treats
+                // it as terminal and emits SignalConflictingDevice.
+                // Defensive throttle in case that policy is ever
+                // loosened.
                 Some(4409) => RECONNECT_THROTTLE_MS,
                 // 1001 idle close: small throttle to let the server's
-                // listener-slot eviction complete before our reconnect
-                // can race it. Same root cause as Bug A.
+                // listener-slot eviction complete before reconnect
+                // can race it.
                 Some(1001) => RECONNECT_THROTTLE_MS,
-                // Any other close code or no prior close: existing
-                // exponential backoff only, no extra delay.
+                // Any other close code or no prior close: exponential
+                // backoff only, no extra delay.
                 _ => 0,
             };
             let backoff_ms = base_backoff_ms + extra_delay_ms;
@@ -875,25 +1024,21 @@ async fn manager_task(
                 );
 
                 // Fetch the previous WS's close code once; reused by
-                // both the 4409 (Bug A) and 4401-403 (Bug B) checks
-                // below. Reads the slot of the most recently closed
-                // identified WS — see Manager::last_identified_close_code
-                // docstring for why this returns the *previous* WS's
-                // code after a failed reconnect.
+                // both the 4409 and 4401-403 checks below. Reads the
+                // slot of the most recently closed identified WS —
+                // see `Manager::last_identified_close_code` for why
+                // this returns the *previous* WS's code after a
+                // failed reconnect.
                 let prev_close = manager.last_identified_close_code().await;
 
-                // Bug A (issue #1): if the previous identified WS
-                // was closed by the server with 4409 "Connected
-                // elsewhere", another authenticated WS for the same
-                // (account, deviceId) pair displaced ours. Auto-
-                // reconnecting would just self-displace again (the
-                // RECONNECT_THROTTLE_MS above gives the eviction
-                // time to complete, but if 4409 still surfaces here
-                // that means a *different* device — or our own
-                // race-prone reconnect — is genuinely interfering).
-                // Treat as terminal; emit SignalConflictingDevice and
-                // exit manager_task. The c4b8fc8/8ce9b9e UI handler
-                // resets to pre-link Menu with the banner.
+                // 4409 "Connected elsewhere": another authenticated
+                // WS for the same (account, deviceId) displaced ours.
+                // Auto-reconnecting would self-displace again
+                // (RECONNECT_THROTTLE_MS gives the eviction time to
+                // complete, but if 4409 still surfaces here that
+                // means a *different* device — or our own race-prone
+                // reconnect — is genuinely interfering). Treat as
+                // terminal; emit `SignalConflictingDevice` and exit.
                 if matches!(prev_close, Some(4409)) {
                     log::warn!(
                         "worker: manager_task — previous WS closed with 4409 \
@@ -911,21 +1056,20 @@ async fn manager_task(
                     return;
                 }
 
-                // Bug B (issue #13): if the previous identified WS
-                // was closed by the server with code 4401 ("Reauth
-                // required") AND this fresh handshake came back as
-                // HTTP 403 Forbidden, count it specifically. After
-                // MAX_REAUTH_403S in a row, treat as terminal and
-                // surface SignalAuthExpired — the c4b8fc8 UI handler
-                // resets to pre-link Menu with a banner.
+                // 4401 + 403 storm detection: if the previous
+                // identified WS was closed by the server with code
+                // 4401 ("Reauth required") AND this fresh handshake
+                // came back as HTTP 403 Forbidden, count it. After
+                // `MAX_REAUTH_403S` in a row, treat as terminal and
+                // surface `SignalAuthExpired`.
                 //
-                // 403 substring is a deliberate stringly-typed check:
-                // the error path is `xous-net-bridge` -> tungstenite
-                // -> libsignal-service-rs HttpTransport wrapping. The
-                // string "403 Forbidden" is the stable terminator
-                // (RFC 7231) in our formatter; a more typed approach
-                // would need cross-crate enums plumbed through
-                // ServiceError, which is out of scope for Stage I.
+                // The "403 Forbidden" substring is a deliberate
+                // stringly-typed check: the error path is
+                // `xous-net-bridge` -> tungstenite -> libsignal-service
+                // `HttpTransport` wrapping; "403 Forbidden" is the
+                // stable terminator (RFC 7231) in the formatter. A
+                // typed approach would require cross-crate enums
+                // plumbed through `ServiceError`; see REFACTOR_NOTES.
                 if matches!(prev_close, Some(4401)) && err_str.contains("403 Forbidden") {
                     consecutive_reauth_403s = consecutive_reauth_403s.saturating_add(1);
                     log::warn!(
@@ -974,10 +1118,10 @@ async fn manager_task(
 
         // Pump items + send-cmds + pending-send timeout sweep.
         let exit: InnerExit = loop {
-            // Stage -1 sweep: scan pending_unconfirmed_sends each
-            // iteration; emit SendError for any whose grace window
-            // expired. The 1s select! timeout below bounds how late
-            // these can fire.
+            // Scan `pending_unconfirmed_sends` each iteration; emit
+            // `SendError` for any whose grace window expired. The
+            // 1-second `select!` timeout below bounds how late these
+            // can fire.
             sweep_expired_pending_sends(&mut pending_unconfirmed_sends, &event_tx).await;
 
             select! {
@@ -987,9 +1131,9 @@ async fn manager_task(
                             log::info!("worker: stream item received");
                             // Real progress on this stream — clear
                             // the failure counter so the next reopen
-                            // (when handle_send forces one) doesn't
-                            // sleep at all. Bug B (#13): also clear
-                            // the 4401-then-403 counter, since real
+                            // (when `handle_send` forces one) doesn't
+                            // sleep at all. Also clear the
+                            // 4401-then-403 counter, since real
                             // progress proves the auth path recovered.
                             consecutive_failures = 0;
                             consecutive_reauth_403s = 0;
@@ -1139,9 +1283,53 @@ async fn manager_task(
     log::info!("worker: manager_task exiting (outer break)");
 }
 
-/// Process one item from `Manager::receive_messages`. Returns
-/// `false` if the event channel is closed (caller should exit);
-/// `true` to keep going.
+/// Process one item from [`presage::Manager::receive_messages`].
+///
+/// Returns `false` if the event channel is closed (the caller exits
+/// the receive task); `true` to keep going.
+///
+/// Three variants are handled:
+///
+/// - `Received::Content(content)` — a decrypted-and-authenticated
+///   inbound message. `DataMessage`-style text bodies surface as
+///   [`Event::Message`]; `ReceiptMessage`s of type `DELIVERY` are
+///   peeled off to confirm pending deferred sends (see
+///   `pending_unconfirmed_sends` in [`manager_task`]); other body
+///   kinds are silently dropped because presage's internal handlers
+///   have already absorbed their effects into the store.
+/// - `Received::QueueEmpty` — server signals the message queue is
+///   drained. Triggers `store.flush_sessions()` to persist the
+///   batch of double-ratchet steps accumulated since the previous
+///   quiescence. Errors are logged but non-fatal — the next
+///   `QueueEmpty` retries.
+/// - `Received::Contacts` — contact-sync batch absorbed by the
+///   store internally; no user-visible event.
+///
+/// # Trust boundary
+///
+/// `content.metadata.sender` is the libsignal-authenticated origin
+/// of the message; the double-ratchet MAC and sealed-sender
+/// certificate were verified by presage before this item entered
+/// the stream. Emission of `Event::Message` therefore carries the
+/// authentication witness — see [`Event::Message`]'s `# Trust
+/// boundary`.
+///
+/// # Security
+///
+/// `body` is decrypted plaintext from a remote peer. It is forwarded
+/// as a `String` into `Event::Message`; no body content is logged.
+/// `profile_key` bytes ([`u8; 32`]) are extracted unredacted into
+/// `pending_profile_fetches` for later use — those bytes are
+/// secret-derived material; see [`manager_task`]'s `SECURITY` note
+/// on that field.
+///
+/// # Logging
+///
+/// Emits the body-kind enum-variant name (`NullMessage`,
+/// `DataMessage`, `SynchronizeMessage`, ...) at `log::info!`. Does
+/// not emit the body text. Sender ACI is *not* logged here, but the
+/// upstream contact resolution and profile-fetch code does — see
+/// REFACTOR_NOTES.
 async fn process_received(
     item: presage::model::messages::Received,
     store: &PddbStore,
@@ -1174,11 +1362,12 @@ async fn process_received(
                     presage::libsignal_service::content::ContentBody::EditMessage(_) => "EditMessage",
                 }
             );
-            // PLAN.md Stage -1: peel off DELIVERY receipts here so
-            // they can confirm pending deferred sends. Other receipt
-            // types (READ, VIEWED) are not yet acted on; xas's UI
-            // doesn't surface read-state, so they fall through to the
-            // catch-all skip below.
+            // Peel off DELIVERY receipts here so they can confirm
+            // pending deferred sends (see `pending_unconfirmed_sends`
+            // in `manager_task`). Other receipt types (READ, VIEWED)
+            // are not yet acted on; xas's UI doesn't surface
+            // read-state, so they fall through to the catch-all
+            // skip below.
             if let ContentBody::ReceiptMessage(rm) = &content.body {
                 use presage::libsignal_service::proto::receipt_message::Type as RType;
                 let rtype = RType::try_from(rm.r#type.unwrap_or_default()).unwrap_or(RType::Delivery);
@@ -1239,14 +1428,17 @@ async fn process_received(
                 _ => (None, None),
             };
 
-            // First-touch profile fetch: if contact is unknown and the
-            // DataMessage carried a profile_key, queue a profile lookup
-            // for manager_task to drain between stream iterations.
-            // Mobile clients (Android/iOS/Desktop) all do this on every
-            // unsealed envelope; we batch it so we don't fight the
-            // &mut manager borrow held by the receive stream. See
-            // research notes summary in CONTACT-RESOLUTION docs (and
-            // commit history) for the cross-client survey.
+            // First-touch profile fetch: if the contact is unknown
+            // and the DataMessage carried a profile_key, queue a
+            // profile lookup for `manager_task` to drain between
+            // stream iterations. Mobile clients do this on every
+            // unsealed envelope; batching here avoids fighting the
+            // `&mut manager` borrow held by the receive stream.
+            //
+            // SECURITY: `profile_key` is secret-derived material
+            // shared by the peer; copied verbatim into the pending
+            // queue and consumed by `ProfileKey::create` in the
+            // drain loop. Never logged.
             if sender_name.is_none() {
                 if let ContentBody::DataMessage(dm) = &content.body {
                     if let Some(key_bytes) = dm.profile_key.as_ref() {
@@ -1289,15 +1481,19 @@ async fn process_received(
     }
 }
 
-/// Parse the recipient UUID, build a text-only DataMessage
-/// at the current wall-clock timestamp, and call
-/// `Manager::send_message`. Always emits exactly one event:
-/// `SendComplete{timestamp}` on success, `SendError(reason)` on
-/// failure.
-/// PLAN.md Stage -1 helper: scan the deferred-send map for entries whose
-/// grace window expired without a delivery receipt; emit Event::SendError
-/// for each and remove from the map. Cheap (HashMap iteration); called
-/// every ~1s from manager_task's select! loop.
+/// Scan the deferred-send map for entries whose grace window expired
+/// without a delivery receipt; emit [`Event::SendError`] for each
+/// and remove from the map.
+///
+/// Cheap (`HashMap` iteration); called every ~1 s from
+/// [`manager_task`]'s `select!` loop. The 1-second timeout in that
+/// loop bounds how late expired entries can fire.
+///
+/// # Trust boundary
+///
+/// Operates on local in-memory state only. The `pending` map holds
+/// only timestamps and `Instant`s — no Signal-Protocol material
+/// crosses this function.
 async fn sweep_expired_pending_sends(
     pending: &mut std::collections::HashMap<u64, std::time::Instant>,
     event_tx: &Sender<Event>,
@@ -1327,6 +1523,84 @@ async fn sweep_expired_pending_sends(
     }
 }
 
+/// Parse the recipient, build a text-only `DataMessage` with the
+/// caller-supplied timestamp, and call
+/// [`presage::Manager::send_message`] under a write-batch scope.
+///
+/// Always emits exactly one event for the caller's timestamp:
+///
+/// - [`Event::SendComplete`] on a successful send.
+/// - [`Event::SendError`] on a non-retryable failure (panic, bad
+///   recipient, batch begin failure, etc.).
+/// - Nothing immediately: on a `WebSocket closing`-shaped failure
+///   after the retry budget is exhausted, the timestamp is
+///   deferred into `pending_unconfirmed_sends` with deadline
+///   `now + pending_grace`. Either [`process_received`] surfaces
+///   a `SendComplete` when the DELIVERY receipt arrives, or
+///   [`sweep_expired_pending_sends`] emits the final `SendError`
+///   after the deadline.
+///
+/// # Recipient parsing
+///
+/// `recipient` may be:
+///
+/// - A UUID/ACI in dashed form (36 chars): converted directly to
+///   `ServiceId::Aci`.
+/// - A phone number in e164 form (`+<digits>`): resolved against
+///   the contacts store. Fails with `Event::SendError` if no
+///   contact matches (the user must either receive a message from
+///   that peer first, run `Cmd::SyncContacts`, or send by UUID).
+/// - Anything else: fails with `Event::SendError`.
+///
+/// # Retry policy
+///
+/// `WebSocket closing`-shaped errors are retried up to
+/// `SEND_MAX_ATTEMPTS` (6) times with exponential backoff
+/// (2 s, 4 s, 8 s, 16 s, 32 s — total ~62 s worst case). On rv32
+/// the auth WS dies after ~60-90 s when keepalive responses don't
+/// make it back from the server, and libsignal-service spawns a
+/// fresh WS automatically; the retry lets the next attempt land on
+/// the new WS instead of bubbling the transient close up.
+///
+/// Detection is by substring match on the error display because the
+/// error type passes through several wrapping layers
+/// (`presage::Error` -> `ServiceError` -> `SignalProtocolError`)
+/// before reaching us. The substring "websocket closing" appears in
+/// both surfaced shapes.
+///
+/// # Trust boundary
+///
+/// `send.body` is plaintext at entry. Encryption (X3DH/PQXDH +
+/// double-ratchet seal) happens inside `manager.send_message`. The
+/// resulting ciphertext and ratchet steps are persisted to PDDB
+/// via the write-batch scope opened around the send.
+///
+/// # Security
+///
+/// The `catch_unwind` wrapper around `manager.send_message` uses
+/// `AssertUnwindSafe` on `&mut manager` because `Manager` is not
+/// `UnwindSafe` by default. A panic mid-send may leave the
+/// `Manager`'s session state inconsistent. The alternative — let
+/// the panic propagate and kill `manager_task` — would force every
+/// subsequent send to surface "manager task died." Both outcomes
+/// are bad; this path picks the recoverable one. See REFACTOR_NOTES
+/// for the open item to remove panics from the libsignal send path
+/// rather than continue catching them.
+///
+/// # Logging
+///
+/// Emits `body_len` only (never `body`). Emits the recipient string
+/// verbatim (UUID or e164) and the parsed `Uuid` of the resolved
+/// recipient — both are PII-relevant. See REFACTOR_NOTES for the
+/// log-discipline audit item.
+///
+/// # rv32 / 16 MiB constraint
+///
+/// The "first send" path runs prekey-bundle fetch + PQXDH + initial
+/// double-ratchet setup + a large PDDB write of the session record.
+/// The write-batch scope around the send packs that into a single
+/// `Opcode::WriteKeyBatch` IPC so the trailing basis sync runs once
+/// per send rather than once per Store-trait call.
 async fn handle_send(
     manager: &mut Manager<PddbStore, Registered>,
     send: InnerSend,
@@ -1424,44 +1698,24 @@ async fn handle_send(
         timestamp
     );
 
-    // Retry-on-WsClosing: on rv32 the auth WS dies after ~60-90s
-    // when libsignal-service-rs's keepalive responses don't make it
-    // back from the server. libsignal-service spawns a fresh WS
-    // automatically (we see `ka_count=1` for replacements in UART)
-    // but the in-flight send is dropped. A brief sleep + retry lets
-    // the next attempt land on the new WS instead of bubbling
-    // "WebSocket closing" up to the user.
-    //
-    // Detection is by string match because the error type passes
-    // through several wrapping layers (presage::Error ->
-    // ServiceError -> SignalProtocolError) before reaching us.
-    // The substring "websocket closing" appears in both surfaced
-    // shapes ("WebSocket closing while sending request" and "...
-    // while waiting for a response").
-    // Signal's edge servers close WSes aggressively on rv32
-    // (multiple `code=1001 "Connection Idle Timeout"` events
-    // within seconds of each other). A 3-retry × 2s window wasn't
-    // enough to reliably land on a WS that survived a full
-    // request-response. 6 retries with exponential gaps span ~62s
-    // total, covering ~10 server-rotation cycles statistically.
-    // Until the transport is reworked to open a fresh WS per send,
-    // this aggressive retry loop is the workaround.
+    // See the function-level docstring for the retry rationale.
+    // 6 retries with exponential gaps span ~62 s total, covering
+    // roughly 10 server WS-rotation cycles on rv32.
     const SEND_MAX_ATTEMPTS: u32 = 6;
 
-    /// Sleep before attempt N (zero-indexed in the call below):
-    /// attempt 2 -> 2s, attempt 3 -> 4s, 4 -> 8s, 5 -> 16s, 6 -> 32s.
-    /// Total worst-case wait between user-press and giving up: 62s.
+    /// Sleep before attempt N (one-indexed): 2 s, 4 s, 8 s, 16 s, 32 s.
+    /// Total worst-case wait between user-press and giving up: 62 s.
     fn backoff_for(next_attempt: u32) -> std::time::Duration {
         let secs = 1_u64 << (next_attempt as u64).min(5);
         std::time::Duration::from_secs(secs)
     }
 
-    // Clone the store handle so we can open a send-time batch
-    // alongside the `&mut manager` borrow needed for `send_message`.
-    // The clone is shallow (Arc-based) — it shares the same
-    // `BufferingBackend` so begin_send_batch on the clone toggles
-    // the same buffer state the Store-trait impls reach through
-    // `manager.store().backend`.
+    // Clone the store handle so a send-time batch can be opened
+    // alongside the `&mut manager` borrow that `send_message`
+    // requires. The clone is shallow (Arc-based) — it shares the
+    // same `BufferingBackend`, so `begin_send_batch` on this clone
+    // toggles the same buffer state that the Store-trait impls
+    // reach through `manager.store().backend`.
     let store_for_batch = manager.store().clone();
 
     let mut last_err: Option<String> = None;
@@ -1495,13 +1749,9 @@ async fn handle_send(
             }
         };
 
-        // catch_unwind so a panic inside libsignal/presage's send path
-        // doesn't kill manager_task. AssertUnwindSafe is needed because
-        // `&mut manager` is not UnwindSafe by default; we accept the risk
-        // — a panic mid-send may leave the Manager's session state
-        // inconsistent, but the alternative (manager_task dies, every
-        // subsequent send returns "manager task died") is worse. The
-        // surfaced panic message goes to the UI as a normal SendError.
+        // `catch_unwind` so a panic inside libsignal/presage's send
+        // path doesn't kill `manager_task`. See the function-level
+        // `# Security` block for the rationale on `AssertUnwindSafe`.
         let pipeline_start = std::time::Instant::now();
         log::info!(
             "perf/send: batch_scope_enter ts={} attempt={} buffered={}",
@@ -1530,31 +1780,30 @@ async fn handle_send(
 
         match outcome {
             Ok(Ok(())) => {
-                // Flush sessions FIRST, then commit the batch. The
-                // BufferingBackend that sits in front of PddbBackend
-                // (for `pddb-real` builds) intercepts `put` while a
-                // batch is open, so calling `flush_sessions` here
-                // routes its read-modify-write through the same
+                // Order: flush sessions FIRST, then commit the batch.
+                // The `BufferingBackend` that sits in front of
+                // `PddbBackend` (for `pddb-real` builds) intercepts
+                // `put` while a batch is open, so `flush_sessions`
+                // here routes its read-modify-write through the same
                 // buffer as the other in-flight writes. Commit then
-                // replays everything via a single
-                // `inner.put_batch` — which the upstream PDDB packs
-                // into one `Opcode::WriteKeyBatch` IPC with one
-                // trailing basis sync.
+                // replays everything via a single `inner.put_batch`,
+                // which the upstream PDDB packs into one
+                // `Opcode::WriteKeyBatch` IPC with one trailing
+                // basis sync.
                 //
-                // Before this reorder, `flush_sessions` ran after
-                // `commit()`, so its writes went directly through
-                // `PddbBackend::put` and got chunked into N
+                // NOTE: load-bearing. Reversing the order routes
+                // `flush_sessions` writes directly through
+                // `PddbBackend::put` and chunks them into N
                 // `Opcode::WriteKey` IPCs (one per ≤4072-byte
-                // KeyHandle::write chunk; refs #21 for the iter-2
-                // UART evidence). The ratchet bundle is the
-                // largest single write per send, so this is the
-                // load-bearing reorder.
+                // `KeyHandle::write` chunk). The ratchet bundle is
+                // the largest single write per send, so this order
+                // is what makes per-send PDDB cost a single
+                // round-trip.
                 //
-                // Order still puts the durability barrier before
-                // `SendComplete` is emitted, matching the previous
-                // semantics: the ratchet step that pairs with the
-                // just-sent message remains durable before the UI
-                // is told the send succeeded.
+                // The durability barrier still precedes the
+                // `SendComplete` emission: the ratchet step paired
+                // with the just-sent message is durable before the
+                // UI is told the send succeeded.
                 let _perf_pre_flush = std::time::Instant::now();
                 if let Err(e) = store_for_batch.flush_sessions() {
                     log::warn!("worker/send: flush_sessions inside batch failed: {}", e);
@@ -1603,13 +1852,13 @@ async fn handle_send(
                     last_err = Some(msg);
                     continue;
                 }
-                // Stage -1 path: WS-closing-shaped errors after retry
-                // exhaustion go into the pending-receipt grace window.
-                // The cipher MAY have landed; we wait PENDING_RECEIPT_GRACE
-                // for a DELIVERY receipt to confirm before emitting
-                // SendError. Other error shapes (panic, identity
-                // mismatch, etc.) bypass the grace and surface
-                // immediately as before.
+                // WS-closing-shaped errors after retry exhaustion
+                // go into the pending-receipt grace window. The
+                // cipher may have landed even though the local future
+                // returned `Err`; wait `pending_grace` for a DELIVERY
+                // receipt to confirm before emitting `SendError`.
+                // Other error shapes (panic, identity mismatch, etc.)
+                // bypass the grace and surface immediately.
                 if retryable {
                     let deadline = std::time::Instant::now() + pending_grace;
                     pending_unconfirmed_sends.insert(timestamp, deadline);
@@ -1663,23 +1912,32 @@ async fn handle_send(
         .await;
 }
 
-/// Run `Manager::load_registered` and stringify the result. On a
-/// fresh install this always sees `Err(Error::NotYetRegisteredError)`
-/// here because the store starts empty — that's the path we want to
-/// exercise (the channel round-trip; that the error type round-trips
-/// cleanly; that the executor doesn't deadlock when a future returns
-/// an error).
+/// Run [`presage::Manager::load_registered`] and stringify the
+/// result.
 ///
-/// `Manager::load_registered` takes `S: Store` by value and returns a
-/// `Manager<S, Registered>` if registration data exists. We only need
-/// the `Ok` arm to format the data we'd send; for now the
-/// always-error path is what we test.
+/// On a fresh install (or before PDDB unlock) this returns
+/// `Err(Error::NotYetRegisteredError)` because the store starts
+/// empty — exactly the path the [`Cmd::GetWhoami`] integration test
+/// exercises (channel round-trip, error type stringification, no
+/// executor deadlock when a future returns `Err`).
+///
+/// # Trust boundary
+///
+/// Reads the cached `RegistrationData` if available. No network
+/// I/O. The returned string carries ACI/PNI/phone identifiers when
+/// `Ok`; see the comment in [`Cmd::GetWhoami`] about the future
+/// "real" whoami path.
+///
+/// # Logging
+///
+/// Does not log directly; the caller's `Event::Whoami` payload
+/// containing the ACI/PNI/phone string is logged by the IPC layer.
 async fn handle_whoami(store: PddbStore) -> Result<String, String> {
     match Manager::load_registered(store).await {
         Ok(manager) => {
-            // Future stages: this is where a real `whoami` over the
-            // websocket would go. For now reach into the cached
-            // registration data so the type-checker proves the store
+            // The "real" whoami would issue a `GET /v1/accounts/whoami`
+            // over the identified WS. Reaching into the cached
+            // registration data here is enough to prove the store
             // round-trips through `Manager`.
             let data = manager.registration_data();
             Ok(format!(
@@ -1693,14 +1951,20 @@ async fn handle_whoami(store: PddbStore) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    //! Integration-style tests: spawn the worker, exercise the
-    //! channel round-trip end-to-end. We use the host-mode
-    //! `PddbStore::with_mock_backend` so no Xous services are needed.
+    //! Integration-style tests: spawn the worker and exercise the
+    //! channel round-trip end-to-end.
+    //!
+    //! Uses [`PddbStore::with_mock_backend`] so no Xous services are
+    //! required. The tests cover lifecycle (ping/pong, error-on-
+    //! empty-store, implicit shutdown via channel drop) and the
+    //! pure data-manipulation portion of [`sweep_expired_pending_sends`].
+    //! Full receive/send paths require an executor + mocked manager
+    //! and are exercised by the workspace-level hosted run.
 
     use super::*;
 
     /// Channel capacity. 16 is plenty for these tests; the
-    /// production app sizes this against the IPC fan-in/fan-out.
+    /// production binary sizes this against the IPC fan-in/fan-out.
     const CHAN_CAP: usize = 16;
 
     fn spawn() -> (Sender<Cmd>, Receiver<Event>, JoinHandle<()>) {
@@ -1738,11 +2002,10 @@ mod tests {
         handle.join().unwrap();
     }
 
-    /// PLAN.md Stage -1 sweep helper: expired entries become
-    /// SendError; non-expired entries stay in the map. Verifies the
-    /// pure data-manipulation half of the deferred-send path; the
-    /// full DELIVERY-receipt round-trip needs an executor + mocked
-    /// manager and is not exercised here.
+    /// Pure data-manipulation half of the deferred-send path:
+    /// expired entries become `SendError`; non-expired entries stay
+    /// in the map. The full DELIVERY-receipt round-trip needs an
+    /// executor + mocked manager and is not exercised here.
     #[test]
     fn sweep_expired_pending_sends_emits_send_error_for_expired_entries_only() {
         use std::collections::HashMap;
