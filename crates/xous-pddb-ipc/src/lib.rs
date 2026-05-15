@@ -1,24 +1,47 @@
 //! Hand-rolled PDDB IPC client for the xas Signal app.
 //!
-//! Replicates just enough of `xous-core/services/pddb`'s client surface
-//! to back a `KvBackend` (`get` / `put` / `delete` / `delete_dict` /
-//! `list_keys`). Goes around the `pddb` crate entirely because pulling
-//! it in via path-dep cascades into 10+ xous-core services
-//! (`spinor`, `root-keys`, `llio`, `tts-frontend`, `gam`, `modals`,
-//! `keystore-api`, …) — that workspace-merge approach failed on its
-//! first try.
+//! Replicates just enough of `xous-core/services/pddb`'s client
+//! surface to back the `KvBackend` impl in `presage-store-pddb`
+//! (`get` / `put` / `delete` / `delete_dict` / `list_keys`, plus
+//! the bulk `WriteKeyBatch` opcode).
 //!
-//! The wire structs in `api.rs` are byte-compatible verbatim copies
-//! from `~/precursor-signal/repos/xous-core/services/pddb/src/api.rs`
-//! (rkyv 0.8 → 0.8 across version bumps within the 0.8.x semver line).
-//! An earlier IPC probe (commit `f7a9e7b`, asserted `is_mounted=false`
-//! against the live PDDB server) is the reference smoke for this
-//! protocol replication.
+//! # Why hand-rolled
 //!
-//! Scope is deliberately limited to the operations our KvBackend
-//! exercises. PDDB's basis-management, key-attribute, and bulk-read
-//! surfaces are not exposed — when we eventually need any of those,
-//! add them here mirroring `xous-core/services/pddb/src/lib.rs`.
+//! The `pddb` crate published by `xous-core` cascades into 10+
+//! services on a path-dep build (`spinor`, `root-keys`, `llio`,
+//! `tts-frontend`, `gam`, `modals`, `keystore-api`, …). For an app
+//! that only needs the key-value surface, replicating the IPC
+//! protocol locally is dramatically less audit surface than pulling
+//! the whole stack.
+//!
+//! The wire structs in [`api`] are byte-compatible verbatim copies
+//! from `xous-core/services/pddb/src/api.rs`. rkyv 0.8 wire
+//! compatibility is what makes the verbatim approach work; if
+//! xous-core moves to a newer rkyv, this crate has to track.
+//!
+//! # Trust boundary
+//!
+//! All bytes that traverse this crate are *opaque blobs from
+//! presage's perspective*. The PDDB server side does the actual
+//! encryption-at-rest. None of the cryptographic content the Signal
+//! app stores (identity keys, session records, registration data)
+//! is encrypted or decrypted in this crate; it is only marshalled
+//! across the IPC boundary as length-prefixed byte slices.
+//!
+//! # Scope
+//!
+//! Deliberately limited to the operations the `KvBackend` exercises.
+//! PDDB's basis-management, key-attribute, and bulk-read surfaces
+//! are not exposed — adding them is straightforward by mirroring
+//! `xous-core/services/pddb/src/lib.rs`.
+//!
+//! # Crate boundaries
+//!
+//! Upstream of this crate: `presage-store-pddb`'s `PddbBackend`
+//! (only constructed under the `pddb-backend` feature). Below this
+//! crate: `xous_api_names` (to look up the PDDB SID),
+//! `xous::send_message` (the IPC primitive). No dependency on
+//! presage, libsignal, or any of the Signal-protocol crates.
 
 pub mod api;
 pub mod client;

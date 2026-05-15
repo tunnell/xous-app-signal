@@ -1,18 +1,43 @@
 //! Worker-thread harness for the `presage::Manager` state machine.
 //!
-//! The manager runs on a dedicated Xous worker thread driven by a
-//! `smol-rs` `LocalExecutor`. The worker takes a `PddbStore` and an
-//! async-channel pair, runs the executor, dispatches `Cmd` values,
-//! and emits `Event` replies. The `HttpClient` thread-locals are set
-//! inside the worker thread, and the actual `Manager` operations
-//! bolt onto this surface.
+//! Owns a single Xous OS thread (named `signal-worker`) that runs a
+//! `smol-rs::LocalExecutor`. The worker accepts a [`PddbStore`] and a
+//! pair of `async-channel`s, dispatches [`Cmd`] values from the UI,
+//! and emits [`Event`] replies. All `libsignal-service-rs`
+//! thread-locals (`HttpClient`, `TaskSpawner`) are installed inside
+//! the worker, so `Manager` operations stay confined to this thread.
 //!
-//! Why a *local* executor rather than a multi-thread one: presage's
-//! traits use `#[async_trait(?Send)]` (per `libsignal/protocol/src/
-//! storage/traits.rs:48`), and many of our store-cache pointers are
-//! `!Send` once the real PDDB backend lands. A `LocalExecutor` keeps
-//! all spawned tasks on this single thread, which is also what
-//! Whisperfish-Qt does on the linux build.
+//! # Crate boundaries
+//!
+//! - Upstream of this crate: the binary in `xous-app-signal` (sends
+//!   [`Cmd`], receives [`Event`]).
+//! - Below this crate:
+//!   - [`presage_store_pddb`] for storage (passed in as
+//!     [`PddbStore`]).
+//!   - [`xous_net_bridge`] for transport (installed as a
+//!     `thread_local!` `HttpClient` here).
+//!   - `presage::Manager` and `libsignal-service-rs` consumed via the
+//!     vendored copies.
+//!
+//! # Why a `LocalExecutor`
+//!
+//! `presage`'s storage traits use `#[async_trait(?Send)]` (see
+//! `libsignal/protocol/src/storage/traits.rs`), and the PDDB-backed
+//! `PddbStore` holds non-`Send` cache handles. A `LocalExecutor`
+//! pins all spawned tasks to this single OS thread and side-steps
+//! the `Send` requirement; the same pattern is used by
+//! Whisperfish-Qt on Linux.
+//!
+//! # Trust boundary
+//!
+//! This crate sees libsignal-decrypted plaintext on the inbound
+//! path (after `Manager::receive_messages` has run a frame through
+//! `ServiceCipher::open_envelope`) and sender-supplied plaintext on
+//! the outbound path (before `Manager::send_message` encrypts it
+//! under Double Ratchet). Sensitive material that transits this
+//! crate includes the registration record (ACI, PNI, master key) and
+//! plaintext message bodies. None of these are logged in cleartext —
+//! see the trace-line conventions in this module's source.
 
 mod cmd;
 
@@ -33,24 +58,19 @@ use xous_net_bridge::{SyncHttpClient, signal_production_roots};
 
 /// Initial worker-thread stack size.
 ///
-/// Sized at 2 MiB. History:
+/// 2 MiB is the empirical floor for the link path, which is the
+/// deepest call stack the worker exercises: zkgroup credential batch
+/// + serde JSON build + rustls TLS write + tungstenite WS framing
+/// during `PUT /v1/accounts/attributes` on the post-link auto-reload
+/// blew a 1 MiB stack in hosted-mode testing.
 ///
-/// - Original value: 4 MiB. Set by the xas authors as "comfortable
-///   headroom for zkgroup batch ops + smol's recursive task graph."
-/// - Dropped to 1 MiB in 2026-05-08 because the 4 MiB reservation
-///   was eating 4 MiB of RAM (Xous commits stack pages eagerly via
-///   `map_memory`), which combined with large per-process state to
-///   push xas over the kernel's then-default 512 KiB heap cap.
-/// - Restored to 2 MiB shortly after when hosted-mode emulation
-///   showed `thread 'signal-worker' has overflowed its stack`
-///   during `PUT /v1/accounts/attributes` on post-link auto-reload.
-///   That path runs zkgroup credential batch + serde JSON build +
-///   rustls TLS write + tungstenite WS framing, deep enough to
-///   blow 1 MiB. The kernel-level `big-heap` feature now in use
-///   makes the heap-pressure rationale for the 1 MiB cut obsolete.
+/// Xous commits stack pages eagerly via `map_memory`, so this whole
+/// reservation is taken from the process budget at spawn time. The
+/// kernel-level `big-heap` feature (used by `xtask app-image-xip
+/// --kernel-feature big-heap` for hardware builds) raises the
+/// per-process cap to 12 MiB, leaving plenty of headroom.
 ///
-/// 2 MiB is the empirical floor for the link path; if a future
-/// flow stage stack-overflows again, bump to 4 MiB.
+/// If a future flow stage overflows again, bump to 4 MiB.
 const WORKER_STACK_BYTES: usize = 2 * 1024 * 1024;
 
 /// Spawn the Manager worker thread.

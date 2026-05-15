@@ -1,18 +1,30 @@
-//! Xous Signal app entry point.
+//! Xous Signal app (`xas`) binary entry point.
 //!
-//! The earlier sequential Hello/Whoami probe is replaced with
-//! a real UI loop. The probe lives on as the menu's "Test worker"
-//! item — useful for verifying the worker thread + IPC channels are
-//! still alive after a code change. The shape of the binary is now:
+//! Sits at the top of the crate stack. From bottom to top:
 //!
-//! 1. Construct a `PddbStore` (mock backend in hosted; real PDDB
-//!    behind a `pddb-backend` feature flag).
-//! 2. Spawn the manager worker thread (`xous-signal-worker`).
-//! 3. Hand the cmd/event channels to `Ui::new` and call `Ui::run`.
-//! 4. Worker shutdown is the responsibility of the UI driver — it
-//!    sends `Cmd::Shutdown` on Quit.
+//! - `xous-net-bridge` — sync TLS + WSS + HTTPS transport, owns the
+//!   `Arc<ClientConfig>` for TLS-1.3 ticket resumption.
+//! - `presage-store-pddb` — `presage::Store` impl backed by Xous's
+//!   PDDB (real) or an in-memory mock (hosted).
+//! - `xous-signal-worker` — owns the `presage::Manager` on a
+//!   dedicated worker thread driven by `smol-rs::LocalExecutor`,
+//!   exposes a [`Cmd`] / [`Event`] async-channel surface.
+//! - This crate — UI (`gam_app::App` on hardware, `stdin_ui::Ui` on
+//!   hosted) wired to the worker via the two channels.
 //!
-//! See docs/ARCHITECTURE.md and docs/UI.md for the runtime + UI design.
+//! The startup sequence is:
+//!
+//! 1. Wire up the rv32 TRNG-backed `getrandom` shim if compiling for
+//!    Xous; on hosted the OS RNG is used.
+//! 2. Construct a [`PddbStore`] (mock backend on hosted; real PDDB
+//!    behind the `pddb-backend` feature).
+//! 3. Spawn [`run_signal_worker`].
+//! 4. Hand the cmd/event channels to the UI and run.
+//! 5. The UI sends [`Cmd::Shutdown`] on quit; the worker drains and
+//!    emits `Event::ShuttingDown`.
+//!
+//! See `docs/ARCHITECTURE.md` for the full data-flow walkthrough and
+//! `docs/UI.md` for the UI design.
 
 mod dialogue;
 mod gam_app;

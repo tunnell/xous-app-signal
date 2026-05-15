@@ -1,24 +1,64 @@
 //! PDDB-backed implementation of `presage`'s storage traits.
 //!
-//! The trait impls sit on top of an internal `KvBackend` abstraction:
+//! Implements every storage trait `presage::Manager` needs (state,
+//! protocol, contents) on top of Xous's PDDB encrypted key-value
+//! store. This is the only path by which Signal Protocol state
+//! (identity keys, session records, prekey bundles, registration
+//! data) is persisted on the device; loss of the PDDB password is
+//! loss of the linked Signal session.
 //!
-//! - `KvBackend` exposes `get / put / delete / delete_dict / list_keys`
-//!   keyed on `(dict_name, key_name)` — the same shape PDDB itself
-//!   exposes. `PddbBackend` forwards these into the `pddb::Pddb` API;
-//!   `MockBackend` is an in-memory `HashMap` for hosted-mode testing.
+//! # Layout
 //!
-//! - `PddbStore` owns an `Arc<dyn KvBackend>`, an in-memory session
+//! Trait impls sit on top of an internal [`KvBackend`] abstraction:
+//!
+//! - [`KvBackend`] exposes `get` / `put` / `delete` / `delete_dict` /
+//!   `list_keys` keyed on `(dict_name, key_name)` — the same shape
+//!   PDDB itself exposes. `PddbBackend` (under the `pddb-backend`
+//!   feature) forwards into the `xous-pddb-ipc` client;
+//!   [`MockBackend`] is an in-memory `HashMap` for hosted-mode tests.
+//! - [`BufferingBackend`] wraps any inner backend and adds
+//!   send-time write coalescing: writes inside a [`BatchGuard`] scope
+//!   stay in RAM until [`BatchGuard::commit`].
+//! - [`PddbStore`] owns an `Arc<dyn KvBackend>`, an in-memory session
 //!   cache (dirty-set + flush instead of write-through), and a
-//!   `trust_new_identities` policy flag. It implements the presage
-//!   traits over the backend. `Clone + Send + Sync + 'static`, the
-//!   bound demanded by `presage::store::Store`.
+//!   `trust_new_identities` policy flag. `Clone + Send + Sync +
+//!   'static` (the bound `presage::store::Store` demands).
 //!
-//! Trait coverage: `StateStore` (10 methods); the 6 libsignal protocol
-//! storage traits + `ProtocolStore` blanket (ACI/PNI split runtime via
-//! `IdentityType`, sessions buffered + flushed); 3 libsignal-service-rs
-//! extension traits (`PreKeysStore`, `KyberPreKeyStoreExt`,
-//! `SessionStoreExt`); full `ContentsStore` (messages-by-thread,
-//! contacts, groups, profile keys, profile/group avatars, sticker packs).
+//! # Trait coverage
+//!
+//! - `StateStore` (10 methods): registration data, master key,
+//!   identity-key pairs, sender certificate.
+//! - The 6 libsignal protocol storage traits + the `ProtocolStore`
+//!   blanket impl. ACI/PNI splits are runtime-dispatched via
+//!   [`IdentityType`]; sessions are buffered in `PddbStore` and
+//!   flushed in bulk by [`PddbStore::flush_sessions`].
+//! - 3 libsignal-service-rs extension traits (`PreKeysStore`,
+//!   `KyberPreKeyStoreExt`, `SessionStoreExt`).
+//! - Full `ContentsStore`: messages-by-thread, contacts, groups,
+//!   profile keys, profile and group avatars, sticker packs.
+//!
+//! # Crate boundaries
+//!
+//! Upstream: `xous-signal-worker::run_signal_worker` takes a
+//! [`PddbStore`] and hands it to `presage::Manager`. Below:
+//! `xous-pddb-ipc` (only under the `pddb-backend` feature) and the
+//! presage trait surface from the vendored copies. No transport
+//! deps — this crate never touches the network.
+//!
+//! # Trust boundary
+//!
+//! Every byte this crate writes to PDDB is Signal-Protocol
+//! cryptographic material (or framing around it). PDDB itself
+//! encrypts the bytes at rest under the user's PDDB password, so
+//! this crate sees plaintext keys on the way to encrypted storage.
+//! The bytes are NOT re-encrypted here — that would be a useless
+//! second layer with the same key derivation problem.
+//!
+//! The `session_cache` and `session_dirty` fields keep recently-used
+//! [`SessionRecord`] bytes in RAM for the duration of the worker
+//! process; they are dropped on process exit and never written
+//! elsewhere. Same applies to the [`BufferingBackend`]'s in-RAM
+//! buffer during a batch.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
