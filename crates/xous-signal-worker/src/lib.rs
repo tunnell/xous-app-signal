@@ -159,24 +159,31 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
 
         // When `LinkDevice` succeeds the resulting
         // `Manager<S, Registered>` is retained here so subsequent
-        // Cmds (StartReceive, SendMessage) reuse the same
+        // commands (StartReceive, SendMessage) reuse the same
         // session state instead of re-running `load_registered`.
-        // `None` means we haven't linked (or failed to).
+        // `None` means not linked (or link failed).
         let mut linked: Option<Manager<PddbStore, Registered>> = None;
 
         // Cached identity fields. Populated whenever the worker sees
-        // a successful Manager (load_registered or link_secondary_device);
-        // served back via Cmd::GetAccountInfo for the UI Profile screen
-        // on cold-start where Event::LinkComplete may have fired before
-        // the user navigated to Profile (or never fired because PDDB
-        // wasn't unlocked within the load_registered retry budget).
+        // a successful Manager (`load_registered` or
+        // `link_secondary_device`); served back via
+        // `Cmd::GetAccountInfo` for the UI Profile screen on
+        // cold-start where `Event::LinkComplete` may have fired
+        // before the user navigated to Profile (or never fired
+        // because PDDB wasn't unlocked within the `load_registered`
+        // retry budget).
         let mut cached_account_info: Option<crate::cmd::AccountInfoData> = None;
 
         // Auto-load existing registration so the user doesn't re-link
         // on every boot. PDDB may not be mounted at worker spawn time
         // (mount fires lazily on first IPC, racing with us); retry on
-        // transient errors until the store either returns a Manager or
-        // a definitive NotYetRegistered.
+        // transient errors until the store either returns a Manager
+        // or a definitive `NotYetRegistered`.
+        //
+        // LOGGING: the success arm below emits `device_name`, `aci`,
+        // and `phone` to the log pipeline at info level. All three
+        // are Signal account identifiers (PII). See REFACTOR_NOTES
+        // for the log-discipline audit item.
         log::info!("worker: attempting load_registered from PDDB");
         let mut linked_attempts = 0;
         loop {
@@ -222,10 +229,10 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
             }
         }
 
-        // Handle to the per-receive "manager task"'s
-        // internal send channel. `Some(tx)` means the manager task
-        // is running and `Cmd::SendMessage` should be forwarded;
-        // `None` means receive isn't started yet (or the task died).
+        // Handle to the per-receive `manager_task`'s internal send
+        // channel. `Some(tx)` means the task is running and
+        // `Cmd::SendMessage` should be forwarded to it; `None`
+        // means receive isn't started yet (or the task died).
         let mut send_to_manager: Option<Sender<InnerSend>> = None;
 
         loop {
@@ -250,13 +257,13 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                     use futures::pin_mut;
 
                     // Cancel primitive: a 1-slot async-channel. The
-                    // outer "race" loop below sends () on cancel_tx
-                    // when Cmd::LinkCancel arrives; the link future
-                    // is wrapped to race against cancel_rx.recv().
-                    // Dropping cancel_tx (e.g., shutdown path) also
-                    // closes the channel, which the recv() sees as
-                    // RecvError — the race interprets either signal
-                    // as "cancel."
+                    // outer "race" loop below sends `()` on
+                    // `cancel_tx` when `Cmd::LinkCancel` arrives;
+                    // the link future is wrapped to race against
+                    // `cancel_rx.recv()`. Dropping `cancel_tx` (the
+                    // shutdown path) also closes the channel — the
+                    // `recv()` sees `RecvError`, and the race
+                    // interprets either signal as "cancel."
                     let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
 
                     let store_for_link = store.clone();
@@ -324,12 +331,13 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
 
                     match outcome {
                         Ok(manager) => {
-                            // We already sent Event::LinkComplete from
-                            // inside handle_link_device. Retain the
-                            // Manager so subsequent Cmds can use it.
-                            // Cache the account info too so
-                            // Cmd::GetAccountInfo can serve it after
-                            // the manager is moved into manager_task.
+                            // `Event::LinkComplete` was already sent
+                            // from inside `handle_link_device`. Retain
+                            // the Manager so subsequent commands can
+                            // use it, and cache the account info so
+                            // `Cmd::GetAccountInfo` can serve it after
+                            // the manager is moved into
+                            // `manager_task` by `Cmd::StartReceive`.
                             let data = manager.registration_data();
                             cached_account_info = Some(crate::cmd::AccountInfoData {
                                 device_name: data.device_name.clone().unwrap_or_default(),
@@ -339,18 +347,19 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                             linked = Some(manager);
                         }
                         Err(()) => {
-                            // handle_link_device (or the cancel branch
-                            // above) already sent the appropriate
-                            // Event::LinkError. Drop any half-linked
-                            // state on the floor; retry by sending
-                            // another Cmd::LinkDevice.
+                            // `handle_link_device` (or the cancel
+                            // branch above) already sent the
+                            // appropriate `Event::LinkError`. Drop
+                            // any half-linked state on the floor;
+                            // retry by sending another
+                            // `Cmd::LinkDevice`.
                         }
                     }
                 }
                 Ok(Cmd::LinkCancel) => {
-                    // Outside an in-flight link this is a no-op — the
-                    // UI shouldn't be sending it from non-Linking
-                    // screens, but defensively log and ignore.
+                    // Outside an in-flight link this is a no-op —
+                    // the UI shouldn't send it from non-Linking
+                    // screens. Log and ignore defensively.
                     log::info!("worker: LinkCancel received outside in-flight link; no-op");
                 }
                 Ok(Cmd::GetAccountInfo) => {
@@ -454,21 +463,26 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                 }
                 Ok(Cmd::Logout) => {
                     log::info!("worker: Cmd::Logout received");
+                    // SECURITY: best-effort key destruction. See the
+                    // `Cmd::Logout` `# Security` block for the wipe's
+                    // failure-mode discussion.
+                    //
                     // 1. Drop the sender side of the manager_task's
-                    //    InnerSend channel. The task's select! sees
-                    //    its send_rx close and exits, releasing the
-                    //    Manager (and its WS pump).
+                    //    `InnerSend` channel. The task's `select!`
+                    //    sees `send_rx` close and exits, releasing
+                    //    the Manager (and its WS pump).
                     send_to_manager = None;
-                    // 2. If we still hold an unspawned manager
-                    //    (StartReceive never fired, but somehow
-                    //    Logout did), drop it too.
+                    // 2. If an unspawned manager is still held
+                    //    (`StartReceive` never fired, but `Logout`
+                    //    did), drop it too.
                     drop(linked.take());
-                    // 3. Wipe the PDDB-backed Store. Store::clear()
-                    //    chains clear_registration + clear_contents +
-                    //    delete_dict for both protocol stores. Errors
-                    //    are non-fatal — we still emit LoggedOut so
-                    //    the UI returns to the pre-link menu, but log
-                    //    a warning so a re-link doesn't silently mix
+                    // 3. Wipe the PDDB-backed Store. `Store::clear`
+                    //    chains `clear_registration` +
+                    //    `clear_contents` + `delete_dict` for both
+                    //    protocol stores. Errors are non-fatal —
+                    //    `LoggedOut` is still emitted so the UI
+                    //    returns to the pre-link menu, but a warning
+                    //    is logged so a re-link doesn't silently mix
                     //    new state with stale leftovers.
                     {
                         use presage::store::{Store, StateStore};
@@ -488,28 +502,30 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                 }
                 Ok(Cmd::SyncContacts) => {
                     log::info!("worker: Cmd::SyncContacts received");
-                    // Sync requires the manager. If it's already moved
-                    // into manager_task (post-StartReceive), we can't
-                    // call request_contacts directly — it needs &mut
-                    // manager which the receive stream holds. Defer
-                    // by sending an SyncError; future work could route
-                    // sync through manager_task the same way send goes
-                    // through InnerSend.
+                    // Sync requires `&mut manager`. Post-`StartReceive`
+                    // that borrow lives inside `manager_task`'s
+                    // receive stream and is unreachable from here.
+                    // Routing sync through `manager_task` via a new
+                    // `InnerSync` inner-channel variant is the
+                    // tracked follow-up; see REFACTOR_NOTES.
                     if linked.is_some() {
                         let m = linked.as_mut().expect("just checked is_some");
                         match m.request_contacts().await {
                             Ok(()) => {
                                 log::info!("worker/sync: request_contacts OK");
                                 // The contacts blob arrives as an
-                                // inbound SynchronizeMessage; presage's
-                                // existing handler writes them into
-                                // ContentsStore. We can't enumerate
-                                // newly-added entries here without a
-                                // store-level diff, so for now just
-                                // tell the UI we're done — the next
-                                // received message from any synced
-                                // contact will pick up the name via
-                                // contact_by_id (the existing path).
+                                // inbound `SynchronizeMessage`;
+                                // presage's existing handler writes
+                                // each entry into `ContentsStore`.
+                                // Enumerating the newly-added entries
+                                // from here would need a store-level
+                                // diff; instead, signal completion to
+                                // the UI and let the next received
+                                // message from any synced contact
+                                // pick up the name via
+                                // `contact_by_id` (the existing
+                                // resolution path in
+                                // `process_received`).
                                 let _ = event_tx.send(Event::SyncComplete).await;
                             }
                             Err(e) => {
@@ -520,11 +536,10 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                             }
                         }
                     } else {
-                        // Manager already moved into manager_task —
-                        // the contacts request needs to go through
-                        // there (similar to send). For now surface as
-                        // an error; the right fix is to route sync
-                        // through manager_task via an InnerSync variant.
+                        // Manager moved into `manager_task` —
+                        // requesting contacts from here is impossible
+                        // until the `InnerSync` routing lands. Surface
+                        // an actionable error so the user can recover.
                         log::warn!(
                             "worker/sync: manager already in receive task — sync after StartReceive not yet supported"
                         );
@@ -556,9 +571,9 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                                 }
                             }
                         } else {
-                            // Manager already moved into manager_task —
-                            // same situation as SyncContacts. Surface as
-                            // error.
+                            // Manager moved into `manager_task` —
+                            // same situation as `Cmd::SyncContacts`.
+                            // Surface as error.
                             Err(
                                 "Username lookup after receive starts isn't wired yet.\nRestart the app and try again."
                                     .to_string(),
@@ -1911,14 +1926,20 @@ async fn handle_whoami(store: PddbStore) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    //! Integration-style tests: spawn the worker, exercise the
-    //! channel round-trip end-to-end. We use the host-mode
-    //! `PddbStore::with_mock_backend` so no Xous services are needed.
+    //! Integration-style tests: spawn the worker and exercise the
+    //! channel round-trip end-to-end.
+    //!
+    //! Uses [`PddbStore::with_mock_backend`] so no Xous services are
+    //! required. The tests cover lifecycle (ping/pong, error-on-
+    //! empty-store, implicit shutdown via channel drop) and the
+    //! pure data-manipulation portion of [`sweep_expired_pending_sends`].
+    //! Full receive/send paths require an executor + mocked manager
+    //! and are exercised by the workspace-level hosted run.
 
     use super::*;
 
     /// Channel capacity. 16 is plenty for these tests; the
-    /// production app sizes this against the IPC fan-in/fan-out.
+    /// production binary sizes this against the IPC fan-in/fan-out.
     const CHAN_CAP: usize = 16;
 
     fn spawn() -> (Sender<Cmd>, Receiver<Event>, JoinHandle<()>) {
@@ -1956,11 +1977,10 @@ mod tests {
         handle.join().unwrap();
     }
 
-    /// PLAN.md Stage -1 sweep helper: expired entries become
-    /// SendError; non-expired entries stay in the map. Verifies the
-    /// pure data-manipulation half of the deferred-send path; the
-    /// full DELIVERY-receipt round-trip needs an executor + mocked
-    /// manager and is not exercised here.
+    /// Pure data-manipulation half of the deferred-send path:
+    /// expired entries become `SendError`; non-expired entries stay
+    /// in the map. The full DELIVERY-receipt round-trip needs an
+    /// executor + mocked manager and is not exercised here.
     #[test]
     fn sweep_expired_pending_sends_emits_send_error_for_expired_entries_only() {
         use std::collections::HashMap;
