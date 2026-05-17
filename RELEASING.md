@@ -76,9 +76,41 @@ releases create new `xas-vX.Y+1` branches — they don't reuse old ones.
    This must be a fast-forward. If it isn't, something landed on `main`
    that isn't on `dev` — stop and investigate before forcing.
 
-9. **Don't delete `xas-vX.Y` on xous-core.** Past release branches stay
-   frozen and accessible forever — anyone re-building an old xas version
-   from source needs them.
+9. **Create the GitHub Release.** The git tag alone is not enough; GitHub
+   surfaces releases as a separate first-class concept on the Releases
+   tab. Without an explicit Release entry, the tag exists but doesn't
+   appear in the "Latest" badge or get picked up by release-feed
+   integrations.
+
+   Draft the release notes first (in the maintainer's workspace, not
+   in-tree). Mirror the prior release's structure so the Releases page
+   reads consistently — typically:
+
+   - One-line headline (the user-visible win this release ships).
+   - "What changed vs `vX.{Y-1}`" bullets.
+   - "Required upstream patches" status (in-flight PRs that this
+     release depends on or that ship downstream-vendored until they
+     merge).
+   - Until-those-merge build pointer (the pinned `xas-vX.Y` branch
+     from step 2).
+   - "Known limitations" with GitHub issue references.
+   - Build / release-procedure pointers (BUILDING.md, this file).
+
+   Then publish via `gh`:
+
+   ```sh
+   gh release create vX.Y \
+       --title "xas vX.Y" \
+       --notes-file path/to/release-notes.md \
+       --latest
+   ```
+
+   Verify with `gh release view vX.Y --repo tunnell/xous-app-signal` —
+   should show the "Latest" badge and the notes rendered.
+
+10. **Don't delete `xas-vX.Y` on xous-core.** Past release branches stay
+    frozen and accessible forever — anyone re-building an old xas version
+    from source needs them.
 
 ## Why this branch model
 
