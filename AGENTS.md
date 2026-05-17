@@ -79,13 +79,17 @@ boot without Signal in the launcher (see trap 3 below and
   (the GitHub-anonymized form). Pass via `git -c user.email=...
   -c user.name=tunnell commit --author=...` so it sticks
   regardless of local config.
-- **No AI-attribution trailers, vendor names, or model names** in
-  commits or code comments — no `Co-Authored-By: <model>`, no
-  "Generated with ...", no tool-name references. Agent-assisted
-  work is disclosed in the PR description per the README's
+- **AI disclosure via `Assisted-by:` trailer** on AI-assisted
+  commits, model name only — e.g. `Assisted-by: Opus 4.7`.
+  Vendor / product names ("Claude", "Cursor", "ChatGPT") stay
+  out of trailers and code comments. Do **not** use the GitHub
+  `Co-Authored-By:` form for AI authors — that auto-links a
+  separate entity in the GitHub UI (avatar, profile, contributor
+  count), which is not the disclosure model we want. PR
+  descriptions may add prose disclosure per the README's
   contribution policy. Cross-repo PRs to upstream (e.g.
-  `betrusted-io/xous-core`) follow that repo's CONTRIBUTING.md
-  instead, which may require `Assisted-by:` trailers and DCO.
+  `betrusted-io/xous-core`) also need a DCO `Signed-off-by:`
+  trailer.
 - **No references to out-of-repo files.** Working docs in the
   maintainer's `notes/` workspace are not in the public repo. A
   commit message that says "see CHORES.md" or a comment pointing
