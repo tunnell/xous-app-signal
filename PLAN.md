@@ -13,6 +13,23 @@ flagged with **[verified]** were checked against the repo at HEAD
 unmeasured claims that drive the proposed sequencing and must be tested
 by Phase 4a instrumentation before any behavior change ships.
 
+> **Status update (2026-07-06).** Phases 1–4b are complete on `dev`
+> (instrumentation + Stage 0 landed in `bf89439`; measurements in
+> `BENCH.md`). BENCH.md §2's load-bearing finding: **chat.signal.org
+> never issues TLS session tickets**, so Stage 0 is a no-op against
+> production — correct code, kept as defense-in-depth, but it cannot
+> move send latency. Per §4's decision point the plan pivoted.
+> **Stage 1a (per-send fresh WS) and Stage 1' (pre-open on compose
+> entry) are retired**: issue #1's later investigation showed a
+> second authenticated WS for the same (account, deviceId)
+> self-induces 4409 displacement storms; the settled direction is
+> one long-lived identified WS with typed close-code handling.
+> Remaining candidates from this plan: Stage 1b (separate
+> `save_message` failure from send failure) and Stage -1 (defer the
+> Failed indicator). Upstream PR status: xous-core#877 **merged**
+> 2026-06-02 (`2005a801c`); rust-lang/rust#156414 **merged**;
+> whisperfish/libsignal-service-rs#431 still an open draft.
+
 ---
 
 ## 0. Context you need before starting

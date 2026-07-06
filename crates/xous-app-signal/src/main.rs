@@ -146,8 +146,8 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
 /// → unbounded memory on a poorly-behaved peer with high message
 /// flux. 16 is the negotiated middle: enough for a bursty receive
 /// from a chat the user just opened, small enough to keep the
-/// post-Drop bare-`String` body exposure window bounded (see A.1 /
-/// A.3 in `~/REFACTOR_NOTES.md`).
+/// post-Drop bare-`String` body exposure window bounded (SecretBox
+/// wrapping of message bodies is tracked in issue #37, item 3).
 const CHAN_CAP: usize = 16;
 
 /// Construct the [`PddbStore`] the worker will use.

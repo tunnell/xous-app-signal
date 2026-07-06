@@ -61,8 +61,12 @@ strip = "symbols"
 #
 # Only the git-based patches are mirrored here. xous-core's path-based patches
 # (`aes` -> services/aes, `getrandom` -> imports/getrandom) reference paths
-# that only exist inside the xous-core tree; they're TODO when we either
-# (a) merge this workspace into xous-core, or (b) vendor those forks here.
+# that only exist inside the xous-core tree; getrandom is patched below via
+# the repos/xous-core sibling path. The durable fix is a git-rev pin on
+# betrusted-io/xous-core (the pattern betrusted-io/sigchat and
+# dabao-base-app use). Merging xas into xous-core is not on the table:
+# the maintainer moved chat apps out of tree (betrusted-io/sigchat
+# precedent, xous-core commit d8542dab7), so xas stays out-of-tree.
 #
 # We do NOT mirror xous-core's curve25519-dalek patch. It conflicts with
 # libsignal's `signalapp/curve25519-dalek` pin.
@@ -143,11 +147,11 @@ presage = { path = "vendor/presage/presage" }
 # Cross-compiling rustls/ring for rv32 pulls in `getrandom`, whose
 # upstream crate doesn't recognize Xous as a target. xous-core has a
 # forked `getrandom` at `imports/getrandom` that calls Xous's TRNG. We
-# point at it via an absolute path on this dev box; this is brittle
-# (only works on machines where xous-core is at this path). Long-term
-# resolution: either merge our workspace into xous-core's tree, or
-# fork the getrandom patch into a separate publishable repo. See
-# the getrandom 0.3/0.4 audit roadmap item.
+# point at it via the repos/xous-core sibling path; this is brittle
+# (requires the BUILDING.md §1 directory layout). Durable fix: pin it
+# as a git dep on betrusted-io/xous-core at a fixed rev, the way
+# betrusted-io/sigchat and dabao-base-app consume it. See the
+# getrandom 0.3/0.4 audit roadmap item.
 [patch.crates-io.getrandom]
 path = "../repos/xous-core/imports/getrandom"
 
