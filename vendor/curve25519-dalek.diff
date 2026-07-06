@@ -1,6 +1,20 @@
-diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-dalek/Cargo.toml /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/Cargo.toml
---- /tmp/curve25519-upstream/curve25519-dalek/Cargo.toml	2026-05-14 15:48:11.034502920 +0200
-+++ /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/Cargo.toml	2026-05-07 19:18:21.789478387 +0200
+diff -ruN -x .git -x target -x Cargo.lock -x ed25519-dalek -x x25519-dalek /tmp/curve25519-upstream/Cargo.toml vendor/curve25519-dalek/Cargo.toml
+--- /tmp/curve25519-upstream/Cargo.toml	2026-07-06 07:24:57.150815123 -0500
++++ vendor/curve25519-dalek/Cargo.toml	2026-07-06 07:16:41.519462509 -0500
+@@ -1,9 +1,7 @@
+ [workspace]
+ members = [
+     "curve25519-dalek",
+-    "curve25519-dalek-derive",
+-    "ed25519-dalek",
+-    "x25519-dalek"
++    "curve25519-dalek-derive"
+ ]
+ resolver = "2"
+ 
+diff -ruN -x .git -x target -x Cargo.lock -x ed25519-dalek -x x25519-dalek /tmp/curve25519-upstream/curve25519-dalek/Cargo.toml vendor/curve25519-dalek/curve25519-dalek/Cargo.toml
+--- /tmp/curve25519-upstream/curve25519-dalek/Cargo.toml	2026-07-06 07:24:57.154815138 -0500
++++ vendor/curve25519-dalek/curve25519-dalek/Cargo.toml	2026-06-09 15:38:10.390931950 -0500
 @@ -4,7 +4,7 @@
  # - update CHANGELOG
  # - update README if required by semver
@@ -10,9 +24,9 @@ diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-da
  edition = "2021"
  rust-version = "1.60.0"
  authors = ["Isis Lovecruft <isis@patternsinthevoid.net>",
-diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-dalek/src/lib.rs /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/src/lib.rs
---- /tmp/curve25519-upstream/curve25519-dalek/src/lib.rs	2026-05-14 15:48:11.039299662 +0200
-+++ /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/src/lib.rs	2026-05-07 19:18:21.792170610 +0200
+diff -ruN -x .git -x target -x Cargo.lock -x ed25519-dalek -x x25519-dalek /tmp/curve25519-upstream/curve25519-dalek/src/lib.rs vendor/curve25519-dalek/curve25519-dalek/src/lib.rs
+--- /tmp/curve25519-upstream/curve25519-dalek/src/lib.rs	2026-07-06 07:24:57.186815262 -0500
++++ vendor/curve25519-dalek/curve25519-dalek/src/lib.rs	2026-06-09 15:38:10.606931958 -0500
 @@ -94,6 +94,13 @@
  // External (and internal) traits.
  pub mod traits;
@@ -27,9 +41,9 @@ diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-da
  //------------------------------------------------------------------------
  // curve25519-dalek internal modules
  //------------------------------------------------------------------------
-diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-dalek/src/lizard/jacobi_quartic.rs /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/src/lizard/jacobi_quartic.rs
---- /tmp/curve25519-upstream/curve25519-dalek/src/lizard/jacobi_quartic.rs	1970-01-01 01:00:00.000000000 +0100
-+++ /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/src/lizard/jacobi_quartic.rs	2026-05-07 19:18:21.792579187 +0200
+diff -ruN -x .git -x target -x Cargo.lock -x ed25519-dalek -x x25519-dalek /tmp/curve25519-upstream/curve25519-dalek/src/lizard/jacobi_quartic.rs vendor/curve25519-dalek/curve25519-dalek/src/lizard/jacobi_quartic.rs
+--- /tmp/curve25519-upstream/curve25519-dalek/src/lizard/jacobi_quartic.rs	1969-12-31 18:00:00.000000000 -0600
++++ vendor/curve25519-dalek/curve25519-dalek/src/lizard/jacobi_quartic.rs	2026-06-09 15:38:10.608931958 -0500
 @@ -0,0 +1,72 @@
 +//! Helper functions for use with Lizard
 +
@@ -103,9 +117,9 @@ diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-da
 +        }
 +    }
 +}
-diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-dalek/src/lizard/LICENSE /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/src/lizard/LICENSE
---- /tmp/curve25519-upstream/curve25519-dalek/src/lizard/LICENSE	1970-01-01 01:00:00.000000000 +0100
-+++ /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/src/lizard/LICENSE	2026-05-07 19:18:21.792170610 +0200
+diff -ruN -x .git -x target -x Cargo.lock -x ed25519-dalek -x x25519-dalek /tmp/curve25519-upstream/curve25519-dalek/src/lizard/LICENSE vendor/curve25519-dalek/curve25519-dalek/src/lizard/LICENSE
+--- /tmp/curve25519-upstream/curve25519-dalek/src/lizard/LICENSE	1969-12-31 18:00:00.000000000 -0600
++++ vendor/curve25519-dalek/curve25519-dalek/src/lizard/LICENSE	2026-06-09 15:38:10.607931958 -0500
 @@ -0,0 +1,21 @@
 +MIT License
 +
@@ -128,9 +142,9 @@ diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-da
 +LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 +OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 +SOFTWARE.
-diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-dalek/src/lizard/lizard_constants.rs /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/src/lizard/lizard_constants.rs
---- /tmp/curve25519-upstream/curve25519-dalek/src/lizard/lizard_constants.rs	1970-01-01 01:00:00.000000000 +0100
-+++ /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/src/lizard/lizard_constants.rs	2026-05-07 19:18:21.792579187 +0200
+diff -ruN -x .git -x target -x Cargo.lock -x ed25519-dalek -x x25519-dalek /tmp/curve25519-upstream/curve25519-dalek/src/lizard/lizard_constants.rs vendor/curve25519-dalek/curve25519-dalek/src/lizard/lizard_constants.rs
+--- /tmp/curve25519-upstream/curve25519-dalek/src/lizard/lizard_constants.rs	1969-12-31 18:00:00.000000000 -0600
++++ vendor/curve25519-dalek/curve25519-dalek/src/lizard/lizard_constants.rs	2026-06-09 15:38:10.609931958 -0500
 @@ -0,0 +1,49 @@
 +//! Constants for use in Lizard
 +//!
@@ -181,9 +195,9 @@ diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-da
 +        assert_eq!(-&invsqrt_one_plus_d, MINVSQRT_ONE_PLUS_D);
 +    }
 +}
-diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-dalek/src/lizard/lizard_ristretto.rs /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/src/lizard/lizard_ristretto.rs
---- /tmp/curve25519-upstream/curve25519-dalek/src/lizard/lizard_ristretto.rs	1970-01-01 01:00:00.000000000 +0100
-+++ /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/src/lizard/lizard_ristretto.rs	2026-05-07 19:18:21.792579187 +0200
+diff -ruN -x .git -x target -x Cargo.lock -x ed25519-dalek -x x25519-dalek /tmp/curve25519-upstream/curve25519-dalek/src/lizard/lizard_ristretto.rs vendor/curve25519-dalek/curve25519-dalek/src/lizard/lizard_ristretto.rs
+--- /tmp/curve25519-upstream/curve25519-dalek/src/lizard/lizard_ristretto.rs	1969-12-31 18:00:00.000000000 -0600
++++ vendor/curve25519-dalek/curve25519-dalek/src/lizard/lizard_ristretto.rs	2026-06-09 15:38:10.609931958 -0500
 @@ -0,0 +1,332 @@
 +//! Defines additional methods on RistrettoPoint for Lizard
 +
@@ -517,9 +531,9 @@ diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-da
 +        }
 +    }
 +}
-diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-dalek/src/lizard/mod.rs /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/src/lizard/mod.rs
---- /tmp/curve25519-upstream/curve25519-dalek/src/lizard/mod.rs	1970-01-01 01:00:00.000000000 +0100
-+++ /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/src/lizard/mod.rs	2026-05-07 19:18:21.792579187 +0200
+diff -ruN -x .git -x target -x Cargo.lock -x ed25519-dalek -x x25519-dalek /tmp/curve25519-upstream/curve25519-dalek/src/lizard/mod.rs vendor/curve25519-dalek/curve25519-dalek/src/lizard/mod.rs
+--- /tmp/curve25519-upstream/curve25519-dalek/src/lizard/mod.rs	1969-12-31 18:00:00.000000000 -0600
++++ vendor/curve25519-dalek/curve25519-dalek/src/lizard/mod.rs	2026-06-09 15:38:10.610931958 -0500
 @@ -0,0 +1,13 @@
 +//! The Lizard method for encoding/decoding 16 bytes into Ristretto points.
 +
@@ -534,9 +548,9 @@ diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-da
 +pub mod jacobi_quartic;
 +pub mod lizard_constants;
 +pub mod lizard_ristretto;
-diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-dalek/src/lizard/u32_constants.rs /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/src/lizard/u32_constants.rs
---- /tmp/curve25519-upstream/curve25519-dalek/src/lizard/u32_constants.rs	1970-01-01 01:00:00.000000000 +0100
-+++ /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/src/lizard/u32_constants.rs	2026-05-07 19:18:21.792579187 +0200
+diff -ruN -x .git -x target -x Cargo.lock -x ed25519-dalek -x x25519-dalek /tmp/curve25519-upstream/curve25519-dalek/src/lizard/u32_constants.rs vendor/curve25519-dalek/curve25519-dalek/src/lizard/u32_constants.rs
+--- /tmp/curve25519-upstream/curve25519-dalek/src/lizard/u32_constants.rs	1969-12-31 18:00:00.000000000 -0600
++++ vendor/curve25519-dalek/curve25519-dalek/src/lizard/u32_constants.rs	2026-06-09 15:38:10.611931958 -0500
 @@ -0,0 +1,46 @@
 +use cfg_if::cfg_if;
 +
@@ -584,9 +598,9 @@ diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-da
 +    38019585, 4791795, 20332186, 18653482, 46576675, 33182583, 65658549, 2817057, 12569934,
 +    30919145,
 +]);
-diff -ruN -x .git -x target -x Cargo.lock /tmp/curve25519-upstream/curve25519-dalek/src/lizard/u64_constants.rs /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/src/lizard/u64_constants.rs
---- /tmp/curve25519-upstream/curve25519-dalek/src/lizard/u64_constants.rs	1970-01-01 01:00:00.000000000 +0100
-+++ /home/tunnell/code/xas/xous-app-signal/vendor/curve25519-dalek/curve25519-dalek/src/lizard/u64_constants.rs	2026-05-07 19:18:21.792579187 +0200
+diff -ruN -x .git -x target -x Cargo.lock -x ed25519-dalek -x x25519-dalek /tmp/curve25519-upstream/curve25519-dalek/src/lizard/u64_constants.rs vendor/curve25519-dalek/curve25519-dalek/src/lizard/u64_constants.rs
+--- /tmp/curve25519-upstream/curve25519-dalek/src/lizard/u64_constants.rs	1969-12-31 18:00:00.000000000 -0600
++++ vendor/curve25519-dalek/curve25519-dalek/src/lizard/u64_constants.rs	2026-06-09 15:38:10.612931958 -0500
 @@ -0,0 +1,63 @@
 +use cfg_if::cfg_if;
 +

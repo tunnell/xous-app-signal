@@ -37,10 +37,18 @@ cd /tmp
 git clone https://github.com/whisperfish/presage.git presage-upstream
 cd presage-upstream
 git checkout 600c4ed
-cd /tmp
-diff -ruN presage-upstream/ /path/to/xous-app-signal/vendor/presage/ \
-    > /path/to/xous-app-signal/vendor/presage.diff
+cd /path/to/xous-app-signal
+diff -ruN -x .git -x target -x Cargo.lock \
+    -x presage-cli -x presage-store-sled -x presage-store-sqlite \
+    /tmp/presage-upstream/ vendor/presage/ > vendor/presage.diff
 ```
+
+The `-x presage-cli -x presage-store-sled -x presage-store-sqlite`
+exclusions exist because those upstream workspace members are **not
+vendored**: no xas build compiles them (we consume only the `presage`
+library crate), so carrying ~5.5k LoC of CLI + sled/sqlite store
+source would inflate the audit surface for nothing. The vendored
+workspace manifest lists `members = ["presage"]` accordingly.
 
 ```sh
 # libsignal-service-rs
@@ -49,8 +57,10 @@ git clone https://github.com/whisperfish/libsignal-service-rs.git libsignal-upst
 cd libsignal-upstream
 git checkout 782c0d6
 cd /tmp
-diff -ruN libsignal-upstream/ /path/to/xous-app-signal/vendor/libsignal-service-rs/ \
-    > /path/to/xous-app-signal/vendor/libsignal-service-rs.diff
+cd /path/to/xous-app-signal
+diff -ruN -x .git -x target -x Cargo.lock \
+    /tmp/libsignal-upstream/ vendor/libsignal-service-rs/ \
+    > vendor/libsignal-service-rs.diff
 ```
 
 ```sh
@@ -60,12 +70,15 @@ diff -ruN libsignal-upstream/ /path/to/xous-app-signal/vendor/libsignal-service-
 cd /tmp
 git clone https://github.com/betrusted-io/curve25519-dalek.git curve25519-upstream
 cd curve25519-upstream
-# Use the head of the branch that targets Precursor u32e; if upstream has
-# moved on, pin to the commit referenced in xous-app-signal's git log
-# Stage 4 / Stage 4-v2 commits b981ec1 / 06361bd.
-cd /tmp
-diff -ruN curve25519-upstream/ /path/to/xous-app-signal/vendor/curve25519-dalek/ \
-    > /path/to/xous-app-signal/vendor/curve25519-dalek.diff
+# Baseline: betrusted-io fork `main` @ 16e087a ("version bump",
+# 2026-01-29). Pin this SHA explicitly — if the fork's main moves,
+# the diff would silently mix upstream churn into our delta.
+git checkout 16e087a
+cd /path/to/xous-app-signal
+diff -ruN -x .git -x target -x Cargo.lock \
+    -x ed25519-dalek -x x25519-dalek \
+    /tmp/curve25519-upstream/ vendor/curve25519-dalek/ \
+    > vendor/curve25519-dalek.diff
 ```
 
 `.gitignore` filters: regenerated diff files should be checked in
@@ -90,6 +103,11 @@ the smaller diff. The eventual goal is `*.diff` files that are empty.
 
 | File | Populated | Last regen |
 |---|---|---|
-| `presage.diff` | yes (2684 lines, 97K) | 2026-05-14 |
+| `presage.diff` | yes (329 lines, 17K) | 2026-07-06 |
 | `libsignal-service-rs.diff` | yes (1646 lines, 70K) | 2026-05-14 |
-| `curve25519-dalek.diff` | yes (653 lines, 26K) | 2026-05-14 |
+| `curve25519-dalek.diff` | yes (667 lines, 26K) | 2026-07-06 |
+
+The 2026-07-06 regeneration reflects the prune of never-compiled
+workspace members (presage-cli, presage-store-sled,
+presage-store-sqlite, ed25519-dalek, x25519-dalek); the presage line
+count dropped because the old diff carried those members' divergence.
