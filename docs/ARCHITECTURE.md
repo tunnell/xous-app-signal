@@ -478,3 +478,32 @@ layer.
   and 4.
 - **Long bug-history narrative** → `git log`.
 - **What's broken or planned** → the README's "Feature support" matrix; deeper roadmap items live with the maintainer.
+
+## 12. Architectural invariants (checkable)
+
+Claims the architecture makes that a reviewer can verify
+mechanically. If one of these stops holding, that's either a bug
+or a deliberate design change that must update this list.
+
+- **No cryptography is implemented in this tree.** First-party
+  crates call libsignal / rustls / ring; they never implement
+  primitives. Check: `grep -ri "fn encrypt\|fn decrypt\|fn sign"
+  crates/` returns nothing load-bearing.
+- **The UI crate does no network I/O.** `crates/xous-app-signal`
+  has no dependency on `xous-net-bridge`, tungstenite, or rustls;
+  every network effect goes through a `Cmd` to the worker. Check:
+  its Cargo.toml.
+- **The storage layer holds no cleartext protocol secrets of its
+  own.** `presage-store-pddb` persists opaque blobs handed to it
+  by presage/libsignal; encryption at rest is PDDB's job. Check:
+  no cipher deps in its Cargo.toml.
+- **`vendor/` is read-only** and each vendored tree's delta vs its
+  upstream pin is reproducible from `vendor/*.diff` +
+  `vendor/README.md`'s pinned revs and regen commands.
+- **Worker-owned mutable state has a single owner.** The presage
+  `Manager` lives inside `manager_task`; nothing else holds `&mut`
+  access to it (completed by the worker-op-channel refactor).
+- **cfg-gating between hosted and hardware is surgical** —
+  function/statement level, never whole-module forks. Check:
+  `grep -rn 'cfg(target_os = "xous")' crates/ | wc -l` stays small
+  and no `mod foo_hosted;` / `mod foo_hw;` pairs exist.
