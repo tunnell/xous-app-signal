@@ -298,6 +298,12 @@ impl App {
         self.home_focus = 0;
         self.compose_buffer.clear();
         self.linking_in_progress = false;
+        // Also drop any in-flight username lookup: a stale
+        // Event::UsernameResolveResult arriving after the wipe would
+        // otherwise pass handle_username_resolve_result's staleness
+        // guard and open a Thread screen (or clobber the re-link
+        // banner) on an unlinked app.
+        self.username_lookup_in_progress = false;
         self.account_device_name = None;
         self.account_aci = None;
         self.account_phone = None;
