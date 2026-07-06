@@ -17,7 +17,7 @@ Prerequisites:
                     -p xous-app-signal --features probe-pddb
         cp target/riscv32imac-unknown-xous-elf/release/xas \
                                                  dist/xas-rv32/xas
-        cd ~/precursor-signal/repos/xous-core
+        cd <your xous-core checkout>
         cargo xtask app-image xas:.../xas --git-describe v0.9.21-0-g0000000
 
 *** Settings ***
