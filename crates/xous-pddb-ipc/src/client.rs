@@ -653,31 +653,6 @@ impl PddbClient {
         }
     }
 
-    /// Construct a partially-populated [`PddbDictRequest`] from a
-    /// validated `(dict, key)` pair. Currently dead code — retained
-    /// alongside [`PddbClient::dict_request_send`] in case the
-    /// upstream-shape `dict_request` flow is reintroduced.
-    fn dict_request(&self, dict: &str, key: &str) -> Result<PddbDictRequest, Error> {
-        if dict.len() > DICT_NAME_LEN - 1 {
-            return Err(Error::new(ErrorKind::InvalidInput, "dict name too long"));
-        }
-        if key.len() > KEY_NAME_LEN - 1 {
-            return Err(Error::new(ErrorKind::InvalidInput, "key name too long"));
-        }
-        Ok(PddbDictRequest {
-            basis_specified: false,
-            basis: String::new(),
-            dict: dict.to_string(),
-            key: key.to_string(),
-            index: 0,
-            token: [0; 4],
-            code: PddbRequestCode::Uninit,
-            bulk_limit: None,
-            key_count: 0,
-            found_key_count: 0,
-        })
-    }
-
     /// Lend a [`PddbDictRequest`] to the main server and return the
     /// server-mutated reply. Helper for opcodes that share the
     /// `PddbDictRequest` wire shape — currently only
