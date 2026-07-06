@@ -275,9 +275,23 @@ fn handshake(
 /// - `tungstenite::Error::ConnectionClosed` / `AlreadyClosed`.
 /// - Mutex poisoning (another thread panicked while holding it).
 /// - `tx.send_blocking` returning `Err` (the async caller dropped its
-///   receiver).
+///   receiver mid-frame).
+/// - `tx.is_closed()` observed at an idle read-timeout tick (the async
+///   caller dropped its receiver while no frame was in flight): the
+///   teardown checkpoint that stops an abandoned *idle* WS from
+///   leaking this thread + the socket. See the WouldBlock/TimedOut arm
+///   below.
 /// - Any tungstenite read error other than the WouldBlock / TimedOut
-///   pair, which are absorbed as keepalive yield points.
+///   pair; those two are otherwise absorbed as keepalive yield points
+///   (they are the writer's window to acquire the mutex on an idle
+///   socket).
+///
+/// Note this covers the reader/inbound half. The writer thread exits
+/// when its `out_rx` closes; a caller that drops `incoming` while
+/// holding `outgoing` open is not a shape libsignal-service-rs
+/// produces (it drops the `WebSocketChannels` pair together), and the
+/// symmetric writer-side shutdown belongs to the deferred ws_pump
+/// lifecycle work (issue #39: shared shutdown flag / WsStats).
 ///
 /// Each frame is logged on the `ws reader:` and `perf/net:` channels;
 /// see the module-level docs for what's in those lines.
@@ -493,7 +507,7 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::mpsc;
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use rustls::pki_types::PrivatePkcs8KeyDer;
     use rustls::{RootCertStore, ServerConfig, ServerConnection, StreamOwned};
@@ -541,7 +555,14 @@ mod tests {
                 .with_no_client_auth(),
         );
 
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        // Bind the same name the client dials ("localhost") so both
+        // endpoints agree on its address family: the client connects
+        // via url host "localhost" through
+        // tls_connect_with_config's TcpStream::connect((host, port)),
+        // and the cert SAN is "localhost", so binding a bare
+        // 127.0.0.1 could leave the client dialing [::1]:port (a
+        // different, unbound family) on IPv6-first resolvers.
+        let listener = TcpListener::bind("localhost:0").expect("bind localhost");
         let port = listener.local_addr().expect("addr").port();
 
         // --- idle server: accept one WSS, then block reading until the
@@ -553,21 +574,20 @@ mod tests {
             let conn = ServerConnection::new(srv_cfg).expect("server conn");
             let stream = StreamOwned::new(conn, tcp);
             let mut ws = tungstenite::accept(stream).expect("ws accept");
-            let start = Instant::now();
             // An idle Signal edge sends nothing; just block on read
-            // until the client side actually disappears.
-            let end = loop {
+            // until the client side actually disappears (the read
+            // errors when the client's socket closes, which happens
+            // only after the reader loop exits and the last
+            // Arc<Mutex<WebSocket>> drops). The server socket has no
+            // read timeout set, so WouldBlock/TimedOut never occur
+            // here — any Err means the peer went away.
+            loop {
                 match ws.read() {
                     Ok(_) => continue, // tolerate stray frames
-                    Err(tungstenite::Error::Io(e))
-                        if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
-                    {
-                        continue;
-                    }
-                    Err(_) => break start.elapsed(),
+                    Err(_) => break,
                 }
-            };
-            let _ = server_done_tx.send(end);
+            }
+            let _ = server_done_tx.send(());
         });
 
         // --- client: connect, then abandon the pump ---
@@ -581,12 +601,22 @@ mod tests {
         .expect("connect_websocket");
         drop(channels); // caller walks away: both halves dropped
 
-        // --- the socket must close within one-ish timeout cycle ---
-        let elapsed = server_done_rx
-            .recv_timeout(Duration::from_secs(20))
-            .expect("abandoned pump never tore down: reader thread is leaked");
-        // Sanity: teardown is timeout-cycle-driven (~5 s), not instant
-        // frame-driven; both are acceptable, hanging is not.
-        assert!(elapsed < Duration::from_secs(20), "took {elapsed:?}");
+        // The server observes its socket close only after the reader
+        // loop exits and drops the last Arc<Mutex<WebSocket>>. Pre-fix
+        // that never happens on an idle WS, so recv_timeout elapses;
+        // the deadline (20 s) is generous over the expected single
+        // ~5 s read-timeout cycle. `Disconnected` (server thread died
+        // before signalling — e.g. a harness accept/handshake failure)
+        // is distinguished from `Timeout` (the actual leak) so a
+        // broken harness doesn't masquerade as the production bug.
+        match server_done_rx.recv_timeout(Duration::from_secs(20)) {
+            Ok(()) => {} // teardown observed — pass
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("abandoned pump never tore down: reader thread is leaked")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("test server thread exited without signalling (harness failure, not the leak)")
+            }
+        }
     }
 }
