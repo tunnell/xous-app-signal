@@ -359,6 +359,18 @@ fn reader_loop(
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) =>
             {
+                // The idle timeout doubles as the teardown checkpoint:
+                // if the async caller dropped its receiver, no frame
+                // could ever be delivered again — exit instead of
+                // pumping an abandoned socket forever. Without this
+                // check the reader only notices the dropped receiver
+                // when a frame actually arrives, which on a quiet WS
+                // is never: 3 threads + a socket + the WS mutex linger
+                // per abandoned connection on a 16 MiB device.
+                if tx.is_closed() {
+                    tracing::info!(frame_count, "ws reader: receiver dropped, exiting");
+                    break;
+                }
                 // Brief sleep to avoid pegging the CPU between timeouts;
                 // also gives the writer thread a clear window to acquire
                 // the mutex.
@@ -473,4 +485,108 @@ fn writer_loop(ws: Arc<Mutex<WebSocket<RustlsStream>>>, rx: async_channel::Recei
         }
     }
     tracing::info!(frame_count, "ws writer: loop exited");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::ErrorKind;
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use rustls::pki_types::PrivatePkcs8KeyDer;
+    use rustls::{RootCertStore, ServerConfig, ServerConnection, StreamOwned};
+
+    use super::*;
+
+    /// Regression test for the abandoned-pump leak: when the async
+    /// caller drops both halves of the [`WebSocketChannels`] pair while
+    /// the WS is idle (the server sends nothing and never closes — the
+    /// quiet-Signal-edge shape), the reader thread must notice at its
+    /// next read-timeout tick and tear the connection down, instead of
+    /// pumping timeout cycles forever. Pre-fix, the reader only
+    /// noticed the dropped receiver when a frame actually arrived — on
+    /// an idle WS, never — leaving 3 threads + a socket + the WS mutex
+    /// alive per abandoned connection on a 16 MiB device.
+    ///
+    /// Observable used by the test: the server's blocking `ws.read()`
+    /// errors out when the client's socket actually closes, which
+    /// happens only after the reader loop exits and the last
+    /// `Arc<Mutex<WebSocket>>` drops. Deadline is 20 s (expected:
+    /// one 5 s read-timeout cycle + epsilon; generous for slow CI).
+    #[test]
+    fn abandoned_pump_tears_down_on_idle_ws() {
+        // --- self-signed identity for an in-process WSS server ---
+        let key_pair = rcgen::KeyPair::generate().expect("keypair");
+        let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
+            .expect("params")
+            .self_signed(&key_pair)
+            .expect("self-sign");
+        let cert_der = cert.der().clone();
+        let key_der = PrivatePkcs8KeyDer::from(key_pair.serialize_der());
+
+        let server_config = Arc::new(
+            ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert_der.clone()], key_der.into())
+                .expect("server config"),
+        );
+
+        let mut roots = RootCertStore::empty();
+        roots.add(cert_der).expect("trust test cert");
+        let client_config = Arc::new(
+            ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth(),
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+
+        // --- idle server: accept one WSS, then block reading until the
+        // client goes away; report how the read ended + elapsed time ---
+        let (server_done_tx, server_done_rx) = mpsc::channel();
+        let srv_cfg = Arc::clone(&server_config);
+        thread::spawn(move || {
+            let (tcp, _) = listener.accept().expect("accept");
+            let conn = ServerConnection::new(srv_cfg).expect("server conn");
+            let stream = StreamOwned::new(conn, tcp);
+            let mut ws = tungstenite::accept(stream).expect("ws accept");
+            let start = Instant::now();
+            // An idle Signal edge sends nothing; just block on read
+            // until the client side actually disappears.
+            let end = loop {
+                match ws.read() {
+                    Ok(_) => continue, // tolerate stray frames
+                    Err(tungstenite::Error::Io(e))
+                        if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+                    {
+                        continue;
+                    }
+                    Err(_) => break start.elapsed(),
+                }
+            };
+            let _ = server_done_tx.send(end);
+        });
+
+        // --- client: connect, then abandon the pump ---
+        let url = url::Url::parse(&format!("wss://localhost:{port}/")).expect("url");
+        let channels = futures_lite::future::block_on(connect_websocket(
+            client_config,
+            url,
+            HeaderMap::new(),
+            None,
+        ))
+        .expect("connect_websocket");
+        drop(channels); // caller walks away: both halves dropped
+
+        // --- the socket must close within one-ish timeout cycle ---
+        let elapsed = server_done_rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("abandoned pump never tore down: reader thread is leaked");
+        // Sanity: teardown is timeout-cycle-driven (~5 s), not instant
+        // frame-driven; both are acceptable, hanging is not.
+        assert!(elapsed < Duration::from_secs(20), "took {elapsed:?}");
+    }
 }
