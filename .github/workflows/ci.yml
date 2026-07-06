@@ -1,0 +1,126 @@
+# CI for xous-app-signal, mirroring betrusted-io/xous-core's gates
+# (build + rustfmt + whitespace) adapted to this repo's layout.
+#
+# Every job that runs cargo needs the BUILDING.md §1 sibling layout:
+# xous-app-signal/ and xous-core/ side by side plus a
+# repos/xous-core symlink, because the Cargo manifests path-dep into
+# ../repos/xous-core/... and [patch.crates-io.getrandom] resolves
+# through the same path at manifest-load time.
+name: ci
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  hosted-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out xas
+        uses: actions/checkout@v4
+        with:
+          path: xous-app-signal
+
+      - name: Clone the pinned xous-core sibling (BUILDING.md §1)
+        run: |
+          git clone --depth 1 -b xas-v0.2 https://github.com/tunnell/xous-core.git
+          mkdir -p repos
+          ln -s ../xous-core repos/xous-core
+
+      - name: Install system build deps
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: xous-app-signal
+
+      - name: Hosted unit tests (baseline 53/53)
+        working-directory: xous-app-signal
+        run: cargo test --features hosted -p xous-app-signal --bins
+
+      - name: xous-net-bridge suite
+        working-directory: xous-app-signal
+        run: cargo test -p xous-net-bridge
+
+      - name: presage-store-pddb suite (baseline 44/44)
+        working-directory: xous-app-signal
+        run: cargo test -p presage-store-pddb
+
+  rv32-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out xas
+        uses: actions/checkout@v4
+        with:
+          path: xous-app-signal
+
+      - name: Clone the pinned xous-core sibling (BUILDING.md §1)
+        run: |
+          git clone --depth 1 -b xas-v0.2 https://github.com/tunnell/xous-core.git
+          mkdir -p repos
+          ln -s ../xous-core repos/xous-core
+
+      - name: Install system build deps
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            xous-app-signal
+            xous-core
+
+      - name: Install the Xous rv32 sysroot (cargo xtask install-toolkit)
+        working-directory: xous-core
+        run: cargo xtask install-toolkit
+
+      - name: Cross-build for riscv32imac-unknown-xous-elf
+        working-directory: xous-app-signal
+        # Debug profile: catches target compile + link errors (incl.
+        # the __getrandom_v03_custom extern) without paying the
+        # fat-LTO release cost on a 2-core runner. Release-profile
+        # verification stays part of the hardware-bundle flow
+        # (tests/precursor/build-and-bundle.sh).
+        run: cargo build --target riscv32imac-unknown-xous-elf -p xous-app-signal --features pddb-real,precursor
+
+  rustfmt:
+    runs-on: ubuntu-latest
+    # Soft gate until the repo-wide `cargo +nightly fmt` commit lands
+    # (deferred so it doesn't conflict with the in-flight worker
+    # refactor, PR #38). Flip to a hard gate after that.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly rustfmt
+        run: |
+          rustup toolchain install nightly --profile minimal
+          rustup component add rustfmt --toolchain nightly
+
+      - name: cargo +nightly fmt --check (first-party crates only)
+        # Scoped with -p: the vendored trees ship their own (older)
+        # rustfmt.toml files and must not be reformatted — their
+        # delta vs upstream is tracked in vendor/*.diff.
+        run: >
+          cargo +nightly fmt --check
+          -p xous-app-signal -p xous-signal-worker -p xous-net-bridge
+          -p xous-pddb-ipc -p presage-store-pddb
+
+  trailing-whitespace:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for trailing whitespace in first-party sources
+        run: |
+          set -e
+          FOUND=$(grep -rn --include='*.rs' --include='*.toml' --include='*.md' ' $' \
+            crates/ docs/ tests/ *.md *.toml 2>/dev/null | grep -v '^vendor/' || true)
+          if [ -n "$FOUND" ]; then
+            echo "$FOUND"
+            echo "::error::trailing whitespace found"
+            exit 1
+          fi
