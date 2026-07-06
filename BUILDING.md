@@ -205,10 +205,10 @@ Verify the layout:
 ```
 
 `repos/xous-core` must point at the same checkout you cloned as
-`~/code/xas/xous-core`. Verify with `ls repos/xous-core/services/trng/Cargo.toml`
-— that file must exist, otherwise the very first crate cargo tries
-to load (`crates/xous-modals-ipc`) will fail with `failed to read
-'.../repos/xous-core/services/trng/Cargo.toml'`.
+`~/code/xas/xous-core`. Verify with `ls repos/xous-core/services/gam/Cargo.toml`
+— that file must exist, otherwise the first path-dep cargo tries
+to load (`gam`, from `crates/xous-app-signal`) will fail with
+`failed to read '.../repos/xous-core/services/gam/Cargo.toml'`.
 
 ### What each clone contributes to the build
 

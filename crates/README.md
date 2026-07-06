@@ -11,13 +11,12 @@ behind this split, see
 xas is a single binary, but the code is split across multiple
 crates for three concrete reasons:
 
-1. **Build-time isolation of the Xous IPC bypass crates.** The
-   upstream `services/pddb` and `services/modals` crates pull in
-   10+ Xous services as path-deps and force a full xous-core
-   workspace rebuild on every change. Hand-rolled IPC clients
-   (`xous-pddb-ipc`, `xous-modals-ipc`) replicate just the wire
-   protocol we need, in their own crates, so iterating on them
-   doesn't trigger the cascade.
+1. **Build-time isolation of the Xous IPC bypass crate.** The
+   upstream `services/pddb` crate pulls in 10+ Xous services as
+   path-deps and forces a full xous-core workspace rebuild on
+   every change. The hand-rolled IPC client (`xous-pddb-ipc`)
+   replicates just the wire protocol we need, in its own crate,
+   so iterating on it doesn't trigger the cascade.
 2. **Trait-impl boundary for the storage layer.** presage defines
    storage traits; `presage-store-pddb` implements them against
    PDDB. Keeping it in its own crate makes the trait surface
@@ -39,7 +38,6 @@ crates for three concrete reasons:
 | [`presage-store-pddb`](presage-store-pddb/) | ~3.0k | Implements presage's `Store` + `IdentityKeyStore` + (a dozen) other storage traits over PDDB. Has a hosted-mode `backend_mock` for unit tests and a `backend_pddb` for real use. The biggest crate by line count, mostly because the trait surface is wide. |
 | [`xous-net-bridge`](xous-net-bridge/) | ~0.6k | Sync TLS + WebSocket transport, bridged to async via channels (`ws_pump`). This is what libsignal-service-rs's HTTP/WS code calls into. The keepalive race documented in the upstream PR draft #2 lives in `ws_pump.rs`. |
 | [`xous-pddb-ipc`](xous-pddb-ipc/) | ~0.8k | Hand-rolled PDDB IPC client (rv32-xous only). Replicates just the wire protocol `presage-store-pddb`'s `KvBackend` needs, instead of pulling in the full `services/pddb` crate (which would drag in 10+ other services as path deps and rebuild xous-core on every iteration). |
-| [`xous-modals-ipc`](xous-modals-ipc/) | ~0.2k | Hand-rolled Modals IPC client (rv32-xous only). Same rationale as `xous-pddb-ipc`: replicates the wire surface of `services/modals` for the one operation we need (`show_notification` with optional QR-code overlay), bypassing the GAM dep cascade. |
 
 \* LoC = `wc -l src/**/*.rs` rounded; for orientation, not load-bearing.
 
@@ -55,9 +53,9 @@ GAM UI loop). The crates here map to its sections roughly as:
 - **§6 Where state lives** → `presage-store-pddb` + `xous-pddb-ipc`
 - **§8 ws_pump in detail** → `xous-net-bridge`
 - The GAM render path the walkthroughs end at →
-  `xous-app-signal/src/gam_app.rs` + `xous-modals-ipc` (QR
-  modal) + `xous-app-signal/src/stdin_ui/` (fallback when no
-  Xous server reachable)
+  `xous-app-signal/src/gam_app.rs` (QR modal via the upstream
+  `modals` client) + `xous-app-signal/src/stdin_ui/` (fallback
+  when no Xous server reachable)
 
 If a crate's purpose feels unclear after reading this table,
 that's a signal worth recording in the project's roadmap.

@@ -32,7 +32,6 @@ mod stdin_ui;
 
 use async_channel::bounded;
 use presage_store_pddb::PddbStore;
-#[cfg(not(all(feature = "auto-link", target_os = "xous")))]
 use stdin_ui::Ui;
 use xous_signal_worker::{Cmd, Event, run_signal_worker};
 
@@ -263,30 +262,19 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    // The auto-link feature drives the link flow + QR modal
-    // on real hardware. When enabled, we *replace* the regular UI
-    // loop — the auto-link probe is the UI for this build mode. On
-    // success, it logs LinkComplete details to UART and lets main()
-    // continue to the worker shutdown path.
-    #[cfg(all(feature = "auto-link", target_os = "xous"))]
-    auto_link(cmd_tx.clone(), event_rx.clone());
-
-    #[cfg(not(all(feature = "auto-link", target_os = "xous")))]
-    {
-        // Try to run as a real GAM-rendered Xous app first
-        // (works for both hosted Xous emulation and rv32 hardware
-        // when running inside a Xous environment). If we're not
-        // inside Xous (no xous-names server reachable, e.g.
-        // running standalone for unit tests), fall back to the
-        // stdin-driven hosted UI.
-        let cmd_tx_for_gam = cmd_tx.clone();
-        let event_rx_for_gam = event_rx.clone();
-        match gam_app::run(cmd_tx_for_gam, event_rx_for_gam) {
-            Ok(()) => {}
-            Err(e) => {
-                log::info!("xas: GAM UI unavailable ({}); falling back to stdin Ui", e);
-                Ui::new(cmd_tx, event_rx).run()?;
-            }
+    // Try to run as a real GAM-rendered Xous app first
+    // (works for both hosted Xous emulation and rv32 hardware
+    // when running inside a Xous environment). If we're not
+    // inside Xous (no xous-names server reachable, e.g.
+    // running standalone for unit tests), fall back to the
+    // stdin-driven hosted UI.
+    let cmd_tx_for_gam = cmd_tx.clone();
+    let event_rx_for_gam = event_rx.clone();
+    match gam_app::run(cmd_tx_for_gam, event_rx_for_gam) {
+        Ok(()) => {}
+        Err(e) => {
+            log::info!("xas: GAM UI unavailable ({}); falling back to stdin Ui", e);
+            Ui::new(cmd_tx, event_rx).run()?;
         }
     }
 
@@ -593,141 +581,6 @@ fn probe_send_batch() {
     log::info!("probe-send-batch: probe done in {:?}", start.elapsed());
 }
 
-
-/// Hardware auto-link probe.
-///
-/// Sends `Cmd::LinkDevice` and drives the resulting event stream
-/// to either `Event::LinkComplete` or `Event::LinkError`. On
-/// `Event::LinkUrl(url)`, opens a `xous-modals-ipc` notification
-/// modal that displays the URL as a QR code (rendered by the
-/// upstream modals server's `notification.set_qrcode` call). The
-/// user scans the QR with their Signal phone and dismisses the
-/// modal; meanwhile the worker is parked on the provisioning
-/// WebSocket waiting for the encrypted envelope.
-///
-/// # Trust boundary
-///
-/// The provisioning URL is the link credential during its window.
-/// This probe displays it to the user via the modals service; the
-/// modal is shown on the local screen only and is not forwarded
-/// elsewhere. However, the `log::info!("auto-link: link URL =
-/// {}", url)` line below emits the URL to UART at info level —
-/// same leak surface as `xous_signal_worker`'s W-W.1
-/// (`~/REFACTOR_NOTES.md`). Both call sites are scheduled for the
-/// same fix (drop the URL from the log, retain only the length);
-/// see A.2 in `~/REFACTOR_NOTES.md`.
-///
-/// # Failure modes worth distinguishing in the UART log
-///
-/// - "No modals response" — the modals service is unreachable.
-///   In a stock image this means the build skipped `services/modals`;
-///   `cargo xtask app-image` always pulls it in.
-/// - `Event::LinkError(_)` — worker-side failure (DNS, TLS, WS,
-///   or libsignal protocol error). The reason string identifies
-///   the layer.
-/// - `Event::LinkComplete` — success. The ACI / phone fields are
-///   logged so the next flash iteration can verify
-///   `with_pddb_backend` actually persisted the registration.
-///
-/// # Security
-///
-/// The ACI / phone fields are PII; the modal that displays them
-/// is the same one the user just dismissed, so display-only on
-/// the device. The `log::info!` that records device / ACI / phone
-/// is structured for the audit trail but should still be redacted
-/// before forwarding logs off-device.
-#[cfg(all(feature = "auto-link", target_os = "xous"))]
-fn auto_link(cmd_tx: async_channel::Sender<Cmd>, event_rx: async_channel::Receiver<Event>) {
-    use xous_modals_ipc::ModalsClient;
-
-    log::info!("auto-link: starting");
-
-    let xns = match xous_names::XousNames::new() {
-        Ok(x) => x,
-        Err(e) => {
-            log::error!("auto-link: XousNames::new failed: {:?}", e);
-            return;
-        }
-    };
-    let trng_client = match trng::Trng::new(&xns) {
-        Ok(t) => t,
-        Err(e) => {
-            log::error!("auto-link: Trng::new failed: {:?}", e);
-            return;
-        }
-    };
-    let modals = match ModalsClient::new(&xns, &trng_client) {
-        Ok(m) => m,
-        Err(e) => {
-            log::error!("auto-link: ModalsClient::new failed: {}", e);
-            return;
-        }
-    };
-
-    let device_name = "xas-hardware-probe".to_string();
-    log::info!("auto-link: sending Cmd::LinkDevice {{ device_name = {:?} }}", device_name);
-    if let Err(e) = cmd_tx.send_blocking(Cmd::LinkDevice { device_name }) {
-        log::error!("auto-link: cmd_tx.send_blocking failed: {:?}", e);
-        return;
-    }
-
-    loop {
-        let event = match event_rx.recv_blocking() {
-            Ok(ev) => ev,
-            Err(e) => {
-                log::error!("auto-link: event_rx.recv_blocking failed: {:?}", e);
-                return;
-            }
-        };
-        match event {
-            Event::LinkUrl(url) => {
-                log::info!("auto-link: link URL = {}", url);
-                // Show the QR modal. Blocks until user presses any
-                // key — meanwhile the worker is parked on WS, so
-                // the order of (modal-dismiss, link-complete) can
-                // interleave either way; both events get drained
-                // by the loop.
-                if let Err(e) = modals.show_notification(
-                    "Scan with the Signal phone app, then press any key.",
-                    Some(&url),
-                ) {
-                    log::warn!("auto-link: QR modal failed: {}; continuing", e);
-                }
-            }
-            Event::LinkComplete { device_name, aci, phone } => {
-                log::info!(
-                    "auto-link: LinkComplete device={} aci={} phone={}",
-                    device_name, aci, phone
-                );
-                let summary = format!("Linked!\n  device: {}\n  aci:    {}\n  phone:  {}", device_name, aci, phone);
-                let _ = modals.show_notification(&summary, None);
-                break;
-            }
-            Event::LinkError(msg) => {
-                log::warn!("auto-link: LinkError: {}", msg);
-                let _ = modals.show_notification(
-                    &format!("Link failed: {}", msg),
-                    None,
-                );
-                break;
-            }
-            other => {
-                log::info!("auto-link: drained event {:?}", other);
-            }
-        }
-    }
-
-    // Tell the worker to shut down so main() can join it cleanly.
-    let _ = cmd_tx.send_blocking(Cmd::Shutdown);
-    // Drain remaining events so the worker can exit.
-    while let Ok(ev) = event_rx.recv_blocking() {
-        log::info!("auto-link: post-shutdown event {:?}", ev);
-        if matches!(ev, Event::ShuttingDown) {
-            break;
-        }
-    }
-    log::info!("auto-link: done");
-}
 
 /// Install a `log` implementation for rv32-xous builds.
 ///

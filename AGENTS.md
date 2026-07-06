@@ -18,7 +18,6 @@ xous-app-signal/
 │   ├── xous-signal-worker/       presage::Manager + Cmd/Event channels
 │   ├── xous-net-bridge/          sync TLS + WS + HTTP transport
 │   ├── xous-pddb-ipc/            PDDB IPC client
-│   ├── xous-modals-ipc/          modals IPC client
 │   └── presage-store-pddb/       presage::Store impl over PDDB
 ├── docs/                         ARCHITECTURE.md and friends
 ├── tests/{hosted,renode,precursor}/   READMEs in hosted/ and precursor/; robot/resc files in renode/
