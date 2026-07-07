@@ -66,7 +66,8 @@ use ux_api::service::api::Gid;
 use xous::{CID, Message};
 use xous_signal_worker::{Cmd, Event};
 
-use crate::dialogue::{DialogueSummary, SendStatus, ThreadMessage, rebuild_summaries};
+use crate::dialogue::{SendStatus, ThreadMessage};
+use crate::store::MessageStore;
 
 /// IPC server name xas registers under [`xous_names::XousNames`].
 ///
@@ -199,8 +200,8 @@ enum SettingsItem {
 ///
 /// # Security
 ///
-/// Holds plaintext message bodies (`messages`), sender labels, the
-/// account-identifying tuple (`account_*`), and the in-flight
+/// Holds plaintext message bodies (inside `store`), sender labels,
+/// the account-identifying tuple (`account_*`), and the in-flight
 /// compose buffer. The derived `Debug` impl is **not** redacting;
 /// adding `tracing::debug!(?app)` anywhere will dump everything.
 struct App {
@@ -214,20 +215,18 @@ struct App {
     /// visible and which screens are reachable.
     linked: bool,
     /// All inbound and outbound messages held in RAM for the
-    /// lifetime of this UI session. Capped at `INBOX_CAPACITY`
-    /// (oldest dropped when full). Order is insertion-order;
-    /// the renderer filters and sorts per-screen.
+    /// lifetime of this UI session, plus the derived per-conversation
+    /// summaries. Every mutation (append, eviction at
+    /// `INBOX_CAPACITY`, status/read transitions, wipe) funnels
+    /// through [`MessageStore`]'s methods — this struct never touches
+    /// the underlying vectors directly.
     ///
     /// # Security
     ///
     /// Plaintext bodies for every received message live here until
-    /// the cap evicts them. See workspace REFACTOR_NOTES W-W.3 on
-    /// migrating the `body` field to a zeroizing wrapper.
-    messages: Vec<ThreadMessage>,
-    /// Aggregated per-conversation view derived from `messages`.
-    /// Re-built on every message arrival or send transition;
-    /// rendered by [`Self::write_home`].
-    dialogues: Vec<DialogueSummary>,
+    /// the cap evicts them. SecretBox wrapping of the `body` field is
+    /// tracked in issue #37, item 3.
+    store: MessageStore,
     /// Index of the focused row when [`Screen::Home`] is active.
     home_focus: usize,
     /// Active compose buffer when [`Screen::Thread`] is on top.
@@ -286,6 +285,32 @@ struct App {
 }
 
 impl App {
+    /// Wipe link-derived state back to the pre-link Menu: linked
+    /// flag, message store, focus/compose/link-progress state, and
+    /// the cached account tuple. Shared by the `Event::LoggedOut`,
+    /// `Event::SignalAuthExpired`, and
+    /// `Event::SignalConflictingDevice` arms — the caller sets (or
+    /// clears) `last_status` for its specific banner and triggers
+    /// the re-render.
+    fn reset_to_unlinked(&mut self) {
+        self.linked = false;
+        self.store.clear();
+        self.home_focus = 0;
+        self.compose_buffer.clear();
+        self.linking_in_progress = false;
+        // Also drop any in-flight username lookup: a stale
+        // Event::UsernameResolveResult arriving after the wipe would
+        // otherwise pass handle_username_resolve_result's staleness
+        // guard and open a Thread screen (or clobber the re-link
+        // banner) on an unlinked app.
+        self.username_lookup_in_progress = false;
+        self.account_device_name = None;
+        self.account_aci = None;
+        self.account_phone = None;
+        self.screen = Screen::Menu;
+        self.selected = MenuItem::Link;
+    }
+
     fn menu_items(&self) -> [Option<MenuItem>; 3] {
         if self.linked {
             // Post-link Menu is reachable from Home (via the Menu key)
@@ -493,7 +518,7 @@ impl App {
     /// Renders plaintext message snippets. Do not extend this method
     /// to emit log lines containing the snippet body or sender label.
     fn write_home(&self, out: &mut String) -> Result<(), String> {
-        let total_unread: u32 = self.dialogues.iter().map(|d| d.unread_count).sum();
+        let total_unread: u32 = self.store.total_unread();
         if total_unread > 0 {
             writeln!(out, "xas                       {} unread", total_unread)
                 .map_err(|e| format!("home hdr: {}", e))?;
@@ -502,7 +527,7 @@ impl App {
         }
         writeln!(out, "{}", "-".repeat(45)).map_err(|e| format!("home rule: {}", e))?;
 
-        if self.dialogues.is_empty() {
+        if self.store.dialogues().is_empty() {
             writeln!(out).map_err(|e| format!("home empty: {}", e))?;
             writeln!(out, "      No conversations yet.")
                 .map_err(|e| format!("home empty: {}", e))?;
@@ -519,9 +544,9 @@ impl App {
 
         let now_ms = unix_now_ms();
         // Clamp focus index in case the list shrank.
-        let focus = self.home_focus.min(self.dialogues.len().saturating_sub(1));
+        let focus = self.home_focus.min(self.store.dialogues().len().saturating_sub(1));
 
-        for (i, d) in self.dialogues.iter().enumerate() {
+        for (i, d) in self.store.dialogues().iter().enumerate() {
             let focus_marker = if i == focus { '>' } else { ' ' };
             let unread_marker = if d.unread_count > 0 { '*' } else { ' ' };
             let timestamp = crate::dialogue::brief_relative(d.last_msg_ts, now_ms);
@@ -591,7 +616,8 @@ impl App {
     /// the screen surface.
     fn write_thread(&self, out: &mut String, uuid: &Uuid) -> Result<(), String> {
         let header = self
-            .dialogues
+            .store
+            .dialogues()
             .iter()
             .find(|d| d.uuid == *uuid)
             .map(|d| d.display_name.clone())
@@ -600,8 +626,7 @@ impl App {
         writeln!(out, "{}", "-".repeat(45)).map_err(|e| format!("thread rule: {}", e))?;
 
         let now_ms = unix_now_ms();
-        let thread_msgs: Vec<&ThreadMessage> =
-            self.messages.iter().filter(|m| m.uuid == *uuid).collect();
+        let thread_msgs: Vec<&ThreadMessage> = self.store.thread_messages(*uuid).collect();
 
         if thread_msgs.is_empty() {
             writeln!(out).map_err(|e| format!("thread empty: {}", e))?;
@@ -806,8 +831,8 @@ fn seed_mock_messages_if_requested(app: &mut App) {
         ),
     ];
 
-    for (uuid, label, body, age_ms, outgoing, status) in mocks {
-        app.messages.push(ThreadMessage {
+    app.store.seed(mocks.iter().map(|(uuid, label, body, age_ms, outgoing, status)| {
+        ThreadMessage {
             uuid: *uuid,
             author_label: label.to_string(),
             body: body.to_string(),
@@ -815,9 +840,8 @@ fn seed_mock_messages_if_requested(app: &mut App) {
             outgoing: *outgoing,
             status: *status,
             read: *outgoing, // outgoing always read; incoming starts unread
-        });
-    }
-    app.dialogues = rebuild_summaries(&app.messages);
+        }
+    }));
     // Mark linked + jump straight into Home so the demo lands on the
     // populated conversation list rather than the pre-link Welcome.
     app.linked = true;
@@ -839,22 +863,34 @@ fn unix_now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Mark every message belonging to `uuid` as read, then rebuild
-/// the dialogue summaries so unread counts reflect the new state.
+/// Fire the optimistic send flow for the compose buffer: take the
+/// buffer, stamp a send timestamp, append a `Pending` row to the
+/// store (so the Thread render shows it immediately), and dispatch
+/// `Cmd::SendMessage`. If the command channel is closed, the
+/// optimistic row is flipped to `Failed` in place.
 ///
-/// No-op when the user already had every message read; the
-/// `changed` guard avoids the rebuild cost on the common case of
-/// re-entering an already-read thread.
-fn mark_thread_read(app: &mut App, uuid: Uuid) {
-    let mut changed = false;
-    for m in app.messages.iter_mut() {
-        if m.uuid == uuid && !m.read {
-            m.read = true;
-            changed = true;
-        }
-    }
-    if changed {
-        app.dialogues = rebuild_summaries(&app.messages);
+/// Shared by the Enter and F1 send arms of `handle_keys`; `trigger`
+/// only varies the UART log line ("send" vs "F1 send"). Caller
+/// guarantees the compose buffer is non-empty.
+fn send_compose(app: &mut App, cmd_tx: &Sender<Cmd>, recipient_uuid: Uuid, trigger: &str) {
+    let body = std::mem::take(&mut app.compose_buffer);
+    let send_ts = unix_now_ms();
+    let recipient_str = recipient_uuid.to_string();
+    log::info!(
+        "xas/gam_app: {} to={} ({} body bytes) ts={}",
+        trigger,
+        recipient_str,
+        body.len(),
+        send_ts,
+    );
+    app.store.push_outgoing_pending(recipient_uuid, body.clone(), send_ts);
+    if let Err(e) = cmd_tx.send_blocking(Cmd::SendMessage {
+        recipient: recipient_str,
+        body,
+        timestamp: send_ts,
+    }) {
+        log::warn!("xas/gam_app: Cmd::SendMessage send err: {:?}", e);
+        app.store.mark_send_failed(send_ts);
     }
 }
 
@@ -1129,8 +1165,7 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
         screen: Screen::Menu,
         selected: MenuItem::Link,
         linked: false,
-        messages: Vec::with_capacity(INBOX_CAPACITY),
-        dialogues: Vec::new(),
+        store: MessageStore::new(INBOX_CAPACITY),
         home_focus: 0,
         compose_buffer: String::new(),
         last_status: String::new(),
@@ -1317,7 +1352,7 @@ fn handle_keys(
                 app.home_focus = app.home_focus.saturating_sub(1);
             }
             (Screen::Home, '↓') => {
-                let max = app.dialogues.len().saturating_sub(1);
+                let max = app.store.dialogues().len().saturating_sub(1);
                 if app.home_focus < max {
                     app.home_focus += 1;
                 }
@@ -1326,9 +1361,9 @@ fn handle_keys(
                 // Open the focused thread. If the list is empty,
                 // do nothing — user can still press the Menu key
                 // to access About / Quit.
-                if let Some(d) = app.dialogues.get(app.home_focus) {
+                if let Some(d) = app.store.dialogues().get(app.home_focus) {
                     let opened = d.uuid;
-                    mark_thread_read(app, opened);
+                    app.store.mark_thread_read(opened);
                     app.screen = Screen::Thread { uuid: opened };
                 }
             }
@@ -1384,49 +1419,7 @@ fn handle_keys(
                 if app.compose_buffer.is_empty() {
                     app.screen = Screen::Home;
                 } else {
-                    let body = std::mem::take(&mut app.compose_buffer);
-                    let recipient_uuid = *uuid;
-                    let send_ts = unix_now_ms();
-                    let recipient_str = recipient_uuid.to_string();
-                    log::info!(
-                        "xas/gam_app: send to={} ({} body bytes) ts={}",
-                        recipient_str,
-                        body.len(),
-                        send_ts,
-                    );
-                    // Optimistic-append the outgoing message so it
-                    // shows up in the Thread render immediately;
-                    // status updates from the worker arrive later.
-                    if app.messages.len() >= INBOX_CAPACITY {
-                        app.messages.remove(0);
-                    }
-                    app.messages.push(ThreadMessage {
-                        uuid: recipient_uuid,
-                        author_label: "You".to_string(),
-                        body: body.clone(),
-                        timestamp: send_ts,
-                        outgoing: true,
-                        status: SendStatus::Pending,
-                        read: true,
-                    });
-                    app.dialogues = rebuild_summaries(&app.messages);
-                    if let Err(e) = cmd_tx.send_blocking(Cmd::SendMessage {
-                        recipient: recipient_str,
-                        body,
-                        timestamp: send_ts,
-                    }) {
-                        log::warn!("xas/gam_app: Cmd::SendMessage send err: {:?}", e);
-                        // Mark the optimistic row Failed in place.
-                        if let Some(m) = app
-                            .messages
-                            .iter_mut()
-                            .rev()
-                            .find(|m| m.outgoing && m.timestamp == send_ts)
-                        {
-                            m.status = SendStatus::Failed;
-                        }
-                        app.dialogues = rebuild_summaries(&app.messages);
-                    }
+                    send_compose(app, cmd_tx, *uuid, "send");
                 }
             }
             (Screen::Thread { .. }, '\u{8}') => {
@@ -1440,45 +1433,7 @@ fn handle_keys(
             // No-op on empty buffer (don't surprise-back-out via F1).
             (Screen::Thread { uuid }, '\u{11}') => {
                 if !app.compose_buffer.is_empty() {
-                    let body = std::mem::take(&mut app.compose_buffer);
-                    let recipient_uuid = *uuid;
-                    let send_ts = unix_now_ms();
-                    let recipient_str = recipient_uuid.to_string();
-                    log::info!(
-                        "xas/gam_app: F1 send to={} ({} bytes) ts={}",
-                        recipient_str,
-                        body.len(),
-                        send_ts,
-                    );
-                    if app.messages.len() >= INBOX_CAPACITY {
-                        app.messages.remove(0);
-                    }
-                    app.messages.push(ThreadMessage {
-                        uuid: recipient_uuid,
-                        author_label: "You".to_string(),
-                        body: body.clone(),
-                        timestamp: send_ts,
-                        outgoing: true,
-                        status: SendStatus::Pending,
-                        read: true,
-                    });
-                    app.dialogues = rebuild_summaries(&app.messages);
-                    if let Err(e) = cmd_tx.send_blocking(Cmd::SendMessage {
-                        recipient: recipient_str,
-                        body,
-                        timestamp: send_ts,
-                    }) {
-                        log::warn!("xas/gam_app: Cmd::SendMessage send err: {:?}", e);
-                        if let Some(m) = app
-                            .messages
-                            .iter_mut()
-                            .rev()
-                            .find(|m| m.outgoing && m.timestamp == send_ts)
-                        {
-                            m.status = SendStatus::Failed;
-                        }
-                        app.dialogues = rebuild_summaries(&app.messages);
-                    }
+                    send_compose(app, cmd_tx, *uuid, "F1 send");
                 }
             }
             // F4 on Thread: open Settings.
@@ -1670,20 +1625,7 @@ fn handle_worker_event(
                 log::warn!("xas/gam_app: sender {:?} doesn't parse as UUID; using nil", sender);
                 Uuid::nil()
             });
-            // Drop oldest first if we've hit the cap, then append.
-            if app.messages.len() >= INBOX_CAPACITY {
-                app.messages.remove(0);
-            }
-            app.messages.push(ThreadMessage {
-                uuid,
-                author_label,
-                body,
-                timestamp,
-                outgoing: false,
-                status: SendStatus::Sent,
-                read: false,
-            });
-            app.dialogues = rebuild_summaries(&app.messages);
+            app.store.push_incoming(uuid, author_label, body, timestamp);
         }
         Event::ReceiveStarted => {
             log::info!("xas/gam_app: receive loop established");
@@ -1694,23 +1636,15 @@ fn handle_worker_event(
         }
         Event::SendComplete { timestamp } => {
             // If the send originated from a Thread compose, there's a
-            // pending optimistic-rendered message in `messages` with
-            // this timestamp. Update its status in place; rebuild
-            // dialogues so any cached snippet/status reflects the new
-            // state. No screen change — the Thread is already showing
-            // the message.
+            // pending optimistic-rendered row in the store with this
+            // timestamp. Update its status in place (the store
+            // rebuilds the dialogue summaries so any cached
+            // snippet/status reflects the new state). No screen
+            // change — the Thread is already showing the message.
             //
             // Otherwise (no match), the worker emitted an event for
             // a send we don't have an optimistic row for. Log + ignore.
-            let matched = app
-                .messages
-                .iter_mut()
-                .rev()
-                .find(|m| m.outgoing && m.timestamp == timestamp);
-            if let Some(m) = matched {
-                m.status = SendStatus::Delivered;
-                app.dialogues = rebuild_summaries(&app.messages);
-            } else {
+            if !app.store.mark_send_delivered(timestamp) {
                 log::info!(
                     "xas/gam_app: SendComplete ts={} with no matching pending row",
                     timestamp
@@ -1718,24 +1652,15 @@ fn handle_worker_event(
             }
         }
         Event::SendError { reason, timestamp } => {
-            let matched = timestamp.and_then(|ts| {
-                app.messages
-                    .iter_mut()
-                    .rev()
-                    .find(|m| m.outgoing && m.timestamp == ts)
-            });
-            if let Some(m) = matched {
-                m.status = SendStatus::Failed;
-                app.dialogues = rebuild_summaries(&app.messages);
-                app.last_status = format!("Send: {}", reason);
-            } else {
+            let matched = timestamp.is_some_and(|ts| app.store.mark_send_failed(ts));
+            if !matched {
                 log::warn!(
                     "xas/gam_app: SendError reason={} ts={:?} with no matching row",
                     reason,
                     timestamp
                 );
-                app.last_status = format!("Send: {}", reason);
             }
+            app.last_status = format!("Send: {}", reason);
         }
         Event::ShuttingDown => {
             log::info!("xas/gam_app: worker is shutting down");
@@ -1767,22 +1692,14 @@ fn handle_worker_event(
                 "xas/gam_app: ContactResolved {} → {:?}",
                 aci_uuid, name
             );
-            // Walk in-RAM messages and replace any UUID-shaped
-            // author_label whose uuid matches with the resolved name.
-            // Outgoing messages (author_label == "You") are untouched
-            // by virtue of "You" not looking like a raw UUID.
-            let mut touched = false;
-            for m in app.messages.iter_mut() {
-                if m.uuid == aci_uuid && crate::dialogue::looks_like_raw_uuid(&m.author_label) {
-                    m.author_label = name.clone();
-                    touched = true;
-                }
-            }
-            if touched {
-                app.dialogues = crate::dialogue::rebuild_summaries(&app.messages);
-                if matches!(app.screen, Screen::Home | Screen::Thread { .. }) {
-                    let _ = app.render();
-                }
+            // Replace any UUID-shaped author_label whose uuid matches
+            // with the resolved name. Outgoing messages (author_label
+            // == "You") are untouched by virtue of "You" not looking
+            // like a raw UUID.
+            if app.store.resolve_author_labels(aci_uuid, &name)
+                && matches!(app.screen, Screen::Home | Screen::Thread { .. })
+            {
+                let _ = app.render();
             }
         }
         Event::SyncComplete => {
@@ -1803,18 +1720,8 @@ fn handle_worker_event(
             // Wipe link-derived state so the app behaves like a
             // fresh boot: pre-link Menu, no messages, no dialogues,
             // no cached account info.
-            app.linked = false;
-            app.messages.clear();
-            app.dialogues.clear();
-            app.home_focus = 0;
-            app.compose_buffer.clear();
+            app.reset_to_unlinked();
             app.last_status.clear();
-            app.linking_in_progress = false;
-            app.account_device_name = None;
-            app.account_aci = None;
-            app.account_phone = None;
-            app.screen = Screen::Menu;
-            app.selected = MenuItem::Link;
             let _ = app.render();
         }
         Event::SignalAuthExpired(reason) => {
@@ -1824,21 +1731,11 @@ fn handle_worker_event(
             // banner tells the user why their app suddenly looks
             // unlinked, so they know to re-link rather than thinking
             // the device is generally broken.
-            app.linked = false;
-            app.messages.clear();
-            app.dialogues.clear();
-            app.home_focus = 0;
-            app.compose_buffer.clear();
-            app.linking_in_progress = false;
-            app.account_device_name = None;
-            app.account_aci = None;
-            app.account_phone = None;
+            app.reset_to_unlinked();
             app.last_status = format!(
                 "Signal authentication expired:\n{}\n\nPlease re-link.",
                 reason
             );
-            app.screen = Screen::Menu;
-            app.selected = MenuItem::Link;
             let _ = app.render();
         }
         Event::SignalConflictingDevice(reason) => {
@@ -1850,21 +1747,11 @@ fn handle_worker_event(
             // the worker treats this as terminal. The banner tells
             // the user a different app instance is active and they
             // need to re-link this device to use it.
-            app.linked = false;
-            app.messages.clear();
-            app.dialogues.clear();
-            app.home_focus = 0;
-            app.compose_buffer.clear();
-            app.linking_in_progress = false;
-            app.account_device_name = None;
-            app.account_aci = None;
-            app.account_phone = None;
+            app.reset_to_unlinked();
             app.last_status = format!(
                 "Another device took over:\n{}\n\nPlease re-link.",
                 reason
             );
-            app.screen = Screen::Menu;
-            app.selected = MenuItem::Link;
             let _ = app.render();
         }
         Event::UsernameResolveResult(result) => {

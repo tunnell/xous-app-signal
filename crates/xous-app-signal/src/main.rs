@@ -29,6 +29,7 @@
 mod dialogue;
 mod gam_app;
 mod stdin_ui;
+mod store;
 
 use async_channel::bounded;
 use presage_store_pddb::PddbStore;
