@@ -54,8 +54,7 @@ GAM UI loop). The crates here map to its sections roughly as:
 - **§8 ws_pump in detail** → `xous-net-bridge`
 - The GAM render path the walkthroughs end at →
   `xous-app-signal/src/gam_app.rs` (QR modal via the upstream
-  `modals` client) + `xous-app-signal/src/stdin_ui/` (fallback
-  when no Xous server reachable)
+  `modals` client)
 
 If a crate's purpose feels unclear after reading this table,
 that's a signal worth recording in the project's roadmap.

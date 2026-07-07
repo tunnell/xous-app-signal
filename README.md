@@ -215,7 +215,6 @@ xous-app-signal/
 │   ├── xous-pddb-ipc/          hand-rolled PDDB IPC client
 │   ├── xous-signal-worker/     presage::Manager on worker thread + Cmd/Event channels
 │   ├── xous-app-signal/        binary entry point (binary name: `xas`)
-│       └── src/stdin_ui/       stdin-driven UI fallback for standalone runs (no Xous server)
 ├── docs/                       ARCHITECTURE.md (reader's-eye-view of the codebase)
 ├── tests/                      hosted-mode + Renode + precursor (hardware) test harnesses
 └── vendor/                     vendored forks of presage / libsignal-service-rs / curve25519-dalek

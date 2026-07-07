@@ -8,22 +8,19 @@ For the runtime + worker architecture, see
 
 ```
 crates/xous-app-signal/src/
-├── gam_app.rs       (~1.4 kLoC)  ← primary UI: GAM-rendered, hardware + hosted-Xous
-├── stdin_ui/        (~0.8 kLoC)  ← fallback UI: bare `cargo run` outside Xous
+├── gam_app.rs       (~1.9 kLoC)  ← the UI: GAM-rendered, hardware + hosted-Xous
+├── store.rs         (~0.4 kLoC)  ← MessageStore: message/thread state mutation funnel
 └── dialogue.rs      (~0.4 kLoC)  ← pure-data conversation summarization
 ```
 
-`gam_app.rs` is the production path. It renders into a single
-`gam::TextView` inside the GAM's bounded canvas, dispatches keys
-via a `match (Screen, char)` table, and reacts to `Event`s from
-the worker via a forwarder thread that pushes into a
-`Mutex<VecDeque<Event>>`.
-
-`stdin_ui/` is the bare-`cargo run` fallback when no Xous server
-is reachable (e.g. for sanity-checking `main.rs` standalone). It
-has its own screen state machine that mirrors gam_app's at a
-slightly older snapshot. **Do not rely on stdin_ui's behavior to
-match gam_app's**; it lags.
+`gam_app.rs` renders into a single `gam::TextView` inside the
+GAM's bounded canvas, dispatches keys via a `match (Screen, char)`
+table, and reacts to `Event`s from the worker via a forwarder
+thread that pushes into a `Mutex<VecDeque<Event>>`. All message
+and thread state mutation goes through `store.rs`'s
+`MessageStore`, which is unit-testable without a GAM. Running the
+UI requires a Xous environment (hosted emulation via
+`cargo xtask run`, or hardware); there is no standalone fallback.
 
 ## Design principles (still load-bearing from V1)
 

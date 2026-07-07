@@ -39,6 +39,5 @@ Two reasons:
 - `xous-app-signal` (the binary) — spawns the worker, holds the
   channel ends.
 
-The UI code (`gam_app`, `stdin_ui`) never imports this crate
-directly; main spawns the worker and passes each side its
-channel ends.
+The UI code (`gam_app`) never imports this crate directly;
+main spawns the worker and passes each side its channel ends.

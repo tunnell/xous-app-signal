@@ -9,8 +9,8 @@
 //! - `xous-signal-worker` — owns the `presage::Manager` on a
 //!   dedicated worker thread driven by `smol-rs::LocalExecutor`,
 //!   exposes a [`Cmd`] / [`Event`] async-channel surface.
-//! - This crate — UI (`gam_app::App` on hardware, `stdin_ui::Ui` on
-//!   hosted) wired to the worker via the two channels.
+//! - This crate — UI (`gam_app::App`, on hardware and hosted-Xous
+//!   emulation) wired to the worker via the two channels.
 //!
 //! The startup sequence is:
 //!
@@ -28,12 +28,10 @@
 
 mod dialogue;
 mod gam_app;
-mod stdin_ui;
 mod store;
 
 use async_channel::bounded;
 use presage_store_pddb::PddbStore;
-use stdin_ui::Ui;
 use xous_signal_worker::{Cmd, Event, run_signal_worker};
 
 /// `__getrandom_v03_custom` implementation backed by xous-core's
@@ -263,21 +261,10 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    // Try to run as a real GAM-rendered Xous app first
-    // (works for both hosted Xous emulation and rv32 hardware
-    // when running inside a Xous environment). If we're not
-    // inside Xous (no xous-names server reachable, e.g.
-    // running standalone for unit tests), fall back to the
-    // stdin-driven hosted UI.
-    let cmd_tx_for_gam = cmd_tx.clone();
-    let event_rx_for_gam = event_rx.clone();
-    match gam_app::run(cmd_tx_for_gam, event_rx_for_gam) {
-        Ok(()) => {}
-        Err(e) => {
-            log::info!("xas: GAM UI unavailable ({}); falling back to stdin Ui", e);
-            Ui::new(cmd_tx, event_rx).run()?;
-        }
-    }
+    // Run as a GAM-rendered Xous app (hosted Xous emulation or rv32
+    // hardware). Requires a reachable Xous environment; a bare
+    // `cargo run` outside Xous errors out here.
+    gam_app::run(cmd_tx, event_rx).map_err(std::io::Error::other)?;
 
     // Worker has been told to shut down; join it. If the join hangs
     // it's a worker-side bug — surface as a nonzero exit, not a

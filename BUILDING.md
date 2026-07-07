@@ -560,9 +560,9 @@ cd ~/code/xas/xous-app-signal
 cargo test --features hosted -p xous-app-signal --bins
 ```
 
-~50 tests covering the dialogue model, message rendering,
-contact-name resolution, the stdin UI state machine, and link/
-send/receive event dispatch. Should all pass green.
+~40 tests covering the dialogue model, the `MessageStore`
+mutation funnel, message rendering, contact-name resolution, and
+link/send/receive event dispatch. Should all pass green.
 
 ### 2.7 Renode test environment gotchas
 

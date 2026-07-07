@@ -8,17 +8,17 @@ that produces an executable.
 ## What's here
 
 - **`src/main.rs`** — entry point. Constructs `PddbStore`, spawns
-  `xous-signal-worker`'s thread, then either boots into the
-  GAM-rendered UI (`gam_app::run`) or falls back to the stdin UI
-  (`stdin_ui::Ui`) when no Xous server is reachable.
-- **`src/gam_app.rs`** (~2.4 kLoC) — the primary UI: the GAM
-  event loop, screen state machine, and key handlers that run
-  on real hardware and inside hosted-mode Xous emulation.
-- **`src/stdin_ui/`** — a stdin-driven fallback UI used only
-  when `gam_app::run()` errors out (e.g., bare `cargo run`
-  outside any Xous environment for sanity-checking the main
-  loop). Was a separate crate (`xous-app-signal-ui`) until the
-  P3 refactor; the boundary didn't earn its keep.
+  `xous-signal-worker`'s thread, then boots into the GAM-rendered
+  UI (`gam_app::run`). Running outside a Xous environment (bare
+  `cargo run` with no reachable xous-names server) is an error;
+  use hosted Xous emulation (`cargo xtask run`) to iterate.
+- **`src/gam_app.rs`** (~1.9 kLoC) — the UI: the GAM event loop,
+  screen state machine, and key handlers that run on real
+  hardware and inside hosted-mode Xous emulation.
+- **`src/store.rs`** — `MessageStore`: the bounded message buffer
+  plus derived dialogue summaries. The single mutation funnel for
+  message/thread state (eviction, status flips, read transitions,
+  unlink wipe). Unit-tested.
 - **`src/dialogue.rs`** — pure-data conversation summary
   modeling (per-thread last-message, unread counts, ellipsis,
   brief-relative timestamps). Unit-tested.

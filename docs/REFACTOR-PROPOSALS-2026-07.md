@@ -79,9 +79,11 @@ This turns PDDB persistence (#2) from a 15-site diff into a
 ### 1.3 Split gam_app.rs (~2.1k lines) into a module tree (M)
 Three parallel god-matches over the same `Screen` enum (keys,
 render, events) plus IPC setup, forwarder thread, modal flows, and
-helpers in one file. The target pattern already exists in-repo:
-`stdin_ui`'s per-screen structs with `handle_key → Transition`
-dispatch and a single screen→Cmd binding point (`on_screen_entered`).
+helpers in one file. The target pattern is the per-screen structs
+with `handle_key → Transition` dispatch and a single screen→Cmd
+binding point (`on_screen_entered`) that the removed `stdin_ui`
+module used (deleted 2026-07 as a drifted duplicate; pattern
+recoverable from git history).
 Port to: `api.rs` (XasOp), `screens/<name>.rs`, `store.rs` (1.2).
 Retire the forwarder deque (`Mutex<VecDeque<Event>>` + scalar poke)
 for the book-blessed send-to-own-SID idiom. Fold in two hygiene
@@ -146,8 +148,10 @@ betrusted-io/xous-core (≥ `2005a801c`); upstream a one-line
 ### 3.3 One conversation UI (L–XL, decision spike)
 Order: (1) resolve the `aes` patch-contamination question; (2) only
 if it clears, spike libs/chat for the Thread surface. Likely
-outcome: it doesn't clear — then port gam_app to the stdin_ui
-Transition pattern (1.3) and keep stdin_ui as the host-side harness.
+outcome: it doesn't clear — then port gam_app to the Transition
+pattern (1.3). (The original "keep stdin_ui as the host-side
+harness" option is gone: stdin_ui was deleted 2026-07; unit
+coverage moved to `store.rs` + hosted-Xous emulation.)
 
 ### 3.4 Vendor-fork bookkeeping (S–M; partially shipped in Wave 0)
 Remaining: reproducible diff labels (mtimes still embed clone
