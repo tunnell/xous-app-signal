@@ -1,5 +1,5 @@
-//! Integration test for PLAN.md Stage 0: TLS session resumption via shared
-//! `Arc<ClientConfig>`.
+//! Integration test for TLS session resumption via shared
+//! `Arc<ClientConfig>` ("Stage 0" of issue #1).
 //!
 //! The test stands up a rustls 1.3 server in a worker thread, mints a fresh
 //! self-signed certificate via `rcgen`, drives two HTTPS-style handshakes

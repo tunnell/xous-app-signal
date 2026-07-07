@@ -1,10 +1,10 @@
-//! PLAN.md Phase 4a baseline measurement: TLS handshake cost with vs without
-//! the Stage 0 shared-Arc<ClientConfig> change.
+//! Baseline measurement for issue #1 (send latency): TLS handshake cost
+//! with vs without the shared-Arc<ClientConfig> change ("Stage 0" in the
+//! issue's history).
 //!
 //! This is **not** a "send pipeline" measurement — it isolates the TLS
 //! handshake cost, which is the variable Stage 0 directly reduces. Pipeline-
-//! level measurement requires hardware or a real Signal account; that gap is
-//! flagged in BENCH.md.
+//! level measurement requires hardware or a real Signal account.
 //!
 //! Two scenarios per target:
 //!
@@ -21,7 +21,9 @@
 //! - `localhost`: in-process rustls server with self-signed cert. Removes
 //!   network and load-balancer variance. Lower-bound numbers.
 //! - `chat.signal.org:443`: real Signal endpoint. Includes network RTT and
-//!   any load-balancer ticket-rejection noise (PLAN.md §5.3).
+//!   any load-balancer ticket-rejection noise. Note: measurement showed
+//!   chat.signal.org never issues session tickets, so resumption cannot
+//!   engage against production (see issue #1).
 //!   Skipped automatically if `XAS_BENCH_NET=1` is not set in the
 //!   environment, because production runs of `cargo test` shouldn't hit
 //!   the live Signal infrastructure.

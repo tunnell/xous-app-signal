@@ -9,10 +9,11 @@ specific upstream commit/tag and modified for one of:
 - hardware acceleration on Precursor (curve25519 IP-core driver)
 - transport-fork constraints (CDSI off, redirected git deps)
 
-**Audit posture**: keep these dirs surgically minimal vs upstream. A
-clean diff is a vetting requirement — see the crypto-vetting note in
-the project's BUILDING.md / planning docs. Iter-N optimization work in
-the workspace MUST live outside vendor/ (in `crates/...` wrappers).
+**Audit posture**: keep these dirs surgically minimal vs upstream —
+every local line is one more thing to re-justify on each vendor
+refresh and each crypto audit. Optimization and feature work MUST NOT
+be added here; it belongs in the first-party `crates/` wrappers.
+vendor/ carries only the compatibility patches listed below.
 
 ## What's pinned where
 

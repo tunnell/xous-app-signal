@@ -2,8 +2,7 @@
 
 The worker-thread crate. Owns a long-lived OS thread that runs
 `presage::Manager` on a `LocalExecutor`, and exposes a `Cmd` /
-`Event` channel surface to the rest of xas. Was named
-`xous-signal-bridge` before P1.
+`Event` channel surface to the rest of xas.
 
 ## What's here
 
@@ -40,15 +39,6 @@ Two reasons:
 - `xous-app-signal` (the binary) — spawns the worker, holds the
   channel ends.
 
-The UI never imports this crate directly anymore (it used to
-when it was its own crate); it now lives inside
-`xous-app-signal/src/stdin_ui/` and gets the channels passed in
-from main.
-
-## Naming history
-
-Was `xous-signal-bridge` until a 2026-05 rename pass.
-"Bridge" was misleading — there's a real transport bridge
-(`xous-net-bridge`, sync↔async) in this workspace, and this
-worker isn't a bridge in that sense, it's a runtime that owns
-presage on a worker thread.
+The UI code (`gam_app`, `stdin_ui`) never imports this crate
+directly; main spawns the worker and passes each side its
+channel ends.

@@ -29,8 +29,9 @@ Facts that changed the plan (all verified against GitHub 2026-07-06):
    crypto-provenance decision. Gate any adoption spike on that first.
 4. **Transport direction is settled** (issue #1 thread): per-send
    fresh WS self-induces 4409 displacement; the north star is one
-   long-lived identified WS with typed close-code handling. PLAN.md
-   Stages 1a/1' retired (see its 2026-07-06 status block).
+   long-lived identified WS with typed close-code handling. The old
+   PLAN.md's Stages 1a/1' are retired (plan deleted 2026-07; history
+   in issue #1 and git).
 5. Issue #37 is the maintainer's v1 backlog; PR #38 (worker
    op-channel, in flight) is the ownership template. Items below
    slot into that frame.
@@ -47,8 +48,9 @@ Facts that changed the plan (all verified against GitHub 2026-07-06):
   x25519-dalek; ~5.5k+ LoC). Requires the vendored-manifest edits
   documented in the commit; diffs + vendor/README.md regenerated,
   curve25519-dalek baseline pinned (`16e087a`).
-- **0.3 Doc truth-sync** (README upstream-patches, PLAN.md status
-  block, Cargo.toml comments, ARCHITECTURE.md §12 invariants).
+- **0.3 Doc truth-sync** (README upstream-patches, status block on
+  the since-deleted PLAN.md, Cargo.toml comments, ARCHITECTURE.md
+  §12 invariants).
 - **0.4 rustfmt.toml + CI** (fmt soft-gate until a repo-wide
   `cargo fmt` lands post-PR#38; hosted tests + rv32 build as hard
   gates; CI clones the xous-core sibling per BUILDING.md §1).
@@ -114,7 +116,7 @@ Park in-flight sends in task-local state next to
 `pending_unconfirmed_sends`; let stream-reopen own retry, with an
 explicit retry timer (a healthy reopened stream yields no loop
 iteration until the next rotation, so timer-driven, not
-iteration-driven). Keep PLAN.md Stage 1b: cipher-sent vs
+iteration-driven). Keep the old plan's Stage 1b distinction: cipher-sent vs
 save_message failure are different outcomes and the Event vocabulary
 (1.1) should say so. Depends on 1.1 + 2.1.
 

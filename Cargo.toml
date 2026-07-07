@@ -22,8 +22,7 @@ license = "AGPL-3.0-only OR Apache-2.0"
 authors = ["tunnell"]
 publish = false
 
-# Smol-rs async primitives, pinned to the HEAD revs verified at
-# ~/precursor-signal/repos/<crate>/git log --oneline -1.
+# Smol-rs async primitives, pinned to specific upstream revs.
 # Replaces Tokio. ~21 kLoC vendored audit surface vs. Tokio's >100 kLoC.
 [workspace.dependencies]
 async-task = { git = "https://github.com/smol-rs/async-task", rev = "f98b30b" }
