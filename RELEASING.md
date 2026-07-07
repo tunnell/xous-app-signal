@@ -6,6 +6,15 @@ Each release gets its own `xas-vX.Y` branch on xous-core; that branch is
 **frozen** after the release ships and never updated again. Future xas
 releases create new `xas-vX.Y+1` branches — they don't reuse old ones.
 
+## Pre-flight
+
+- No open `WIP` / `[do not merge]` commits on `dev`.
+- The BUILDING.md workflow has been walked cold (blank agent or a
+  fresh checkout) recently — BUILDING.md drift is the most common
+  silent regression.
+- Hardware validation done end-to-end for the release scope:
+  link → send → receive on a real Precursor PVT2 (see step 4).
+
 ## Procedure for cutting `vX.Y`
 
 1. **Decide what's in the release.** The xous-core changes needed by xas
@@ -26,7 +35,9 @@ releases create new `xas-vX.Y+1` branches — they don't reuse old ones.
 
    This branch is now frozen — do not push to it again.
 
-3. **Bump xas's version.** In the xas repo:
+3. **Bump xas's version.** Semver: patch for doc/bug fixes, minor for
+   user-visible features, major reserved for "we consider this
+   production". In the xas repo:
 
    ```sh
    cd path/to/xous-app-signal
@@ -34,6 +45,9 @@ releases create new `xas-vX.Y+1` branches — they don't reuse old ones.
    # Edit BUILDING.md §1: change `git clone -b xas-vX.{Y-1}` ->
    #                              `git clone -b xas-vX.Y`
    # Edit BUILDING.md §3.1: same change in the "Branch selection" note.
+   cargo metadata --format-version 1 >/dev/null   # regen Cargo.lock
+   git add Cargo.toml Cargo.lock BUILDING.md
+   git commit -m "release: bump workspace version to X.Y.0"
    ```
 
 4. **Hardware verify.** Build, flash to Precursor PVT2, drive a send to
