@@ -2882,7 +2882,7 @@ dependencies = [
 
 [[package]]
 name = "presage-store-pddb"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -5228,7 +5228,7 @@ dependencies = [
 
 [[package]]
 name = "xous-app-signal"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "blitstr2",
@@ -5281,7 +5281,7 @@ dependencies = [
 
 [[package]]
 name = "xous-net-bridge"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -5301,7 +5301,7 @@ dependencies = [
 
 [[package]]
 name = "xous-pddb-ipc"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "bitfield",
  "log",
@@ -5321,7 +5321,7 @@ checksum = "906500be0c4ed13afc3c8743e4d40337bfbe08e7dadfa216c39907aaa06cc8c2"
 
 [[package]]
 name = "xous-signal-worker"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "async-executor",
