@@ -4,7 +4,11 @@ Link flow, leaving a device-name TextEntry modal up at the end.
 The test wrapper (`test_link_qr.sh`) then watches the kernel log
 for `Event::LinkUrl` emission to determine PASS/FAIL.
 
-Usage: drive_link.py <window-id-hex>
+Usage: drive_link.py <window-id-hex> [--press-enter]
+
+With `--press-enter`, sends a single Return keypress and exits —
+the wrapper's retry-Enter loop uses this to accept the device-name
+modal through the same XSendEvent path as the main flow.
 
 Reuses the XSendEvent ctypes pattern from `agent_notes/
 drive_to_signal.py` (more reliable than xdotool under SSH X11).
@@ -64,8 +68,8 @@ def press(dpy, win, root, kc, wait, label):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("usage: drive_link.py <window-id-hex>", file=sys.stderr)
+    if len(sys.argv) not in (2, 3) or (len(sys.argv) == 3 and sys.argv[2] != "--press-enter"):
+        print("usage: drive_link.py <window-id-hex> [--press-enter]", file=sys.stderr)
         sys.exit(2)
     win = int(sys.argv[1], 0)
 
@@ -78,6 +82,10 @@ def main():
     kc_home = X11.XKeysymToKeycode(dpy, 0xFF50)
     kc_down = X11.XKeysymToKeycode(dpy, 0xFF54)
     kc_return = X11.XKeysymToKeycode(dpy, 0xFF0D)
+
+    if len(sys.argv) == 3:
+        press(dpy, win, root, kc_return, 0.2, "Enter (retry-accept)")
+        return
 
     # Step 1: launcher main menu → Apps → xas (Signal).
     print("=== launcher → Apps → xas ===")

@@ -379,15 +379,15 @@ hop, so you can pick where to put a `log::info!`.
    `cmd_tx.send_blocking(Cmd::SendMessage { ... })`
    (`gam_app.rs:1031` and `:1084`).
 2. **Worker dispatcher receives** — `crates/xous-signal-worker/src/lib.rs::worker_main`
-   match arm `Ok(Cmd::SendMessage { recipient, body, timestamp })`
-   (`lib.rs:317`). Forwards via internal `send_tx` channel
-   into `manager_task`.
+   match arm `Ok(Cmd::SendMessage { recipient, body, timestamp })`.
+   Forwards as a `WorkerOp::Send` on the internal op channel
+   into `manager_task` (which owns the `Manager` from link/load
+   time; sync and username-resolve ops travel the same channel).
 3. **`manager_task` selects out of receive-stream** —
-   `lib.rs:479` (`async fn manager_task`). When a queued send
-   arrives on `send_rx`, it drops the receive-stream borrow
-   and calls `handle_send(&mut manager, send, &event_tx)`
-   (`lib.rs:636`).
-4. **`handle_send` invokes presage** — `lib.rs:768`
+   `async fn manager_task`. When an op arrives on `op_rx`, it
+   drops the receive-stream borrow and runs it via
+   `run_manager_op` → `handle_send(&mut manager, send, ...)`.
+4. **`handle_send` invokes presage** —
    (`async fn handle_send`). Parses the recipient (UUID or
    E.164), then calls `manager.send_message(...).await` inside
    a `catch_unwind` so a panic in libsignal becomes
@@ -427,12 +427,11 @@ hop, so you can pick where to put a `log::info!`.
 3. **presage's `receive_messages` stream yields** —
    inside the executor running on the worker thread.
 4. **`manager_task` consumes the stream item** —
-   `lib.rs:592` `log::info!("worker: stream item received")`,
+   `log::info!("worker: stream item received")`,
    then calls
-   `process_received(item, &store, &event_tx).await`
-   (`lib.rs:598`).
+   `process_received(item, &store, &event_tx, ...).await`.
 5. **`process_received` decodes content + emits Event** —
-   `lib.rs:668` (`async fn process_received`). Parses the
+   (`async fn process_received`). Parses the
    Content body, builds an `Event::Message { sender,
    sender_phone, sender_name, body, timestamp }`, and sends on
    `event_tx` (`lib.rs:737`).

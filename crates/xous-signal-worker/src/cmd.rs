@@ -76,21 +76,17 @@ pub enum Cmd {
     /// and the link completes anyway.
     LinkCancel,
 
-    /// Start the receive loop. Requires a linked Manager
-    /// (i.e. Cmd::LinkDevice must have completed and persisted, or
-    /// the worker must have rehydrated from PDDB at startup). The
-    /// worker moves the Manager into a long-running "manager task"
-    /// that streams `Received` items from `Manager::receive_messages`,
-    /// translates each `Received::Content` into `Event::Message`,
-    /// and calls `store.flush_sessions()` on `Received::QueueEmpty`.
-    /// The manager task also multiplexes inbound `Cmd::SendMessage`
-    /// requests by selecting between the receive stream and an
-    /// internal send channel; on each send it drops the stream, calls
-    /// `Manager::send_message`, then re-opens the stream.
+    /// Open the receive stream. Requires a linked Manager (from
+    /// [`Cmd::LinkDevice`] or the worker's startup `load_registered`).
+    /// The manager task that owns the Manager starts pumping
+    /// `Manager::receive_messages`, translating each
+    /// `Received::Content` into `Event::Message` and calling
+    /// `store.flush_sessions()` on `Received::QueueEmpty`. Idempotent:
+    /// a second StartReceive while the stream is open is dropped.
     StartReceive,
 
     /// Send a 1:1 text message to the named recipient. Routed through
-    /// the same manager task that owns the receive stream.
+    /// the manager task that owns the Manager.
     ///
     /// `recipient` is either a `service_id_string()` (e.g.
     /// `"00000000-0000-4000-8000-000000000001"` for an Aci) or a
@@ -109,10 +105,8 @@ pub enum Cmd {
     /// path. The worker also uses this as the Signal-protocol
     /// timestamp on the wire.
     ///
-    /// Requires [`Cmd::StartReceive`] to have run first — the manager
-    /// task is the only place the Manager is reachable. Sending
-    /// before receive starts gets a `SendError { reason: "not
-    /// receiving; ...", timestamp: None }`.
+    /// Requires a linked Manager. Sending before link gets a
+    /// `SendError { reason: "not linked yet — ...", .. }`.
     ///
     /// # Trust boundary
     ///
@@ -139,13 +133,14 @@ pub enum Cmd {
     GetAccountInfo,
 
     /// User-triggered: contact-sync round-trip with the linked phone.
-    /// Calls `manager.request_contacts()`, which sends a self-targeted
+    /// Routed to the manager task, which calls
+    /// `manager.request_contacts()` — a self-targeted
     /// `SyncMessage.Request{type=CONTACTS}`; the primary phone replies
-    /// with the contacts blob; presage's existing `SynchronizeMessage`
-    /// handler saves the entries to `ContentsStore`. After completion,
-    /// the worker walks each newly-saved contact and emits one
-    /// `Event::ContactResolved` per (uuid, name) so the UI can swap any
-    /// rendered UUID labels for the synced names without restarting.
+    /// with the contacts blob; presage's `SynchronizeMessage` handler
+    /// saves the entries to `ContentsStore` as the receive stream
+    /// absorbs them. Replies with [`Event::SyncComplete`] /
+    /// [`Event::SyncError`]. Works before or after
+    /// [`Cmd::StartReceive`].
     ///
     /// Skipped on link by default (it adds 30-90s of WS roundtrips on
     /// rv32 and races the WS-rotation problem); F2 in the post-link UI
@@ -193,7 +188,9 @@ pub enum Cmd {
 
     /// User-triggered: lookup a Signal username (e.g., `alice.42`)
     /// to its ACI, so the UI can open a `Screen::Thread { uuid }`
-    /// for it. Result arrives as `Event::ContactResolveResult`.
+    /// for it. Routed to the manager task; the result arrives as
+    /// [`Event::UsernameResolveResult`]. Works before or after
+    /// [`Cmd::StartReceive`].
     ResolveUsername(String),
 
     /// Tell the worker to drain its event channel and exit. The main
@@ -228,6 +225,23 @@ pub struct AccountInfoData {
     pub aci: String,
     /// Registered phone number in e164 form (`+<country><digits>`).
     pub phone: String,
+}
+
+impl AccountInfoData {
+    /// Read the identity fields out of a loaded `Manager`'s
+    /// registration data. The single home for the
+    /// `device_name`/`aci`/`phone` extraction that the link, load,
+    /// and account-info paths all share.
+    pub(crate) fn from_manager(
+        manager: &presage::Manager<presage_store_pddb::PddbStore, presage::manager::Registered>,
+    ) -> Self {
+        let data = manager.registration_data();
+        Self {
+            device_name: data.device_name.clone().unwrap_or_default(),
+            aci: data.service_ids.aci.to_string(),
+            phone: data.phone_number.to_string(),
+        }
+    }
 }
 
 /// Events sent from the worker back to the app (main thread).
