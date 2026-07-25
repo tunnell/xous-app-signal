@@ -1,9 +1,10 @@
 # crates/
 
-xas's first-party Rust crates. Vendored upstream forks
-(`presage`, `libsignal-service-rs`, `curve25519-dalek`) live in
-[`../vendor/`](../vendor/). For the architectural rationale
-behind this split, see
+xas's first-party Rust crates. The patched upstream forks
+(`presage`, `libsignal-service-rs`, `curve25519-dalek`) are
+consumed as rev-pinned git dependencies — pin matrix in
+[`../docs/FORKS.md`](../docs/FORKS.md). For the architectural
+rationale behind this split, see
 [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md).
 
 ## Why a multi-crate workspace

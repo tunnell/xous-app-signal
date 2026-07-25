@@ -9,8 +9,8 @@
 //! ACI vs PNI is a runtime split, not a type-level one: a single
 //! [`PddbProtocolStore`] carries an [`IdentityType`] discriminator and
 //! routes its dictionary names through it. Same shape
-//! `presage-store-sqlite` uses (vendor/presage/presage-store-sqlite/
-//! src/protocol.rs:30-44).
+//! `presage-store-sqlite` uses (presage-store-sqlite/src/
+//! protocol.rs:30-44 in whisperfish/presage).
 //!
 //! # Trust boundary
 //!

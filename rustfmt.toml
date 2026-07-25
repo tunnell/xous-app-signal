@@ -1,19 +1,9 @@
 # Mirrors betrusted-io/xous-core's rustfmt.toml so xas code reads
-# like the ecosystem it targets. Differences: the ignore list covers
-# this repo's vendored trees instead of xous-core's.
-#
-# NOTE: not yet applied repo-wide — a mechanical `cargo +nightly fmt`
-# commit is deliberately deferred until the in-flight worker refactor
-# (PR #38) merges, to avoid manufacturing conflicts. Until then CI
-# runs the fmt check as a soft gate (continue-on-error).
-
-# Don't format vendored upstream forks — their delta vs upstream is
-# tracked in vendor/*.diff and must stay minimal. Belt: CI scopes
-# `cargo fmt --check` to the first-party crates with -p flags;
-# suspenders: this ignore covers direct `cargo fmt` invocations.
-ignore = [
-    "vendor/**",
-]
+# like the ecosystem it targets. Applied repo-wide since the
+# mechanical `cargo +nightly fmt` commit (#48); CI runs the fmt
+# check as a hard gate, scoped with -p to the first-party crates.
+# (The former vendored trees and their ignore entry are gone — the
+# patched forks are rev-pinned git deps now; see docs/FORKS.md.)
 
 newline_style = "Unix"
 use_field_init_shorthand = true

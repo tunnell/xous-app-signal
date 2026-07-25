@@ -19,14 +19,13 @@ xous-app-signal/
 │   ├── xous-net-bridge/          sync TLS + WS + HTTP transport
 │   ├── xous-pddb-ipc/            PDDB IPC client
 │   └── presage-store-pddb/       presage::Store impl over PDDB
-├── docs/                         ARCHITECTURE.md and friends
-├── tests/{hosted,renode,precursor}/   READMEs in hosted/ and precursor/; robot/resc files in renode/
-└── vendor/                       READ-ONLY; see "Vendored + frozen branches"
+├── docs/                         ARCHITECTURE.md, FORKS.md (dependency fork pins) and friends
+└── tests/{hosted,renode,precursor}/   READMEs in hosted/ and precursor/; robot/resc files in renode/
 ```
 
 The companion kernel-side tree (`xous-core`) is typically a
 sibling directory; hardware builds depend on a specific branch of
-it (see "Vendored + frozen branches"). The maintainer also keeps a
+it (see "Forked + frozen branches"). The maintainer also keeps a
 `notes/` workspace outside the repo for analyses, prompts, and
 session-state docs — not part of public history, and not to be
 referenced from anything in the tree.
@@ -46,16 +45,18 @@ approaches are in [tests/README.md]. Common commands:
 | Renode smoke | `bash tests/renode/run-renode-tests.sh` |
 | Hosted integration | `python3 tests/hosted/test_xas_round_trip.py` |
 
-## Vendored + frozen branches
+## Forked + frozen branches
 
-Two things in or beside this tree are not for in-place editing:
+Two things in or beside this tree are not for casual editing:
 
-- **`vendor/`** is read-only. The directory-vendored forks
-  (`presage`, `libsignal-service-rs`, `curve25519-dalek`) and the
-  patch-vendored forks pulled in via `[patch.crates-io]`
-  (`ring`, `sha2`, smol-rs primitives) all require explicit
-  maintainer approval for any change. File an issue with the
-  rationale and wait before editing.
+- **The dependency forks are pin-frozen.** The Signal-stack forks
+  (`presage`, `libsignal-service-rs`, `curve25519-dalek`) are
+  consumed as rev-pinned git `[patch]` entries in the workspace
+  `Cargo.toml` — pin matrix, rules, and maintenance cadence in
+  [docs/FORKS.md](docs/FORKS.md). Bumping any pin, pushing to a
+  fork branch, or changing the other `[patch]` pins (`ring`,
+  `sha2`, `getrandom`, smol-rs primitives) requires explicit
+  maintainer approval. File an issue with the rationale and wait.
 
 - **`xous-core@xas-vX.Y` is a frozen pin.** Each xas release
   (starting with v0.2) tags a companion `xas-vX.Y` branch on the
@@ -180,7 +181,7 @@ costly or destructive. Concretely:
   draft text, write commits to a local feature branch, file
   research notes under `notes/reply/`.
 - **Propose, wait for explicit go**: any `git push`, flash cycle
-  (~25 min hardware time), edit to `vendor/`, cross-repo PR, or
+  (~25 min hardware time), fork-pin bump (docs/FORKS.md), cross-repo PR, or
   shared-history rewrite (`git rebase -i`, force-push to a shared
   branch).
 - **Stop and ask**: anything that would touch `main` or `dev`

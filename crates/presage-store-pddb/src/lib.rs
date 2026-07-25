@@ -36,7 +36,7 @@
 //! Upstream: `xous-signal-worker::run_signal_worker` takes a
 //! [`PddbStore`] and hands it to `presage::Manager`. Below:
 //! `xous-pddb-ipc` (only under the `pddb-backend` feature) and the
-//! presage trait surface from the vendored copies. No transport
+//! presage trait surface from the rev-pinned forks (docs/FORKS.md). No transport
 //! deps — this crate never touches the network.
 //!
 //! # Trust boundary
@@ -563,7 +563,7 @@ mod tests {
     fn fixture_registration() -> RegistrationData {
         let phone_number = serde_json::to_value(phonenumber::parse(None, "+15555550100").unwrap()).unwrap();
         // RegistrationData::profile_key serializes as base64 (not a
-        // byte array) — see vendor/presage/presage/src/serde.rs
+        // byte array) — see presage/src/serde.rs (whisperfish/presage)
         // serde_profile_key. We deserialize from a fixed base64 string
         // here so the test doesn't depend on a particular encoding
         // detail of `ProfileKey::generate`.

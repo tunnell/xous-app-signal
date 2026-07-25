@@ -5,7 +5,7 @@
 //! is_last_resort: bool}` so that `mark_kyber_pre_key_used` and the
 //! `KyberPreKeyStoreExt` trait know whether to delete or retain —
 //! same flag the sqlite store carries as a column
-//! (vendor/presage/presage-store-sqlite/src/protocol.rs:407-470).
+//! (presage-store-sqlite/src/protocol.rs:407-470 in whisperfish/presage).
 //!
 //! `mark_kyber_pre_key_used` consults a separate `kyber_meta` dict
 //! for last-resort base-key dedup. Key = `"{kyber_id}.{ec_id}"`,

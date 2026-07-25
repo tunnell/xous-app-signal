@@ -13,7 +13,7 @@
 //! - Below this crate:
 //!   - [`presage_store_pddb`] for storage (passed in as [`PddbStore`]).
 //!   - [`xous_net_bridge`] for transport (installed as a `thread_local!` `HttpClient` here).
-//!   - `presage::Manager` and `libsignal-service-rs` consumed via the vendored copies.
+//!   - `presage::Manager` and `libsignal-service-rs` consumed via the rev-pinned forks (docs/FORKS.md).
 //!
 //! # Why a `LocalExecutor`
 //!

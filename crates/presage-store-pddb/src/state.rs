@@ -29,7 +29,8 @@
 //!   registration ids, the profile key, the linked device id, and the user's E.164 phone number. Compromise
 //!   lets the holder authenticate to Signal's chat service as the user and rotate prekeys / sessions. Stored
 //!   as `serde_json` of the upstream `RegistrationData` shape; the `password` field is a plain `String`, the
-//!   `profile_key` serializes to base64 (see vendor/presage/presage/ src/serde.rs `serde_profile_key`).
+//!   `profile_key` serializes to base64 (see presage/src/serde.rs `serde_profile_key` in
+//!   whisperfish/presage).
 //! - **`SenderCertificate`** (`sender_certificate`): a signed certificate that authorizes sealed-sender
 //!   envelopes for this account. Contains the user's public identity key and a server-issued signature. Not
 //!   secret-equivalent (the cert is what gets sent on the wire) but loss-of-control means anyone who has the

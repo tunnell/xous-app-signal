@@ -62,8 +62,8 @@ The right thing to internalize is which layer owns which problem:
 |---|---|---|
 | GAM main loop | LCD render, key handling, app screens | ours |
 | signal-worker | Cmd/Event IPC translation | ours (~1000 LOC) |
-| presage Manager | Signal protocol state machine, store wiring | **upstream `whisperfish/presage`** (vendored) |
-| libsignal-service-rs | Signal HTTP + WSS + envelope/cipher framing | **upstream `whisperfish/libsignal-service-rs`** (vendored) |
+| presage Manager | Signal protocol state machine, store wiring | **upstream `whisperfish/presage`** (rev-pinned fork; [FORKS.md](FORKS.md)) |
+| libsignal-service-rs | Signal HTTP + WSS + envelope/cipher framing | **upstream `whisperfish/libsignal-service-rs`** (rev-pinned fork; [FORKS.md](FORKS.md)) |
 | signalapp/libsignal | Double Ratchet, X3DH/PQXDH, sealed sender, AES-GCM-SIV | **upstream `signalapp/libsignal`** (Cargo dep) |
 | smoltcp + xous-net | TCP/IP stack inside the Xous kernel | upstream xous-core |
 | FPGA + WF200 | Wi-Fi radio + RISC-V SoC | upstream betrusted-io hardware |
@@ -91,7 +91,8 @@ copy of the Signal protocol — we are a downstream consumer of
 the upstream Rust implementations. If a vulnerability is found
 in the Signal protocol, the fix lands in `signalapp/libsignal`
 or `whisperfish/libsignal-service-rs` upstream and reaches xas
-via a vendored-tree update — not via patching by us.
+via a fork-pin bump ([FORKS.md](FORKS.md)) — not via patching by
+us.
 
 ## 3. The Xous IPC primer (~200 words)
 
@@ -143,12 +144,13 @@ can jump straight to the code.
    `WebSocketMessage` protobuf and dispatches by type.
    `Type::Request` from the server is an envelope push;
    `Type::Response` is a reply to one of our own requests.
-   *Code:* `vendor/libsignal-service-rs/src/websocket/mod.rs`
+   *Code:* `src/websocket/mod.rs` in the libsignal-service-rs
+   fork ([FORKS.md](FORKS.md)),
    `SignalWebSocketProcess::run` (upstream — we maintain a
-   vendored copy with a couple of patches we'd like to upstream;
-   see the README's Upstream patches section).
+   rev-pinned fork with a couple of patches we'd like to
+   upstream; see the README's Upstream patches section).
 4. **presage's `receive_messages` stream**
-   (`vendor/presage/presage/src/manager/registered.rs:572`,
+   (`presage/src/manager/registered.rs:572` in the presage fork,
    upstream) takes the inbound `Envelope`, runs it through
    `ServiceCipher::open_envelope()`. That call is in
    `libsignal-service-rs::cipher`, upstream.
@@ -394,12 +396,12 @@ hop, so you can pick where to put a `log::info!`.
    `Event::SendError("panic in send: ...")` rather than
    killing the worker.
 5. **presage calls libsignal-service-rs** —
-   `vendor/presage/presage/src/manager/registered.rs`. Uses
+   `presage/src/manager/registered.rs` (presage fork). Uses
    the `Manager`'s identified WS to send, fetching prekey
    bundles via the `HttpClient` if first-send for the
    recipient.
 6. **libsignal-service-rs uses our transport** —
-   `vendor/libsignal-service-rs/src/`'s WebSocket and HTTP
+   the libsignal-service-rs fork's WebSocket and HTTP
    code calls into `xous-net-bridge`'s `SyncHttpClient`
    (`crates/xous-net-bridge/src/http.rs:35` constructor;
    `:46` `execute`) and into the `WebSocketChannels` returned
@@ -421,7 +423,7 @@ hop, so you can pick where to put a `log::info!`.
    incoming `async-channel`.
 2. **libsignal-service-rs polls the channel** in its
    `SignalWebSocketProcess::run` loop
-   (`vendor/libsignal-service-rs/src/websocket/mod.rs`),
+   (`src/websocket/mod.rs` in the libsignal-service-rs fork),
    correlates response frames to outstanding requests, and
    surfaces protocol-level events to presage.
 3. **presage's `receive_messages` stream yields** —
@@ -455,9 +457,9 @@ layer.
 
 | Symptom | Most likely file |
 |---|---|
-| Send fails with `WebSocket closing while...` | `xous-signal-worker/src/lib.rs::handle_send` retry loop; or the underlying WS lifetime in `vendor/libsignal-service-rs/src/websocket/mod.rs::SignalWebSocketProcess::run` |
+| Send fails with `WebSocket closing while...` | `xous-signal-worker/src/lib.rs::handle_send` retry loop; or the underlying WS lifetime in the libsignal-service-rs fork's `src/websocket/mod.rs::SignalWebSocketProcess::run` ([FORKS.md](FORKS.md)) |
 | Receive doesn't surface a message that the phone says was delivered | `xous-signal-worker/src/lib.rs::manager_task` and `process_received`; check `Received` enum variants |
-| Linking hangs after QR scan | `vendor/presage/presage/src/manager/linking.rs`; check ProvisionEnvelope decrypt + prekey gen + `POST /v1/devices/link` |
+| Linking hangs after QR scan | `presage/src/manager/linking.rs` in the presage fork; check ProvisionEnvelope decrypt + prekey gen + `POST /v1/devices/link` |
 | LCD doesn't repaint after an event | `gam_app.rs::handle_worker_event` — confirm the event arm calls `app.render()` |
 | New `Cmd` variant doesn't reach the worker | Check the dispatcher in `xous-signal-worker/src/lib.rs::worker_main`'s `match cmd_rx.recv()` |
 | Profile screen says "(not loaded)" after restart | `xous-signal-worker/src/lib.rs::cached_account_info` + `Cmd::GetAccountInfo` handler — see if the worker cached it |
@@ -496,9 +498,10 @@ or a deliberate design change that must update this list.
   own.** `presage-store-pddb` persists opaque blobs handed to it
   by presage/libsignal; encryption at rest is PDDB's job. Check:
   no cipher deps in its Cargo.toml.
-- **`vendor/` is read-only** and each vendored tree's delta vs its
-  upstream pin is reproducible from `vendor/*.diff` +
-  `vendor/README.md`'s pinned revs and regen commands.
+- **The dependency forks are pin-frozen** and each fork's delta vs
+  its upstream pin is plain git history — reproducible from the
+  rev pins in `Cargo.lock` and auditable via the compare URLs in
+  [FORKS.md](FORKS.md).
 - **Worker-owned mutable state has a single owner.** The presage
   `Manager` lives inside `manager_task`; nothing else holds `&mut`
   access to it (completed by the worker-op-channel refactor).

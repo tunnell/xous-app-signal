@@ -4,7 +4,7 @@
 //! `mark_all_one_time_kyber_pre_keys_stale_if_necessary` and
 //! `delete_all_stale_one_time_kyber_pre_keys` are stubbed to
 //! `unimplemented!()` matching presage-store-sqlite's own approach
-//! (vendor/presage/presage-store-sqlite/src/protocol.rs:530-544 — both
+//! (presage-store-sqlite/src/protocol.rs:530-544 upstream — both
 //! return `unimplemented!("should not be used yet")`). presage's
 //! manager doesn't currently call them; the upstream comment is "this
 //! seems unused on the trunk".

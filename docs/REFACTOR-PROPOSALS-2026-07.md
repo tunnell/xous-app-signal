@@ -153,11 +153,13 @@ pattern (1.3). (The original "keep stdin_ui as the host-side
 harness" option is gone: stdin_ui was deleted 2026-07; unit
 coverage moved to `store.rs` + hosted-Xous emulation.)
 
-### 3.4 Vendor-fork bookkeeping (S–M; partially shipped in Wave 0)
-Remaining: reproducible diff labels (mtimes still embed clone
-times), and re-align the vendored keepalive patch to the builder
-shape when ls-rs#431 moves. (May review's P6 "revisit in 6 months"
-falls due ~2026-11.)
+### 3.4 Vendor-fork bookkeeping (S–M; DONE 2026-07 — dissolved by de-vendoring)
+Superseded: vendor/ was replaced by rev-pinned GitHub fork
+branches (see FORKS.md). The "reproducible diff labels" item is
+moot (the delta is git history, byte-stable by construction), and
+ls-rs#431 re-alignment becomes an ordinary fork-rebase if the PR
+ever reopens. May review's P6 "revisit in 6 months" (~2026-11)
+reduces to the FORKS.md maintenance cadence.
 
 ---
 

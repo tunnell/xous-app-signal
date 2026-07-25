@@ -60,14 +60,15 @@ with the code in this tree plus its trust assumptions below.
 6. **Compromised Xous kernel, malicious gateware, or a compromised
    xas binary**. Out of scope: game over by assumption. The
    project's mitigation is verifiability (reproducible builds,
-   vendored auditable sources), not runtime defense.
+   rev-pinned auditable sources — see docs/FORKS.md), not runtime
+   defense.
 
 ## Trust assumptions
 
 - `signalapp/libsignal`, `whisperfish/libsignal-service-rs`,
   `whisperfish/presage` for all Signal Protocol cryptography and
   framing. Vulnerabilities there should be reported upstream; xas
-  consumes fixes via vendored-tree updates (`vendor/README.md`).
+  consumes fixes via fork-pin bumps (`docs/FORKS.md`).
 - `rustls` + the pinned Signal production CA for TLS.
 - The Xous kernel, its services (net, PDDB, GAM), and Precursor's
   hardware key management. Kernel-side issues belong in
@@ -78,12 +79,13 @@ with the code in this tree plus its trust assumptions below.
 ## Scope
 
 **In scope:** the five first-party crates (`crates/*`), the deltas
-this tree applies to vendored code (`vendor/*.diff`), the build and
+carried on the dependency fork branches (the compare URLs in
+`docs/FORKS.md`), the build and
 release procedure (`BUILDING.md`, `RELEASING.md`), and any way the
 above weakens the upstream stack's guarantees.
 
 **Out of scope:** vulnerabilities wholly inside upstream code
-(report upstream; a heads-up here is still appreciated so the vendor
+(report upstream; a heads-up here is still appreciated so the fork
 pin can move), Signal protocol design questions, xous-core and
 hardware issues (report to betrusted-io), and denial-of-service by
 someone holding the device.

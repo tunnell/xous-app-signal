@@ -3,8 +3,8 @@
 //! Two methods, both per-id storage in
 //! `signal.protocol.{aci,pni}.signed_prekey`. Records are stored as
 //! their libsignal binary form (`record.serialize()?`) — same shape
-//! presage-store-sqlite uses (vendor/presage/presage-store-sqlite/
-//! src/protocol.rs:341-360).
+//! presage-store-sqlite uses (presage-store-sqlite/
+//! src/protocol.rs:341-360 in whisperfish/presage).
 //!
 //! # Security
 //!

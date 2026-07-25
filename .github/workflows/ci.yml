@@ -152,9 +152,10 @@ jobs:
           rustup component add rustfmt --toolchain nightly
 
       - name: cargo +nightly fmt --check (first-party crates only)
-        # Scoped with -p: the vendored trees ship their own (older)
-        # rustfmt.toml files and must not be reformatted — their
-        # delta vs upstream is tracked in vendor/*.diff.
+        # Scoped with -p to the five first-party crates. The former
+        # vendored trees are gone (replaced by rev-pinned fork git
+        # deps — docs/FORKS.md); the explicit -p list stays so the
+        # gate's scope is self-documenting and stable.
         working-directory: xous-app-signal
         run: >
           cargo +nightly fmt --check
@@ -170,7 +171,7 @@ jobs:
         run: |
           set -e
           FOUND=$(grep -rn --include='*.rs' --include='*.toml' --include='*.md' ' $' \
-            crates/ docs/ tests/ *.md *.toml 2>/dev/null | grep -v '^vendor/' || true)
+            crates/ docs/ tests/ *.md *.toml 2>/dev/null || true)
           if [ -n "$FOUND" ]; then
             echo "$FOUND"
             echo "::error::trailing whitespace found"
