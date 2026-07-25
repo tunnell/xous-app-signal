@@ -478,8 +478,10 @@ impl PddbClient {
     /// records, which through individual [`KeyHandle::write`] would
     /// be O(10) full multi-basis syncs (upstream
     /// `main.rs:2293-2294`) and through this opcode is one. The
-    /// `tunnell/xous-core@feat/pddb-bulk-write` patch series
-    /// (commit `8f3894f2d`) added the server side.
+    /// server side is xous-core commit `8f3894f2d` on
+    /// `tunnell/xous-core` branch `iter2-selective-dict-sync`; no
+    /// deploy branch ships it, so the probe-plus-fallback below
+    /// stays load-bearing.
     ///
     /// The upstream caller is
     /// `presage_store_pddb::PddbBackend::put_batch`, which forwards

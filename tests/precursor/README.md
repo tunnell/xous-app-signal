@@ -115,6 +115,31 @@ ssh "$PI_HOST" 'screen -dmS uart -L -Logfile ~/uart-logs/precursor-uart.log /dev
 `/dev/serial0` instead — check `dmesg | grep tty` if the log
 stays empty.)
 
+### Persistent UART capture across Pi reboots
+
+The `screen` session above dies on every Pi reboot, and the next
+`watch-uart.sh` run finds a stale (or missing) log. To make the
+capture survive reboots, install a systemd unit on the Pi:
+
+```ini
+# /etc/systemd/system/precursor-uart.service
+[Unit]
+Description=Persistent UART capture for Precursor on /dev/ttyAMA0
+After=network.target
+[Service]
+Type=forking
+User=pi
+ExecStart=/usr/bin/screen -dmS uart -L \
+    -Logfile %h/uart-logs/precursor-uart.log /dev/ttyAMA0 115200
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+```
+
+Then `sudo systemctl enable --now precursor-uart.service`. After
+that, the manual `screen -dmS uart ...` step above is only needed
+on rigs without the unit.
+
 Confirm everything:
 
 ```sh
@@ -146,7 +171,7 @@ step requires a 25-minute flash:
    ```sh
    bash tests/precursor/build-and-bundle.sh
    ```
-   Output: `<xous-core>/target/precursor-c809403e/release/xous.img`.
+   Output: `<xous-core>/target/riscv32imac-unknown-xous-elf/release/xous.img`.
    Override `XOUS_CORE_DIR` / `XOUS_TARGET` if your layout
    differs.
 
@@ -266,10 +291,16 @@ your test design around what UART can show.
 | `PI_FLASH_DIR` | `~/xous-flash` | Pi-side directory for `xous.img` + `usb_update.py` |
 | `PI_UART_LOG` | `~/uart-logs/precursor-uart.log` | Pi-side path of the UART log |
 | `XOUS_CORE_DIR` | `../xous-core` | Path to your xous-core checkout |
-| `XOUS_TARGET` | `precursor-c809403e` | xtask target for `app-image-xip` |
+| `XOUS_TARGET` | `riscv32imac-unknown-xous-elf` | cargo target dir the bundled `xous.img` lands in |
 | `BUILD_LOG` | `/tmp/xous-build-$(date +%s).log` | Build stdout/stderr |
 | `FLASH_LOG` | `/tmp/flash-$(date +%s).log` | Flash stdout/stderr (Pi-side for `flash-via-pi.sh`) |
 | `FOLLOW` | `1` | `watch-uart.sh`: 1 = `tail -F`, 0 = last 200 lines |
+
+(`precursor-c809403e` is the legacy `XOUS_TARGET` name from when
+xous-core used JSON target specs. Cargo writes the image under the
+`riscv32imac-unknown-xous-elf` triple; all scripts in this folder
+default to that. Update any wrapper scripts still exporting the
+old name.)
 
 Override at the call site:
 
