@@ -27,9 +27,14 @@ webpki-roots = "1.0"
 tungstenite = { version = "0.21", default-features = false, features = ["handshake"] }
 
 # `HttpClient` trait lives in libsignal-service-rs; the impl is in this
-# crate. Path dep so we can implement the trait without circular-dep
-# problems (libsignal-service doesn't depend on xous-net-bridge).
-libsignal-service = { path = "../../vendor/libsignal-service-rs", default-features = false }
+# crate (libsignal-service doesn't depend on xous-net-bridge, so no
+# circular-dep problem). Declares the canonical upstream URL; the
+# workspace [patch."https://github.com/whisperfish/libsignal-service-rs"]
+# redirects it to the rev-pinned tunnell fork (docs/FORKS.md), unifying
+# it with presage's dep on the same URL. `default-features = false` is
+# REQUIRED: the fork keeps upstream's `default = ["cdsi"]`, and CDSI
+# pulls boring-sys (BoringSSL), which has no rv32-xous target.
+libsignal-service = { git = "https://github.com/whisperfish/libsignal-service-rs", rev = "782c0d6", default-features = false }
 
 # Sync→async bridging for the `HttpClient` impl. `HttpClient::execute`
 # is async (returns a Future) but our HTTP/1.1 client is sync (writes/
