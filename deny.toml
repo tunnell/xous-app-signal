@@ -32,8 +32,11 @@ ignore = [
   # rustls-webpki cert-path DoS. Bound by rustls =0.22.2, pinned to
   # match xous-core libs/tls. Moves when that pin moves.
   "RUSTSEC-2026-0049",
-  # rkyv 0.4.3 advisories — dev-dependency of xous-net-bridge only,
-  # never in the shipped binary.
+  # rkyv 0.4.3 advisories — normal (target-gated) dependency of the
+  # betrusted-io ring-xous fork (ring 0.17.7 -> rkyv, and ring ->
+  # xous-ipc -> rkyv), so it IS on the shipped-binary path for the
+  # xous target, not dev-only as previously annotated. Moves only when
+  # the ring-xous pin moves.
   "RUSTSEC-2021-0054",
   "RUSTSEC-2026-0001",
   # Unmaintained/unsound transitives not on a first-party code path:
@@ -50,6 +53,13 @@ ignore = [
   "RUSTSEC-2026-0099",
   "RUSTSEC-2026-0104",
   "RUSTSEC-2026-0173",
+  # New advisories published after the 2026-07-06 scan, all transitives
+  # of the vendored libsignal stack; acknowledged + deferred, they move
+  # when the signalapp/libsignal pin moves:
+  "RUSTSEC-2026-0204", # crossbeam-epoch 0.9.18 fmt::Display null-deref; via rayon<-libsignal, pattern unused
+  "RUSTSEC-2026-0207", # libcrux-sha3 0.0.8 portable SHAKE multi-squeeze bug; ML-KEM/ML-DSA use unaffected
+  "RUSTSEC-2026-0208", # libcrux-sha3 0.0.8 AVX2 SHAKE-256 panic; AVX2-only path, device is riscv32
+  "RUSTSEC-2026-0212", # libcrux-secrets 0.0.5 aarch64 const-time swap/select bug; no aarch64 target here
 ]
 
 [licenses]
