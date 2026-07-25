@@ -121,3 +121,28 @@ jobs:
             echo "::error::trailing whitespace found"
             exit 1
           fi
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out xas
+        uses: actions/checkout@v4
+        with:
+          path: xous-app-signal
+
+      - name: Clone the pinned xous-core sibling (BUILDING.md §1)
+        # cargo-deny resolves the full dependency graph, which includes
+        # the ../repos/xous-core path-deps and the getrandom [patch].
+        run: |
+          git clone --depth 1 -b xas-v0.2 https://github.com/tunnell/xous-core.git
+          mkdir -p repos
+          ln -s ../xous-core repos/xous-core
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      # Green subset only. `licenses` is intentionally omitted until the
+      # xous-core path crates carry SPDX license fields — see deny.toml.
+      - name: cargo deny check
+        working-directory: xous-app-signal
+        run: cargo deny check advisories bans sources
