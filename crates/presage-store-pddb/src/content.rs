@@ -18,7 +18,7 @@
 //!
 //! Messages-by-thread serialization choice — JSON envelope around
 //! prost-encoded body bytes — matches presage-store-sqlite's pattern
-//! (vendor/presage/presage-store-sqlite/src/content.rs:154 stores the
+//! (presage-store-sqlite/src/content.rs:154 upstream stores the
 //! body as raw protobuf bytes alongside metadata columns). We don't
 //! adopt presage-store-sled's `InternalSerialization.proto` wrapper:
 //! it requires a build script and a textsecure proto, both of which
@@ -125,7 +125,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 /// Per-thread dictionary name. `sha256("contact:" + uuid)` or
 /// `sha256("group:" + base64(master_key))` — same shape sled uses
-/// (vendor/presage/presage-store-sled/src/content.rs:471-485) so the
+/// (presage-store-sled/src/content.rs:471-485 upstream) so the
 /// derivation is portable. We don't keep raw thread descriptors in
 /// the dictionary name; the hash is enough since we never list-by-
 /// thread on the wire (thread descriptors come in from the caller).

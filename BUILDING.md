@@ -133,9 +133,10 @@ needed patching for the Wi-Fi + WebSocket path to work
 reliably. The kernel-side encoding fix has since **merged
 upstream** (betrusted-io/xous-core#877, commit `2005a801c`); the
 keepalive-tolerance PR (whisperfish/libsignal-service-rs#431)
-was **closed unmerged** and its fix is carried in `vendor/`
-instead (see the README's Upstream patches section for links and
-status). The forks below remain the canonical source: the pinned
+was **closed unmerged** and its fix is carried on the
+rev-pinned `libsignal-service-rs` fork branch instead (see
+`docs/FORKS.md` and the README's Upstream patches section for
+links and status). The forks below remain the canonical source: the pinned
 branch also carries fixes that are in no upstream release — the
 DNS CNAME-chain fix, the `services/net` reaper fix, and the
 `apps/manifest.json` registration for xas.
@@ -201,14 +202,19 @@ Verify the layout:
 ├── repos/
 │   └── xous-core -> ../xous-core      # path used by Cargo manifests
 ├── xous-app-signal/
-│   ├── Cargo.toml
-│   ├── crates/
-│   └── vendor/                        # vendored presage + libsignal-service-rs
+│   ├── Cargo.toml                     # [patch] pins the Signal-stack forks (docs/FORKS.md)
+│   └── crates/
 └── xous-core/
     ├── kernel/
     ├── services/
     └── xtask/
 ```
+
+The patched Signal-stack dependencies (presage,
+libsignal-service-rs, curve25519-dalek) are not in-tree: they are
+GitHub forks consumed at pinned revs via the workspace `[patch]`
+entries, fetched by cargo on first build. `docs/FORKS.md` has the
+pin matrix and compare URLs.
 
 `repos/xous-core` must point at the same checkout you cloned as
 `~/code/xas/xous-core`. Verify with `ls repos/xous-core/services/gam/Cargo.toml`
@@ -218,16 +224,16 @@ to load (`gam`, from `crates/xous-app-signal`) will fail with
 
 ### What each clone contributes to the build
 
-The two clones above plus the in-tree vendored copy give you the
-effective fixes from all three upstream PRs xas has tracked (two
-merged, one closed in favor of the vendored carry). If you ever
-need to verify "am I actually building with the upstream PR
-content," this is the map:
+The two clones above plus the rev-pinned libsignal-service-rs
+fork give you the effective fixes from all three upstream PRs xas
+has tracked (two merged, one closed in favor of the fork carry).
+If you ever need to verify "am I actually building with the
+upstream PR content," this is the map:
 
 | Upstream PR | Where it lives in your build | How |
 |---|---|---|
 | [betrusted-io/xous-core#877](https://github.com/betrusted-io/xous-core/pull/877) (kernel byte-1 mirror) | `xous-core/services/net/src/std_glue.rs::respond_with_error` on the pinned `xas-v0.2` branch | **Merged upstream 2026-06-02** as commit `2005a801c` — any `betrusted-io/xous-core` checkout at or after that commit carries it. The pinned `xas-v0.2` branch carried the identical commit pre-merge; the pin remains required for the deltas that are *not* upstream: the CNAME-chain DNS fix (`43dcb4a59`) required for Signal connectivity, the `services/net` reaper fix (tunnell/xous-core#26; upstream [#880](https://github.com/betrusted-io/xous-core/pull/880) closed 2026-07-17 unmerged — the maintainer wants net fixes to follow the Renode-CI refactor, so the fork carries it), a small PDDB hosted-mode test convenience (`c22cfc678`), and the `apps/manifest.json` xas registration. |
-| [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431) (keepalive tolerance) | `xous-app-signal/vendor/libsignal-service-rs/src/websocket/mod.rs` | The vendored copy uses a local `MAX_OUTSTANDING_KEEPALIVES = 3` constant. PR #431 proposed the same tolerance as an opt-in `with_max_outstanding_keepalives(...)` constructor (default = 1, preserves upstream behavior); it was **closed unmerged by its author on 2026-07-18**, so the vendored constant is the long-term shape rather than a stopgap awaiting re-alignment. No action needed — the vendored copy is part of the `xous-app-signal` clone above, and the §5 grep check verifies it. |
+| [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431) (keepalive tolerance) | `src/websocket/mod.rs` on the `tunnell/libsignal-service-rs` fork branch `xous-782c0d6`, rev `86b9da7cde` (see `docs/FORKS.md`) | The fork uses a local `MAX_OUTSTANDING_KEEPALIVES = 3` constant. PR #431 proposed the same tolerance as an opt-in `with_max_outstanding_keepalives(...)` constructor (default = 1, preserves upstream behavior); it was **closed unmerged by its author on 2026-07-18**, so the fork constant is the long-term shape rather than a stopgap awaiting re-alignment. No action needed — cargo fetches the fork at the rev pinned in `Cargo.lock`, and the §5 lock check verifies it. |
 | [rust-lang/rust#156414](https://github.com/rust-lang/rust/pull/156414) (std recv byte-4 decode) | **Not in your build (yet).** | PR #156414 fixes the bug at its actual source (the std-side recv decode reads byte 4 instead of byte 1). It **merged 2026-06-04** (milestone 1.98.0) but has not reached a stable Rust release yet, so the toolchain this workspace builds with still has the byte-1 bug — and it doesn't matter, because PR #877's kernel-side mirror writes the code at byte 1 too. Once a stable release carrying the fix reaches the toolchain pin, the kernel-side mirror becomes belt-and-suspenders rather than load-bearing. No action needed for the current build. |
 
 ---
@@ -850,12 +856,17 @@ Quick checks before reporting issues:
 # In xous-app-signal:
 git rev-parse HEAD   # should match origin/main (or origin/dev if developing)
 cargo --version      # should be 1.95.0 or newer
-ls vendor/presage/.git 2>&1   # should NOT exist (we vendor as plain dirs)
 
-# Confirm vendored libsignal carries the keepalive-tolerance fix
-# (effective equivalent of upstream PR whisperfish/libsignal-service-rs#431):
+# Confirm the Signal-stack forks resolve to the pinned revs from
+# docs/FORKS.md (cargo verifies the checkouts against these):
+grep -A2 'name = "libsignal-service"' Cargo.lock   # expect: source = git+...tunnell/libsignal-service-rs?rev=86b9da7c...
+grep -A2 'name = "presage"' Cargo.lock             # expect: source = git+...tunnell/presage?rev=7b63a451...
+
+# Confirm the fork checkout cargo fetched carries the
+# keepalive-tolerance fix (effective equivalent of upstream PR
+# whisperfish/libsignal-service-rs#431):
 grep -F 'MAX_OUTSTANDING_KEEPALIVES: usize = 3' \
-    vendor/libsignal-service-rs/src/websocket/mod.rs   # expect: 1 hit
+    ~/.cargo/git/checkouts/libsignal-service-rs-*/86b9da7/src/websocket/mod.rs   # expect: 1 hit
 
 # In xous-core:
 git branch --show-current   # should be 'xas-v0.2' (the §1 pin)
@@ -886,4 +897,5 @@ Hosted-mode builds don't produce a `xous.img` — they produce a
   and what doesn't.
 - The README's "Upstream patches" section documents the status
   of each upstream fix xas has tracked (merged, closed, or still
-  carried in the pin/vendor), with links to each PR.
+  carried in a pin/fork), with links to each PR; `docs/FORKS.md`
+  has the fork pin matrix.

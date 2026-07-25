@@ -22,10 +22,10 @@
 rustflags = [
     "--cfg", "getrandom_backend=\"custom\"",
 
-    # The vendored betrusted-io fork of curve25519-dalek includes a
-    # `u32e_backend` that uses Precursor's Curve25519 IP-core
-    # accelerator. Currently DISABLED because libsignal's vendored
-    # zkgroup uses a "lizard" port (in
+    # The rev-pinned curve25519-dalek fork (betrusted-io lineage;
+    # docs/FORKS.md) includes a `u32e_backend` that uses
+    # Precursor's Curve25519 IP-core accelerator. Currently
+    # DISABLED because zkgroup uses the fork's "lizard" port (in
     # `RistrettoPoint::from_uniform_bytes_single_elligator`) that
     # mixes the IP-core engine's `Engine25519` field type freely
     # with the portable `FieldElement2625`. The two aren't
@@ -34,7 +34,7 @@ rustflags = [
     #
     # Re-enabling cleanly requires either:
     #   (a) Engine25519 ↔ FieldElement2625 conversions in the
-    #       vendored curve25519-dalek lizard module, or
+    #       fork's curve25519-dalek lizard module, or
     #   (b) an upstream libsignal change to make zkgroup's lizard
     #       use avoid the type mix.
     # Both out of scope for now; uncomment once one ships.

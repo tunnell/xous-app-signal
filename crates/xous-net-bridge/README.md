@@ -38,16 +38,17 @@ us:
 
 - `xous-signal-worker` — directly imports `SyncHttpClient` and
   `signal_production_roots`.
-- `vendor/libsignal-service-rs/` — the vendored fork of
-  libsignal-service-rs has been patched to call into this
-  crate's `WebSocketChannels` shape rather than its own
-  reqwest-based transport.
+- The rev-pinned libsignal-service-rs fork
+  (see [`../../docs/FORKS.md`](../../docs/FORKS.md)) — patched to
+  call into this crate's `WebSocketChannels` shape rather than
+  its own reqwest-based transport.
 
 ## Where the upstream PR lives
 
-The keepalive-tolerance change documented in
-`~/code/xas/upstream_prs/02-libsignal-service-rs-keepalive-tolerance.md`
-is currently in `vendor/libsignal-service-rs/src/websocket/mod.rs`,
-not here — but the *consequence* (tolerating up to 3
-outstanding keepalives so a healthy WS isn't closed by
-scheduling jitter) is what makes the ws_pump usable on rv32.
+The keepalive-tolerance change
+([whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431),
+closed unmerged) is carried in `src/websocket/mod.rs` on the
+libsignal-service-rs fork branch, not here — but the
+*consequence* (tolerating up to 3 outstanding keepalives so a
+healthy WS isn't closed by scheduling jitter) is what makes the
+ws_pump usable on rv32.

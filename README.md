@@ -154,9 +154,10 @@ it before running any flash command.
 
 xas tracks three upstream fixes. Status as of 2026-07-25: **#1 and
 #3 below are merged upstream**; #2 was **closed unmerged** by its
-author on 2026-07-18, so its fix stays vendored. The
+author on 2026-07-18, so its fix stays on our fork. The
 pinned `xas-v0.2` branch of [`tunnell/xous-core`](https://github.com/tunnell/xous-core)
-and the vendored copy of `libsignal-service-rs` carry whatever has
+and the rev-pinned fork of `libsignal-service-rs`
+([docs/FORKS.md](docs/FORKS.md)) carry whatever has
 not yet reached a release xas builds against.
 
 1. **`betrusted-io/xous-core` net-service encoding fix** —
@@ -187,9 +188,11 @@ not yet reached a release xas builds against.
    proposed an opt-in `with_max_outstanding_keepalives(...)`
    constructor so callers like xas could tolerate the race
    without changing default behavior for other consumers. The
-   patch lives in `vendor/libsignal-service-rs/` in this repo as
+   patch lives on the rev-pinned
+   [`tunnell/libsignal-service-rs`](https://github.com/tunnell/libsignal-service-rs)
+   fork branch `xous-782c0d6` ([docs/FORKS.md](docs/FORKS.md)) as
    a constant `MAX_OUTSTANDING_KEEPALIVES = 3` (semantically
-   equivalent for our use); with the PR closed, the vendored
+   equivalent for our use); with the PR closed, the fork
    constant is the long-term shape — no upstream re-alignment is
    pending.
 3. **`rust-lang/rust` Xous std-side recv encoding** —
@@ -201,8 +204,8 @@ not yet reached a release xas builds against.
    becomes belt-and-suspenders rather than load-bearing.
 
 With #1 and #3 merged and #2 closed, no upstream merge is
-pending. The keepalive tolerance remains a vendored delta,
-tracked in `vendor/libsignal-service-rs.diff`.
+pending. The keepalive tolerance remains a fork delta, visible
+in the compare URL in [docs/FORKS.md](docs/FORKS.md).
 BUILDING.md keeps pointing at the pinned `xas-v0.2` fork branch
 until a future xas release re-pins against an upstream
 `betrusted-io/xous-core` that includes `2005a801c` and a
@@ -221,10 +224,13 @@ xous-app-signal/
 │   ├── xous-pddb-ipc/          hand-rolled PDDB IPC client
 │   ├── xous-signal-worker/     presage::Manager on worker thread + Cmd/Event channels
 │   ├── xous-app-signal/        binary entry point (binary name: `xas`)
-├── docs/                       ARCHITECTURE.md (reader's-eye-view of the codebase)
-├── tests/                      hosted-mode + Renode + precursor (hardware) test harnesses
-└── vendor/                     vendored forks of presage / libsignal-service-rs / curve25519-dalek
+├── docs/                       ARCHITECTURE.md (reader's-eye-view), FORKS.md (dependency fork pins)
+└── tests/                      hosted-mode + Renode + precursor (hardware) test harnesses
 ```
+
+The patched Signal-stack forks (presage, libsignal-service-rs,
+curve25519-dalek) are consumed as rev-pinned git dependencies,
+not in-tree copies — see [docs/FORKS.md](docs/FORKS.md).
 
 ---
 

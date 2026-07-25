@@ -41,4 +41,4 @@ consumes. The binary boundary is also where:
 ## Who depends on this crate
 
 Only Cargo and the OS — it's the executable. Nothing in the
-workspace or vendored trees should ever `use xous_app_signal::*`.
+workspace or dependency forks should ever `use xous_app_signal::*`.

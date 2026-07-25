@@ -974,8 +974,8 @@ fn drive_new_chat(app: &mut App, cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::
         // service over SGX/Intel-attested enclaves). The libsignal-
         // service-rs cdsi feature pulls boring-sys (BoringSSL) which
         // doesn't target rv32-xous, so the feature is disabled in
-        // this build. See vendor/libsignal-service-rs/Cargo.toml's
-        // default-features list.
+        // this build: every consumer sets default-features = false
+        // on libsignal-service (see docs/FORKS.md, CDSI rule).
         log::info!("xas/gam_app: F1 phone lookup not supported (CDSI disabled)");
         let _ = modals.show_notification(
             "Phone-number lookup needs\n\

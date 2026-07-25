@@ -195,5 +195,5 @@ flatipc = { path = "../../../repos/xous-core/libs/flatipc" }
 flatipc-derive = { path = "../../../repos/xous-core/libs/flatipc-derive" }
 
 # (utralib was added in a Phase C-3 first-attempt and removed when
-# u32e_backend turned out to be incompatible with the vendored
-# libsignal lizard port. Re-add when u32e is unblocked.)
+# u32e_backend turned out to be incompatible with the lizard port in
+# the curve25519-dalek fork. Re-add when u32e is unblocked.)

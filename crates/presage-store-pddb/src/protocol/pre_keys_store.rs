@@ -1,7 +1,7 @@
 //! `PreKeysStore` extension trait — 8 ID-counter / count methods. The
 //! "next id" semantics match presage-store-sqlite (max + 1, or 1 for
-//! an empty store) — see vendor/presage/presage-store-sqlite/src/
-//! protocol.rs:236-318.
+//! an empty store) — see presage-store-sqlite/src/
+//! protocol.rs:236-318 in whisperfish/presage.
 
 use async_trait::async_trait;
 use presage::libsignal_service::pre_keys::PreKeysStore;
