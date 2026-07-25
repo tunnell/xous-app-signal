@@ -434,7 +434,7 @@ hop, so you can pick where to put a `log::info!`.
    (`async fn process_received`). Parses the
    Content body, builds an `Event::Message { sender,
    sender_phone, sender_name, body, timestamp }`, and sends on
-   `event_tx` (`lib.rs:737`).
+   `event_tx`.
 6. **UI consumes the event** —
    `crates/xous-app-signal/src/gam_app.rs::handle_worker_event`.
    The event reaches the GAM main loop via the forwarder

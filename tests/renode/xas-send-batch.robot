@@ -15,7 +15,7 @@ compiles for rv32 and runs under the real xous async runtime.
 The host-side `cargo test -p presage-store-pddb` covers the same
 abstraction in 15 unit tests.
 
-Build / run sequence (mirrors xas-pddb-real-probe.robot):
+Build / run sequence (mirrors xas-pddb-probe.robot):
 
     cd <xas repo root>
     cargo build --target=riscv32imac-unknown-xous-elf --release \
