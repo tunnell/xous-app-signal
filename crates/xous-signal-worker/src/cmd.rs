@@ -20,19 +20,14 @@
 //!
 //! # Sensitive data crossing this boundary
 //!
-//! - [`Cmd::SendMessage`] carries the outgoing plaintext `body`
-//!   (still unencrypted at this point: libsignal does the
-//!   X3DH/PQXDH + double-ratchet encryption *after* this command
-//!   is consumed by the worker).
-//! - [`Event::Message`] carries the *decrypted* plaintext `body`
-//!   of an inbound message — the libsignal trust witness for "this
-//!   text was authentically sent by `sender`."
-//! - [`Event::LinkUrl`] carries the secondary-device provisioning
-//!   URL. Anyone able to read this URL within its window can claim
-//!   the link.
-//! - [`Event::LinkComplete`] / [`AccountInfoData`] surface ACI,
-//!   phone number, and device name — Signal account identifiers
-//!   that link the device to its real-world account.
+//! - [`Cmd::SendMessage`] carries the outgoing plaintext `body` (still unencrypted at this point: libsignal
+//!   does the X3DH/PQXDH + double-ratchet encryption *after* this command is consumed by the worker).
+//! - [`Event::Message`] carries the *decrypted* plaintext `body` of an inbound message — the libsignal trust
+//!   witness for "this text was authentically sent by `sender`."
+//! - [`Event::LinkUrl`] carries the secondary-device provisioning URL. Anyone able to read this URL within
+//!   its window can claim the link.
+//! - [`Event::LinkComplete`] / [`AccountInfoData`] surface ACI, phone number, and device name — Signal
+//!   account identifiers that link the device to its real-world account.
 
 /// Commands sent from the app (main thread) to the Manager worker.
 #[derive(Debug, Clone)]
@@ -274,10 +269,9 @@ pub enum Event {
     /// our generated identity. The string MUST be treated as
     /// sensitive even though it expires:
     ///
-    /// - Do not log the URL to any persistent surface (UART, PDDB
-    ///   diagnostic dump, screenshot uploader).
-    /// - Render directly to the user's display only; do not stage
-    ///   it through any in-memory buffer that may be later dumped.
+    /// - Do not log the URL to any persistent surface (UART, PDDB diagnostic dump, screenshot uploader).
+    /// - Render directly to the user's display only; do not stage it through any in-memory buffer that may be
+    ///   later dumped.
     ///
     /// See `xous-signal-worker` REFACTOR_NOTES for the audit item
     /// covering the current UART emission of this URL inside
@@ -354,17 +348,13 @@ pub enum Event {
     /// `body` is decrypted plaintext from a remote party. Three
     /// cautions:
     ///
-    /// 1. The string content is attacker-influenceable — it is
-    ///    whatever the sender chose to type. UI code rendering it
-    ///    must treat as untrusted UTF-8 (display sanitization,
-    ///    no shell/format interpretation).
-    /// 2. The string MUST NOT be logged or persisted outside the
-    ///    PDDB-backed `Store`. The worker itself logs only the
-    ///    variant kind and `body_len`, never the body.
-    /// 3. The string lives in RAM only — `Drop` of this struct
-    ///    deallocates without zeroizing. Defense in depth would
-    ///    require a `Zeroizing<String>` wrapper here; out of scope
-    ///    for the channel surface but flagged in REFACTOR_NOTES.
+    /// 1. The string content is attacker-influenceable — it is whatever the sender chose to type. UI code
+    ///    rendering it must treat as untrusted UTF-8 (display sanitization, no shell/format interpretation).
+    /// 2. The string MUST NOT be logged or persisted outside the PDDB-backed `Store`. The worker itself logs
+    ///    only the variant kind and `body_len`, never the body.
+    /// 3. The string lives in RAM only — `Drop` of this struct deallocates without zeroizing. Defense in
+    ///    depth would require a `Zeroizing<String>` wrapper here; out of scope for the channel surface but
+    ///    flagged in REFACTOR_NOTES.
     Message {
         /// `service_id_string()` of the sender — the thread key the
         /// UI groups conversations by. libsignal-authenticated; see

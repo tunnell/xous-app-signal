@@ -9,27 +9,24 @@
 //!
 //! Pre-link screens:
 //!
-//! - **Menu** — landing for an unlinked device. Items: Link / About
-//!   / Help. Up/Down navigates; Enter (or `'∴'`) selects.
+//! - **Menu** — landing for an unlinked device. Items: Link / About / Help. Up/Down navigates; Enter (or
+//!   `'∴'`) selects.
 //! - **About** — version string, author handle, what xas protects.
-//! - **Linking** — transient; shown while the worker is waiting on
-//!   the provisioning WebSocket. The QR modal opens on top of this
-//!   screen when the worker emits `Event::LinkUrl`.
-//! - **Linked { Success }** — brief banner; auto-fires
-//!   `Cmd::StartReceive` and transitions to **Home**.
+//! - **Linking** — transient; shown while the worker is waiting on the provisioning WebSocket. The QR modal
+//!   opens on top of this screen when the worker emits `Event::LinkUrl`.
+//! - **Linked { Success }** — brief banner; auto-fires `Cmd::StartReceive` and transitions to **Home**.
 //! - **Linked { Failure }** — error string; Enter returns to Menu.
 //!
 //! Post-link screens:
 //!
-//! - **Home** — the conversation list. F1 opens a new chat,
-//!   F2 syncs contacts, F3 opens Help, F4 opens Settings.
-//! - **Thread { uuid }** — single conversation history plus an
-//!   in-screen compose box. Enter sends; Esc/Menu opens Settings.
+//! - **Home** — the conversation list. F1 opens a new chat, F2 syncs contacts, F3 opens Help, F4 opens
+//!   Settings.
+//! - **Thread { uuid }** — single conversation history plus an in-screen compose box. Enter sends; Esc/Menu
+//!   opens Settings.
 //! - **Settings** — Profile / Help / About / Logout.
 //! - **Profile** — account display name, phone, ACI.
 //! - **Help** — FAQ pointer and Wi-Fi recipe.
-//! - **NoInternet** — preflight failure; transitions back to the
-//!   intended next screen on retry success.
+//! - **NoInternet** — preflight failure; transitions back to the intended next screen on retry success.
 //!
 //! # Trust boundary
 //!
@@ -132,13 +129,17 @@ enum Screen {
     /// Terminal link banner. Auto-transitions to [`Self::Home`] on
     /// `Success` after the user presses Enter; Enter on `Failure`
     /// returns to the pre-link Menu.
-    Linked { kind: LinkedKind },
+    Linked {
+        kind: LinkedKind,
+    },
     /// Post-link landing: conversation list. Default screen after
     /// `Event::LinkComplete`.
     Home,
     /// Per-conversation history view plus the in-screen compose
     /// box.
-    Thread { uuid: Uuid },
+    Thread {
+        uuid: Uuid,
+    },
     /// Post-link settings sub-menu (Profile / Help / About /
     /// Logout). Reachable via F4 (or Esc) from [`Self::Home`].
     Settings,
@@ -150,7 +151,10 @@ enum Screen {
     /// instead of attempting any network operation. Enter re-runs
     /// the check; on success, transitions to the screen the user
     /// was trying to reach (encoded in `next`).
-    NoInternet { next: NextScreenAfterInternet, reason: String },
+    NoInternet {
+        next: NextScreenAfterInternet,
+        reason: String,
+    },
 }
 
 /// What to do when the no-internet preflight clears. Embedded in
@@ -344,11 +348,7 @@ impl App {
                 Rectangle::new_with_style(
                     Point::new(0, 0),
                     self.bounds,
-                    DrawStyle {
-                        fill_color: Some(PixelColor::Light),
-                        stroke_color: None,
-                        stroke_width: 0,
-                    },
+                    DrawStyle { fill_color: Some(PixelColor::Light), stroke_color: None, stroke_width: 0 },
                 ),
             )
             .map_err(|e| format!("draw_rectangle: {:?}", e))?;
@@ -457,12 +457,8 @@ impl App {
                     LinkedKind::Success => "Link succeeded",
                     LinkedKind::Failure => "Link failed",
                 };
-                write!(
-                    tv.text,
-                    "{}\n\n{}\n\nPress Enter to continue.",
-                    title, self.last_status
-                )
-                .map_err(|e| format!("write Linked: {}", e))?
+                write!(tv.text, "{}\n\n{}\n\nPress Enter to continue.", title, self.last_status)
+                    .map_err(|e| format!("write Linked: {}", e))?
             }
             Screen::Home => self.write_home(&mut tv.text)?,
             Screen::Thread { uuid } => self.write_thread(&mut tv.text, uuid)?,
@@ -472,9 +468,7 @@ impl App {
             Screen::NoInternet { reason, .. } => self.write_no_internet(&mut tv.text, reason)?,
         }
 
-        self.gam
-            .post_textview(&mut tv)
-            .map_err(|e| format!("post_textview: {:?}", e))?;
+        self.gam.post_textview(&mut tv).map_err(|e| format!("post_textview: {:?}", e))?;
         self.gam.redraw().map_err(|e| format!("redraw: {:?}", e))?;
         Ok(())
     }
@@ -493,8 +487,7 @@ impl App {
                 write!(out, "{} {}\n", mark, label).map_err(|e| format!("item: {}", e))?;
             }
         }
-        write!(out, "\nUp/Down: navigate\nEnter: select")
-            .map_err(|e| format!("foot: {}", e))
+        write!(out, "\nUp/Down: navigate\nEnter: select").map_err(|e| format!("foot: {}", e))
     }
 
     /// Render the conversation-list screen.
@@ -529,13 +522,10 @@ impl App {
 
         if self.store.dialogues().is_empty() {
             writeln!(out).map_err(|e| format!("home empty: {}", e))?;
-            writeln!(out, "      No conversations yet.")
-                .map_err(|e| format!("home empty: {}", e))?;
+            writeln!(out, "      No conversations yet.").map_err(|e| format!("home empty: {}", e))?;
             writeln!(out).map_err(|e| format!("home empty: {}", e))?;
-            writeln!(out, "  Wait for someone to message,")
-                .map_err(|e| format!("home empty: {}", e))?;
-            writeln!(out, "  or press F1 to start one.")
-                .map_err(|e| format!("home empty: {}", e))?;
+            writeln!(out, "  Wait for someone to message,").map_err(|e| format!("home empty: {}", e))?;
+            writeln!(out, "  or press F1 to start one.").map_err(|e| format!("home empty: {}", e))?;
             writeln!(out).map_err(|e| format!("home empty: {}", e))?;
             writeln!(out, "  F1 New  F2 Sync  F3 Help  F4 Settings")
                 .map_err(|e| format!("home empty: {}", e))?;
@@ -571,15 +561,10 @@ impl App {
             } else {
                 String::new()
             };
-            writeln!(
-                out,
-                "{} {} {:<26} {:>4}",
-                unread_marker, status_glyph, snippet_short, badge
-            )
-            .map_err(|e| format!("home row body: {}", e))?;
+            writeln!(out, "{} {} {:<26} {:>4}", unread_marker, status_glyph, snippet_short, badge)
+                .map_err(|e| format!("home row body: {}", e))?;
 
-            writeln!(out, "{}", "-".repeat(45))
-                .map_err(|e| format!("home sep: {}", e))?;
+            writeln!(out, "{}", "-".repeat(45)).map_err(|e| format!("home sep: {}", e))?;
         }
         writeln!(out).map_err(|e| format!("home foot: {}", e))?;
         write!(out, "  ↑↓ Sel  Enter Open\n  F1 New  F2 Sync  F3 Help  F4 Settings")
@@ -630,8 +615,7 @@ impl App {
 
         if thread_msgs.is_empty() {
             writeln!(out).map_err(|e| format!("thread empty: {}", e))?;
-            writeln!(out, "  (no messages in this thread)")
-                .map_err(|e| format!("thread empty: {}", e))?;
+            writeln!(out, "  (no messages in this thread)").map_err(|e| format!("thread empty: {}", e))?;
         } else {
             for m in &thread_msgs {
                 let ts = crate::dialogue::brief_relative(m.timestamp, now_ms);
@@ -646,8 +630,7 @@ impl App {
                 } else {
                     format!("{} {}", crate::dialogue::ellipsize(&m.author_label, 22), ts)
                 };
-                writeln!(out, "{}", header_line)
-                    .map_err(|e| format!("thread row hdr: {}", e))?;
+                writeln!(out, "{}", header_line).map_err(|e| format!("thread row hdr: {}", e))?;
                 writeln!(out, "  {}", crate::dialogue::ellipsize(&m.body, 70))
                     .map_err(|e| format!("thread row body: {}", e))?;
                 writeln!(out).map_err(|e| format!("thread row sep: {}", e))?;
@@ -660,26 +643,17 @@ impl App {
         // scroll today.
         writeln!(out, "> {}_", crate::dialogue::ellipsize(&self.compose_buffer, 30))
             .map_err(|e| format!("thread compose: {}", e))?;
-        write!(out, "Enter Send  Esc Back  F4 Settings")
-            .map_err(|e| format!("thread hint: {}", e))?;
+        write!(out, "Enter Send  Esc Back  F4 Settings").map_err(|e| format!("thread hint: {}", e))?;
         Ok(())
     }
 
     fn settings_items(&self) -> [SettingsItem; 4] {
-        [
-            SettingsItem::Profile,
-            SettingsItem::Help,
-            SettingsItem::About,
-            SettingsItem::Logout,
-        ]
+        [SettingsItem::Profile, SettingsItem::Help, SettingsItem::About, SettingsItem::Logout]
     }
 
     fn settings_move(&mut self, delta: isize) {
         let items = self.settings_items();
-        let idx = items
-            .iter()
-            .position(|s| *s == self.settings_selected)
-            .unwrap_or(0);
+        let idx = items.iter().position(|s| *s == self.settings_selected).unwrap_or(0);
         let len = items.len() as isize;
         let new = (idx as isize + delta).rem_euclid(len);
         self.settings_selected = items[new as usize];
@@ -697,16 +671,12 @@ impl App {
             };
             writeln!(out, "{} {}", mark, label).map_err(|e| format!("set item: {}", e))?;
         }
-        write!(out, "\n↑↓ Sel  Enter Open  Esc Back")
-            .map_err(|e| format!("set foot: {}", e))
+        write!(out, "\n↑↓ Sel  Enter Open  Esc Back").map_err(|e| format!("set foot: {}", e))
     }
 
     fn write_profile(&self, out: &mut String) -> Result<(), String> {
         let none = "(not loaded)";
-        let device = self
-            .account_device_name
-            .as_deref()
-            .unwrap_or(none);
+        let device = self.account_device_name.as_deref().unwrap_or(none);
         let phone = self.account_phone.as_deref().unwrap_or(none);
         let aci = self.account_aci.as_deref().unwrap_or(none);
         write!(
@@ -720,9 +690,7 @@ impl App {
               by libsignal; the primary\n\
               phone holds that state.)\n\n\
              Press Enter to return.",
-            device,
-            phone,
-            aci,
+            device, phone, aci,
         )
         .map_err(|e| format!("profile: {}", e))
     }
@@ -779,9 +747,7 @@ impl App {
 /// (emoji, accented chars, CJK) is silently dropped to match the
 /// font set the GAM renderer currently exposes; widening this
 /// filter is straightforward once the font has the glyphs.
-fn is_compose_char(c: char) -> bool {
-    c.is_alphanumeric() || c == ' ' || c.is_ascii_punctuation()
-}
+fn is_compose_char(c: char) -> bool { c.is_alphanumeric() || c == ' ' || c.is_ascii_punctuation() }
 
 /// If `XAS_MOCK_MESSAGES=1` is set in the environment, seed `App`
 /// with a small fake conversation history so hosted-mode UI work
@@ -813,22 +779,8 @@ fn seed_mock_messages_if_requested(app: &mut App) {
         (bob, "Bob", "thanks!", 5 * 60_000, false, SendStatus::Sent),
         (dad, "Dad", "lunch sunday?", 25 * 60 * 60_000, false, SendStatus::Sent),
         (dad, "You", "On my way", 24 * 60 * 60_000, true, SendStatus::Delivered),
-        (
-            unknown,
-            "+14155550199",
-            "Your Uber has arrived",
-            3 * 60 * 60_000,
-            false,
-            SendStatus::Sent,
-        ),
-        (
-            unknown,
-            "+14155550199",
-            "Your driver is waiting",
-            2 * 60 * 60_000,
-            false,
-            SendStatus::Sent,
-        ),
+        (unknown, "+14155550199", "Your Uber has arrived", 3 * 60 * 60_000, false, SendStatus::Sent),
+        (unknown, "+14155550199", "Your driver is waiting", 2 * 60 * 60_000, false, SendStatus::Sent),
     ];
 
     app.store.seed(mocks.iter().map(|(uuid, label, body, age_ms, outgoing, status)| {
@@ -857,10 +809,7 @@ fn seed_mock_messages_if_requested(app: &mut App) {
 /// `(very long ago)`.
 fn unix_now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 /// Fire the optimistic send flow for the compose buffer: take the
@@ -876,19 +825,11 @@ fn send_compose(app: &mut App, cmd_tx: &Sender<Cmd>, recipient_uuid: Uuid, trigg
     let body = std::mem::take(&mut app.compose_buffer);
     let send_ts = unix_now_ms();
     let recipient_str = recipient_uuid.to_string();
-    log::info!(
-        "xas/gam_app: {} to={} ({} body bytes) ts={}",
-        trigger,
-        recipient_str,
-        body.len(),
-        send_ts,
-    );
+    log::info!("xas/gam_app: {} to={} ({} body bytes) ts={}", trigger, recipient_str, body.len(), send_ts,);
     app.store.push_outgoing_pending(recipient_uuid, body.clone(), send_ts);
-    if let Err(e) = cmd_tx.send_blocking(Cmd::SendMessage {
-        recipient: recipient_str,
-        body,
-        timestamp: send_ts,
-    }) {
+    if let Err(e) =
+        cmd_tx.send_blocking(Cmd::SendMessage { recipient: recipient_str, body, timestamp: send_ts })
+    {
         log::warn!("xas/gam_app: Cmd::SendMessage send err: {:?}", e);
         app.store.mark_send_failed(send_ts);
     }
@@ -943,9 +884,7 @@ fn drive_logout(cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::XousNames) {
     // Confirm modal first — Logout is irreversible without re-linking
     // (which means another QR-scan ceremony with the phone).
     let confirm = modals
-        .alert_builder(
-            "Logout?\nThis wipes link state.\nYou will need to scan\nthe QR code again.",
-        )
+        .alert_builder("Logout?\nThis wipes link state.\nYou will need to scan\nthe QR code again.")
         .field(Some("type 'yes' to confirm".to_string()), None)
         .build();
     let confirmed = match confirm {
@@ -959,10 +898,8 @@ fn drive_logout(cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::XousNames) {
     log::info!("xas/gam_app: Logout confirmed; sending Cmd::Logout");
     if let Err(e) = cmd_tx.send_blocking(Cmd::Logout) {
         log::warn!("xas/gam_app: Cmd::Logout send err: {:?}", e);
-        let _ = modals.show_notification(
-            "Logout failed:\nworker not reachable.\nThe app may need a restart.",
-            None,
-        );
+        let _ = modals
+            .show_notification("Logout failed:\nworker not reachable.\nThe app may need a restart.", None);
     }
     // Don't transition here; wait for Event::LoggedOut to arrive via
     // the forwarder, where handle_worker_event will reset App state.
@@ -976,10 +913,9 @@ fn drive_logout(cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::XousNames) {
 /// Three input shapes are accepted:
 ///
 /// - UUID (immediate, no server round-trip).
-/// - Username (`name.000` form; resolved via
-///   `Cmd::ResolveUsername` and the matching `Event` reply).
-/// - E.164 phone (rejected — CDSI is not available in this build;
-///   see the inline comment on the `+`-prefixed branch).
+/// - Username (`name.000` form; resolved via `Cmd::ResolveUsername` and the matching `Event` reply).
+/// - E.164 phone (rejected — CDSI is not available in this build; see the inline comment on the `+`-prefixed
+///   branch).
 ///
 /// # Trust boundary
 ///
@@ -987,11 +923,7 @@ fn drive_logout(cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::XousNames) {
 /// worker, then through libsignal-service's username-resolution
 /// endpoint over the TLS-pinned Signal connection. The other two
 /// paths are local-only.
-fn drive_new_chat(
-    app: &mut App,
-    cmd_tx: &Sender<Cmd>,
-    modals_xns: &xous_names::XousNames,
-) {
+fn drive_new_chat(app: &mut App, cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::XousNames) {
     let modals = match modals::Modals::new(modals_xns) {
         Ok(m) => m,
         Err(e) => {
@@ -999,11 +931,7 @@ fn drive_new_chat(
             return;
         }
     };
-    let raw = match modals
-        .alert_builder("New chat — UUID or name.000")
-        .field(None, None)
-        .build()
-    {
+    let raw = match modals.alert_builder("New chat — UUID or name.000").field(None, None).build() {
         Ok(payloads) => payloads.first().as_str().trim().to_string(),
         Err(e) => {
             log::info!("xas/gam_app: F1 new chat cancelled / err: {:?}", e);
@@ -1038,10 +966,7 @@ fn drive_new_chat(
         // arrives via the forwarder and is handled by
         // handle_username_resolve_result, which transitions to
         // Screen::Thread on success or sets app.last_status on failure.
-        let _ = modals.show_notification(
-            &format!("Looking up\n{}\non the server...", raw),
-            None,
-        );
+        let _ = modals.show_notification(&format!("Looking up\n{}\non the server...", raw), None);
         return;
     }
     if raw.starts_with('+') && raw.len() > 1 && raw[1..].chars().all(|c| c.is_ascii_digit()) {
@@ -1062,12 +987,8 @@ fn drive_new_chat(
         return;
     }
     log::info!("xas/gam_app: F1 unrecognized input {:?}", raw);
-    let _ = modals.show_notification(
-        "Not recognized as a\nUUID or username.\nFormat: name.NNN",
-        None,
-    );
+    let _ = modals.show_notification("Not recognized as a\nUUID or username.\nFormat: name.NNN", None);
 }
-
 
 /// Run the GAM-rendered UI loop.
 ///
@@ -1094,9 +1015,7 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
     log::info!("xas/gam_app: starting GAM-rendered loop");
 
     let xns = xous_names::XousNames::new().map_err(|e| format!("XousNames::new: {:?}", e))?;
-    let sid = xns
-        .register_name(SERVER_NAME_XAS, None)
-        .map_err(|e| format!("register_name: {:?}", e))?;
+    let sid = xns.register_name(SERVER_NAME_XAS, None).map_err(|e| format!("register_name: {:?}", e))?;
 
     let gam = gam::Gam::new(&xns).map_err(|e| format!("Gam::new: {:?}", e))?;
     let token = gam
@@ -1141,13 +1060,7 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
                     pending.lock().unwrap().push_back(event);
                     let _ = xous::send_message(
                         self_cid,
-                        Message::new_scalar(
-                            XasOp::WorkerEvent.to_usize().unwrap(),
-                            0,
-                            0,
-                            0,
-                            0,
-                        ),
+                        Message::new_scalar(XasOp::WorkerEvent.to_usize().unwrap(), 0, 0, 0, 0),
                     );
                 }
                 log::warn!("xas/gam_app: event forwarder exited (event_rx closed)");
@@ -1155,8 +1068,7 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
             .map_err(|e| format!("spawn forwarder: {}", e))?;
     }
 
-    let modals_xns = xous_names::XousNames::new()
-        .map_err(|e| format!("XousNames for modals: {:?}", e))?;
+    let modals_xns = xous_names::XousNames::new().map_err(|e| format!("XousNames for modals: {:?}", e))?;
 
     let mut app = App {
         gam,
@@ -1263,10 +1175,7 @@ fn handle_keys(
                     Ok(()) => drive_link(app, cmd_tx, event_rx, modals_xns),
                     Err(reason) => {
                         log::info!("xas/gam_app: preflight failed before Link: {}", reason);
-                        app.screen = Screen::NoInternet {
-                            next: NextScreenAfterInternet::Link,
-                            reason,
-                        };
+                        app.screen = Screen::NoInternet { next: NextScreenAfterInternet::Link, reason };
                     }
                 },
                 MenuItem::About => app.screen = Screen::About,
@@ -1293,10 +1202,7 @@ fn handle_keys(
                         }
                         Err(reason) => {
                             log::info!("xas/gam_app: preflight failed before Home: {}", reason);
-                            app.screen = Screen::NoInternet {
-                                next: NextScreenAfterInternet::Home,
-                                reason,
-                            };
+                            app.screen = Screen::NoInternet { next: NextScreenAfterInternet::Home, reason };
                         }
                     }
                 } else {
@@ -1314,9 +1220,7 @@ fn handle_keys(
                 let next = *next;
                 match check_internet(modals_xns) {
                     Ok(()) => match next {
-                        NextScreenAfterInternet::Link => {
-                            drive_link(app, cmd_tx, event_rx, modals_xns)
-                        }
+                        NextScreenAfterInternet::Link => drive_link(app, cmd_tx, event_rx, modals_xns),
                         NextScreenAfterInternet::Home => {
                             app.screen = Screen::Home;
                             app.home_focus = 0;
@@ -1388,10 +1292,7 @@ fn handle_keys(
                 if let Err(e) = cmd_tx.send_blocking(Cmd::SyncContacts) {
                     log::warn!("xas/gam_app: Cmd::SyncContacts send err: {:?}", e);
                     if let Ok(modals) = modals::Modals::new(modals_xns) {
-                        let _ = modals.show_notification(
-                            "Sync send failed:\nworker not reachable.",
-                            None,
-                        );
+                        let _ = modals.show_notification("Sync send failed:\nworker not reachable.", None);
                     }
                 } else if let Ok(modals) = modals::Modals::new(modals_xns) {
                     // Brief feedback so the user knows the tap registered.
@@ -1458,7 +1359,9 @@ fn handle_keys(
                         // and emit Event::AccountInfo. UI updates
                         // when Event arrives.
                         if app.account_aci.is_none() {
-                            log::info!("xas/gam_app: Profile entry, account info not loaded — sending Cmd::GetAccountInfo");
+                            log::info!(
+                                "xas/gam_app: Profile entry, account info not loaded — sending Cmd::GetAccountInfo"
+                            );
                             if let Err(e) = cmd_tx.send_blocking(Cmd::GetAccountInfo) {
                                 log::warn!("xas/gam_app: Cmd::GetAccountInfo send err: {:?}", e);
                             }
@@ -1565,15 +1468,11 @@ fn handle_worker_event(
             }
         }
         Event::LinkComplete { device_name, aci, phone } => {
-            log::info!(
-                "xas/gam_app: LinkComplete device={} aci={} phone={}",
-                device_name, aci, phone
-            );
+            log::info!("xas/gam_app: LinkComplete device={} aci={} phone={}", device_name, aci, phone);
             app.linked = true;
             app.linking_in_progress = false;
             app.screen = Screen::Linked { kind: LinkedKind::Success };
-            app.last_status =
-                format!("device: {}\naci:    {}\nphone:  {}", device_name, aci, phone);
+            app.last_status = format!("device: {}\naci:    {}\nphone:  {}", device_name, aci, phone);
             app.account_device_name = Some(device_name);
             app.account_aci = Some(aci);
             app.account_phone = Some(phone);
@@ -1594,9 +1493,7 @@ fn handle_worker_event(
             // late-arriving error is a confirmation that the cancel
             // took effect, not a user-facing problem.
             if !app.linking_in_progress {
-                log::info!(
-                    "xas/gam_app: ignoring late LinkError (link not in progress; user cancelled)"
-                );
+                log::info!("xas/gam_app: ignoring late LinkError (link not in progress; user cancelled)");
                 return;
             }
             app.linking_in_progress = false;
@@ -1608,15 +1505,9 @@ fn handle_worker_event(
             // contacts store typically has both name and phone for
             // peers who've been synced from the linked phone; only
             // first-sight peers fall through to UUID.
-            let author_label = sender_name
-                .clone()
-                .or_else(|| sender_phone.clone())
-                .unwrap_or_else(|| sender.clone());
-            log::info!(
-                "xas/gam_app: inbound message from {} ({} bytes)",
-                author_label,
-                body.len()
-            );
+            let author_label =
+                sender_name.clone().or_else(|| sender_phone.clone()).unwrap_or_else(|| sender.clone());
+            log::info!("xas/gam_app: inbound message from {} ({} bytes)", author_label, body.len());
             // ACI from the worker is a canonical UUID string.
             // Fall back to the nil UUID if parse fails (defensive
             // — practically shouldn't happen since the worker only
@@ -1645,10 +1536,7 @@ fn handle_worker_event(
             // Otherwise (no match), the worker emitted an event for
             // a send we don't have an optimistic row for. Log + ignore.
             if !app.store.mark_send_delivered(timestamp) {
-                log::info!(
-                    "xas/gam_app: SendComplete ts={} with no matching pending row",
-                    timestamp
-                );
+                log::info!("xas/gam_app: SendComplete ts={} with no matching pending row", timestamp);
             }
         }
         Event::SendError { reason, timestamp } => {
@@ -1669,7 +1557,9 @@ fn handle_worker_event(
         Event::AccountInfo(Ok(info)) => {
             log::info!(
                 "xas/gam_app: AccountInfo OK device={} aci={} phone={}",
-                info.device_name, info.aci, info.phone,
+                info.device_name,
+                info.aci,
+                info.phone,
             );
             app.account_device_name = Some(info.device_name);
             app.account_aci = Some(info.aci);
@@ -1688,10 +1578,7 @@ fn handle_worker_event(
             // worth showing a popup since this is a passive lookup.
         }
         Event::ContactResolved { aci_uuid, name } => {
-            log::info!(
-                "xas/gam_app: ContactResolved {} → {:?}",
-                aci_uuid, name
-            );
+            log::info!("xas/gam_app: ContactResolved {} → {:?}", aci_uuid, name);
             // Replace any UUID-shaped author_label whose uuid matches
             // with the resolved name. Outgoing messages (author_label
             // == "You") are untouched by virtue of "You" not looking
@@ -1732,10 +1619,7 @@ fn handle_worker_event(
             // unlinked, so they know to re-link rather than thinking
             // the device is generally broken.
             app.reset_to_unlinked();
-            app.last_status = format!(
-                "Signal authentication expired:\n{}\n\nPlease re-link.",
-                reason
-            );
+            app.last_status = format!("Signal authentication expired:\n{}\n\nPlease re-link.", reason);
             let _ = app.render();
         }
         Event::SignalConflictingDevice(reason) => {
@@ -1748,10 +1632,7 @@ fn handle_worker_event(
             // the user a different app instance is active and they
             // need to re-link this device to use it.
             app.reset_to_unlinked();
-            app.last_status = format!(
-                "Another device took over:\n{}\n\nPlease re-link.",
-                reason
-            );
+            app.last_status = format!("Another device took over:\n{}\n\nPlease re-link.", reason);
             let _ = app.render();
         }
         Event::UsernameResolveResult(result) => {
@@ -1772,10 +1653,7 @@ fn handle_worker_event(
 /// Stale responses (those arriving after the user navigated away
 /// from the New Chat modal) are silently dropped via the
 /// `username_lookup_in_progress` guard.
-fn handle_username_resolve_result(
-    app: &mut App,
-    result: Result<Option<Uuid>, String>,
-) {
+fn handle_username_resolve_result(app: &mut App, result: Result<Option<Uuid>, String>) {
     if !app.username_lookup_in_progress {
         // No-op: probably a stale response after the user navigated
         // away. Just clear the in-flight indicator if any.
@@ -1816,10 +1694,7 @@ fn next_attempt_device_name() -> String {
         return "xas".to_string();
     };
     let path = std::path::PathBuf::from(home).join(".xas-link-attempts");
-    let n: u32 = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0);
+    let n: u32 = std::fs::read_to_string(&path).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
     let _ = std::fs::write(&path, format!("{}", n + 1));
     format!("xas{}", n)
 }
@@ -1828,9 +1703,7 @@ fn next_attempt_device_name() -> String {
 /// counts on, so every link attempt defaults to the bare `"xas"`
 /// name. The user can still override via the device-name modal.
 #[cfg(target_os = "xous")]
-fn next_attempt_device_name() -> String {
-    "xas".to_string()
-}
+fn next_attempt_device_name() -> String { "xas".to_string() }
 
 /// No-internet preflight.
 ///
@@ -1842,12 +1715,9 @@ fn next_attempt_device_name() -> String {
 ///
 /// # Errors
 ///
-/// - `"COM didn't respond: …"` — the COM service did not answer
-///   the `wlan_status` request.
-/// - `"Wi-Fi link is …"` — the EC reports the link is not in
-///   the `Connected` state.
-/// - `"Joined a network but no DHCP lease yet."` — link up but
-///   `ipv4.addr` is `0.0.0.0`.
+/// - `"COM didn't respond: …"` — the COM service did not answer the `wlan_status` request.
+/// - `"Wi-Fi link is …"` — the EC reports the link is not in the `Connected` state.
+/// - `"Joined a network but no DHCP lease yet."` — link up but `ipv4.addr` is `0.0.0.0`.
 ///
 /// Outside Xous (bare `cargo run` on Linux) or when
 /// `XAS_BYPASS_PREFLIGHT` is set, this returns `Ok(())`
@@ -1912,21 +1782,18 @@ fn drive_link(
     };
 
     let default_name = next_attempt_device_name();
-    let device_name = match modals
-        .alert_builder("Device name?")
-        .field(Some(default_name.clone()), None)
-        .build()
-    {
-        Ok(payloads) => {
-            let trimmed = payloads.first().as_str().trim().to_string();
-            if trimmed.is_empty() { default_name } else { trimmed }
-        }
-        Err(e) => {
-            app.screen = Screen::Linked { kind: LinkedKind::Failure };
-            app.last_status = format!("device name modal:\n{:?}", e);
-            return;
-        }
-    };
+    let device_name =
+        match modals.alert_builder("Device name?").field(Some(default_name.clone()), None).build() {
+            Ok(payloads) => {
+                let trimmed = payloads.first().as_str().trim().to_string();
+                if trimmed.is_empty() { default_name } else { trimmed }
+            }
+            Err(e) => {
+                app.screen = Screen::Linked { kind: LinkedKind::Failure };
+                app.last_status = format!("device name modal:\n{:?}", e);
+                return;
+            }
+        };
 
     app.screen = Screen::Linking;
     app.linking_in_progress = true;
@@ -1940,4 +1807,3 @@ fn drive_link(
     }
     // Return now; events arrive via the forwarder.
 }
-

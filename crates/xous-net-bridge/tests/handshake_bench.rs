@@ -8,25 +8,20 @@
 //!
 //! Two scenarios per target:
 //!
-//! 1. **shared**: `tls_connect_with_config` reusing one `Arc<ClientConfig>`
-//!    across all iterations. The Stage 0 path. The first handshake is full;
-//!    every subsequent handshake should be a TLS 1.3 PSK resumption (5-15 ms
-//!    on x86_64 vs. 50-200 ms full).
-//! 2. **per-call**: legacy `tls_connect` constructing a fresh ClientConfig
-//!    every iteration. The pre-Stage-0 path. Every handshake is a full
-//!    handshake; resumption is silently disabled.
+//! 1. **shared**: `tls_connect_with_config` reusing one `Arc<ClientConfig>` across all iterations. The Stage
+//!    0 path. The first handshake is full; every subsequent handshake should be a TLS 1.3 PSK resumption
+//!    (5-15 ms on x86_64 vs. 50-200 ms full).
+//! 2. **per-call**: legacy `tls_connect` constructing a fresh ClientConfig every iteration. The pre-Stage-0
+//!    path. Every handshake is a full handshake; resumption is silently disabled.
 //!
 //! Two targets:
 //!
-//! - `localhost`: in-process rustls server with self-signed cert. Removes
-//!   network and load-balancer variance. Lower-bound numbers.
-//! - `chat.signal.org:443`: real Signal endpoint. Includes network RTT and
-//!   any load-balancer ticket-rejection noise. Note: measurement showed
-//!   chat.signal.org never issues session tickets, so resumption cannot
-//!   engage against production (see issue #1).
-//!   Skipped automatically if `XAS_BENCH_NET=1` is not set in the
-//!   environment, because production runs of `cargo test` shouldn't hit
-//!   the live Signal infrastructure.
+//! - `localhost`: in-process rustls server with self-signed cert. Removes network and load-balancer variance.
+//!   Lower-bound numbers.
+//! - `chat.signal.org:443`: real Signal endpoint. Includes network RTT and any load-balancer ticket-rejection
+//!   noise. Note: measurement showed chat.signal.org never issues session tickets, so resumption cannot
+//!   engage against production (see issue #1). Skipped automatically if `XAS_BENCH_NET=1` is not set in the
+//!   environment, because production runs of `cargo test` shouldn't hit the live Signal infrastructure.
 //!
 //! Run with:
 //!
@@ -43,14 +38,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rustls::client::{
-    ClientSessionStore, Resumption, Tls12ClientSessionValue, Tls13ClientSessionValue,
-};
+use rustls::client::{ClientSessionStore, Resumption, Tls12ClientSessionValue, Tls13ClientSessionValue};
 use rustls::pki_types::{PrivatePkcs8KeyDer, ServerName};
 use rustls::server::ServerConnection;
 use rustls::{ClientConfig, NamedGroup, RootCertStore, ServerConfig};
-
-use xous_net_bridge::{signal_production_roots, tls_connect, tls_connect_with_config, RustlsStream};
+use xous_net_bridge::{RustlsStream, signal_production_roots, tls_connect, tls_connect_with_config};
 
 const ITERS: usize = 20;
 
@@ -90,26 +82,21 @@ impl CountingStore {
 
 impl ClientSessionStore for CountingStore {
     fn set_kx_hint(&self, _: ServerName<'static>, _: NamedGroup) {}
-    fn kx_hint(&self, _: &ServerName<'_>) -> Option<NamedGroup> {
-        None
-    }
+
+    fn kx_hint(&self, _: &ServerName<'_>) -> Option<NamedGroup> { None }
+
     fn set_tls12_session(&self, _: ServerName<'static>, _: Tls12ClientSessionValue) {}
-    fn tls12_session(&self, _: &ServerName<'_>) -> Option<Tls12ClientSessionValue> {
-        None
-    }
+
+    fn tls12_session(&self, _: &ServerName<'_>) -> Option<Tls12ClientSessionValue> { None }
+
     fn remove_tls12_session(&self, _: &ServerName<'static>) {}
-    fn insert_tls13_ticket(
-        &self,
-        server_name: ServerName<'static>,
-        value: Tls13ClientSessionValue,
-    ) {
+
+    fn insert_tls13_ticket(&self, server_name: ServerName<'static>, value: Tls13ClientSessionValue) {
         self.inserts.fetch_add(1, Ordering::SeqCst);
         self.tls13.lock().unwrap().push((server_name, value));
     }
-    fn take_tls13_ticket(
-        &self,
-        server_name: &ServerName<'static>,
-    ) -> Option<Tls13ClientSessionValue> {
+
+    fn take_tls13_ticket(&self, server_name: &ServerName<'static>) -> Option<Tls13ClientSessionValue> {
         let mut tls13 = self.tls13.lock().unwrap();
         let pos = tls13.iter().position(|(n, _)| n == server_name);
         match pos {
@@ -127,9 +114,7 @@ impl ClientSessionStore for CountingStore {
 
 fn build_counting_config(roots: RootCertStore, alpn: &[&[u8]]) -> (Arc<ClientConfig>, Arc<CountingStore>) {
     let store = Arc::new(CountingStore::new());
-    let mut config = ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+    let mut config = ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
     if !alpn.is_empty() {
         config.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
     }
@@ -141,8 +126,7 @@ fn percentile(samples_sorted: &[u128], pct: f64) -> u128 {
     if samples_sorted.is_empty() {
         return 0;
     }
-    let idx =
-        ((samples_sorted.len() as f64 - 1.0) * pct).round() as usize;
+    let idx = ((samples_sorted.len() as f64 - 1.0) * pct).round() as usize;
     samples_sorted[idx.min(samples_sorted.len() - 1)]
 }
 
@@ -154,25 +138,20 @@ struct Stats {
 
 impl Stats {
     fn new(label: &'static str, target: String) -> Self {
-        Self {
-            label,
-            target,
-            samples_us: Vec::with_capacity(ITERS),
-        }
+        Self { label, target, samples_us: Vec::with_capacity(ITERS) }
     }
-    fn record(&mut self, d: Duration) {
-        self.samples_us.push(d.as_micros());
-    }
+
+    fn record(&mut self, d: Duration) { self.samples_us.push(d.as_micros()); }
+
     fn finalize(mut self) -> Self {
         self.samples_us.sort_unstable();
         self
     }
-    fn median_ms(&self) -> f64 {
-        percentile(&self.samples_us, 0.5) as f64 / 1000.0
-    }
-    fn p99_ms(&self) -> f64 {
-        percentile(&self.samples_us, 0.99) as f64 / 1000.0
-    }
+
+    fn median_ms(&self) -> f64 { percentile(&self.samples_us, 0.5) as f64 / 1000.0 }
+
+    fn p99_ms(&self) -> f64 { percentile(&self.samples_us, 0.99) as f64 / 1000.0 }
+
     fn first_ms(&self) -> f64 {
         // After sort the original order is lost; first-iteration cost is
         // typically the max, since it's the only full handshake when
@@ -235,11 +214,8 @@ fn drive_local_handshake(stream: &mut RustlsStream) -> std::io::Result<()> {
 // Local rustls server (mirrors tls_resumption.rs's setup, abbreviated)
 // -----------------------------------------------------------------------
 
-fn mint_self_signed() -> (
-    rustls::pki_types::CertificateDer<'static>,
-    PrivatePkcs8KeyDer<'static>,
-    RootCertStore,
-) {
+fn mint_self_signed()
+-> (rustls::pki_types::CertificateDer<'static>, PrivatePkcs8KeyDer<'static>, RootCertStore) {
     let key_pair = rcgen::KeyPair::generate().expect("keypair");
     let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
         .expect("cert params")
@@ -259,10 +235,7 @@ fn build_test_server_config(
 ) -> Arc<ServerConfig> {
     let config = ServerConfig::builder()
         .with_no_client_auth()
-        .with_single_cert(
-            vec![cert_der],
-            rustls::pki_types::PrivateKeyDer::Pkcs8(key_der),
-        )
+        .with_single_cert(vec![cert_der], rustls::pki_types::PrivateKeyDer::Pkcs8(key_der))
         .expect("server config");
     Arc::new(config)
 }
@@ -284,9 +257,7 @@ fn run_local_server(
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let listener = TcpListener::bind(("127.0.0.1", port)).expect("bind");
-        listener
-            .set_nonblocking(false)
-            .expect("blocking accept");
+        listener.set_nonblocking(false).expect("blocking accept");
         for _ in 0..n {
             if stop.load(Ordering::SeqCst) {
                 break;
@@ -296,8 +267,7 @@ fn run_local_server(
                 Err(_) => continue,
             };
             sock.set_read_timeout(Some(Duration::from_secs(5))).ok();
-            let mut srv =
-                ServerConnection::new(Arc::clone(&server_config)).expect("server conn");
+            let mut srv = ServerConnection::new(Arc::clone(&server_config)).expect("server conn");
             if srv.complete_io(&mut sock).is_err() {
                 continue;
             }
@@ -316,8 +286,7 @@ fn bench_local_shared(roots: RootCertStore, port: u16) -> (Stats, Arc<CountingSt
     let (config, store) = build_counting_config(roots, &[]);
     for _ in 0..ITERS {
         let t0 = Instant::now();
-        let mut s =
-            tls_connect_with_config("localhost", port, Arc::clone(&config)).expect("connect");
+        let mut s = tls_connect_with_config("localhost", port, Arc::clone(&config)).expect("connect");
         drive_local_handshake(&mut s).expect("handshake");
         let elapsed = t0.elapsed();
         drop(s);
@@ -340,11 +309,7 @@ fn bench_local_per_call(roots: RootCertStore, port: u16) -> Stats {
     stats.finalize()
 }
 
-fn bench_remote_shared(
-    host: &str,
-    port: u16,
-    roots: RootCertStore,
-) -> (Stats, Arc<CountingStore>) {
+fn bench_remote_shared(host: &str, port: u16, roots: RootCertStore) -> (Stats, Arc<CountingStore>) {
     let mut stats = Stats::new("shared", format!("{host}:{port}"));
     let (config, store) = build_counting_config(roots, &[b"http/1.1"]);
     for _ in 0..ITERS {
@@ -417,8 +382,7 @@ fn remote_handshake_shared_vs_per_call_signal() {
     }
     let host = "chat.signal.org";
     let port = 443u16;
-    let (shared, shared_store) =
-        bench_remote_shared(host, port, signal_production_roots());
+    let (shared, shared_store) = bench_remote_shared(host, port, signal_production_roots());
     let per_call = bench_remote_per_call(host, port, signal_production_roots);
 
     eprintln!("\n--- {host}:{port} handshake bench ---");
@@ -443,8 +407,7 @@ fn remote_handshake_shared_vs_per_call_control() {
     }
     let host = "cloudflare.com";
     let port = 443u16;
-    let (shared, shared_store) =
-        bench_remote_shared(host, port, xous_net_bridge::webpki_roots());
+    let (shared, shared_store) = bench_remote_shared(host, port, xous_net_bridge::webpki_roots());
     let per_call = bench_remote_per_call(host, port, xous_net_bridge::webpki_roots);
 
     eprintln!("\n--- {host}:{port} handshake bench (control) ---");

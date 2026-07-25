@@ -206,8 +206,7 @@ pub(crate) fn looks_like_raw_uuid(s: &str) -> bool {
     if len == 36 {
         s.chars()
             .enumerate()
-            .all(|(i, c)| matches!(i, 8 | 13 | 18 | 23) == (c == '-')
-                && (c == '-' || c.is_ascii_hexdigit()))
+            .all(|(i, c)| matches!(i, 8 | 13 | 18 | 23) == (c == '-') && (c == '-' || c.is_ascii_hexdigit()))
     } else if len == 32 {
         s.chars().all(|c| c.is_ascii_hexdigit())
     } else {
@@ -219,12 +218,8 @@ pub(crate) fn looks_like_raw_uuid(s: &str) -> bool {
 mod tests {
     use super::*;
 
-    fn uuid_a() -> Uuid {
-        Uuid::from_u128(0x0123_4567_89ab_cdef_0011_2233_4455_6677)
-    }
-    fn uuid_b() -> Uuid {
-        Uuid::from_u128(0xf0f0_f0f0_f0f0_f0f0_f0f0_f0f0_f0f0_f0f0)
-    }
+    fn uuid_a() -> Uuid { Uuid::from_u128(0x0123_4567_89ab_cdef_0011_2233_4455_6677) }
+    fn uuid_b() -> Uuid { Uuid::from_u128(0xf0f0_f0f0_f0f0_f0f0_f0f0_f0f0_f0f0_f0f0) }
 
     fn incoming(uuid: Uuid, ts: u64, body: &str, label: &str) -> ThreadMessage {
         ThreadMessage {
@@ -430,10 +425,7 @@ mod tests {
 
     #[test]
     fn rebuild_all_read_yields_zero_unread() {
-        let mut msgs = vec![
-            incoming(uuid_a(), 100, "hi", "Alice"),
-            incoming(uuid_b(), 200, "hello", "Bob"),
-        ];
+        let mut msgs = vec![incoming(uuid_a(), 100, "hi", "Alice"), incoming(uuid_b(), 200, "hello", "Bob")];
         for m in &mut msgs {
             m.read = true;
         }

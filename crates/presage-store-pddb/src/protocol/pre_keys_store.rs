@@ -9,9 +9,7 @@ use presage::libsignal_service::protocol::{KyberPreKeyId, SignalProtocolError, S
 
 use super::{
     PddbProtocolStore,
-    kyber_pre_key_store::{
-        count_kyber_pre_keys, max_kyber_pre_key_id, max_last_resort_kyber_pre_key_id,
-    },
+    kyber_pre_key_store::{count_kyber_pre_keys, max_kyber_pre_key_id, max_last_resort_kyber_pre_key_id},
     pre_key_store::max_pre_key_id,
     signed_pre_key_store::{count_signed_pre_keys, max_signed_pre_key_id},
 };
@@ -42,9 +40,7 @@ impl PreKeysStore for PddbProtocolStore {
         Ok(max_signed_pre_key_id(self)?.map(SignedPreKeyId::from))
     }
 
-    async fn last_resort_kyber_prekey_id(
-        &self,
-    ) -> Result<Option<KyberPreKeyId>, SignalProtocolError> {
+    async fn last_resort_kyber_prekey_id(&self) -> Result<Option<KyberPreKeyId>, SignalProtocolError> {
         Ok(max_last_resort_kyber_pre_key_id(self)?.map(KyberPreKeyId::from))
     }
 }

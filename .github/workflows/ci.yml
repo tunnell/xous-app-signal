@@ -88,10 +88,7 @@ jobs:
 
   rustfmt:
     runs-on: ubuntu-latest
-    # Soft gate until the repo-wide `cargo +nightly fmt` commit lands
-    # (deferred so it doesn't conflict with the in-flight worker
-    # refactor, PR #38). Flip to a hard gate after that.
-    continue-on-error: true
+    # Hard gate since the repo-wide `cargo +nightly fmt` commit (#48).
     steps:
       - uses: actions/checkout@v4
 

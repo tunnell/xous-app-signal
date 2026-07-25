@@ -29,15 +29,12 @@
 //!
 //! - `open`: 1 round-trip.
 //! - `delete_key`, `delete_dict`: 1 round-trip each.
-//! - `list_keys`: 1 + N round-trips (`KeyCountInDict` plus enough
-//!   `ListKeyV2` calls to drain the dict's names, at ~4 KiB of
-//!   packed names per page).
-//! - `write_batch`: 1 round-trip for N entries totalling up to
-//!   [`crate::api::MAX_PDDB_WRITE_BATCH_LEN`] = 3800 packed bytes.
-//! - `KeyHandle::read` / `KeyHandle::write`: 1 round-trip per up-to-4072-byte
-//!   chunk.
-//! - `KeyHandle::flush_writes`, `Drop` (via `KeyDrop`): 1
-//!   blocking-scalar round-trip.
+//! - `list_keys`: 1 + N round-trips (`KeyCountInDict` plus enough `ListKeyV2` calls to drain the dict's
+//!   names, at ~4 KiB of packed names per page).
+//! - `write_batch`: 1 round-trip for N entries totalling up to [`crate::api::MAX_PDDB_WRITE_BATCH_LEN`] =
+//!   3800 packed bytes.
+//! - `KeyHandle::read` / `KeyHandle::write`: 1 round-trip per up-to-4072-byte chunk.
+//! - `KeyHandle::flush_writes`, `Drop` (via `KeyDrop`): 1 blocking-scalar round-trip.
 //!
 //! Each `WriteKey` round-trip pays a full multi-basis sync on the
 //! server side (upstream `main.rs:2293-2294`); the bulk-write path
@@ -52,10 +49,9 @@ use xous::{CID, Message, send_message};
 use xous_ipc::Buffer;
 
 use crate::api::{
-    ApiToken, DICT_NAME_LEN, Error, ErrorKind, KEY_NAME_LEN, MAX_PDDBKLISTLEN,
-    MAX_PDDB_WRITE_BATCH_LEN, Opcode, PDDB_BUF_DATA_LEN, PddbBuf, PddbDictRequest, PddbKeyList,
-    PddbKeyRequest, PddbRequestCode, PddbRetcode, PddbWriteBatch, SERVER_NAME_PDDB,
-    SERVER_NAME_PDDB_POLLER,
+    ApiToken, DICT_NAME_LEN, Error, ErrorKind, KEY_NAME_LEN, MAX_PDDB_WRITE_BATCH_LEN, MAX_PDDBKLISTLEN,
+    Opcode, PDDB_BUF_DATA_LEN, PddbBuf, PddbDictRequest, PddbKeyList, PddbKeyRequest, PddbRequestCode,
+    PddbRetcode, PddbWriteBatch, SERVER_NAME_PDDB, SERVER_NAME_PDDB_POLLER,
 };
 
 /// PDDB IPC client.
@@ -66,11 +62,10 @@ use crate::api::{
 ///
 /// # Invariants
 ///
-/// - `main_conn` is connected to the SID registered as
-///   [`crate::api::SERVER_NAME_PDDB`].
+/// - `main_conn` is connected to the SID registered as [`crate::api::SERVER_NAME_PDDB`].
 /// - `poller_conn` is connected to [`crate::api::SERVER_NAME_PDDB_POLLER`].
-/// - Both are held for the lifetime of the value; this crate makes no
-///   attempt to reconnect after a transport error.
+/// - Both are held for the lifetime of the value; this crate makes no attempt to reconnect after a transport
+///   error.
 ///
 /// # Security
 ///
@@ -98,17 +93,14 @@ impl PddbClient {
     /// either connection request returns a kernel error (e.g. the
     /// server has been unregistered).
     pub fn new() -> Result<Self, Error> {
-        let xns = xous_names::XousNames::new().map_err(|e| {
-            Error::new(ErrorKind::Ipc, format!("XousNames::new failed: {:?}", e))
-        })?;
-        let main_conn = xns.request_connection_blocking(SERVER_NAME_PDDB).map_err(|e| {
-            Error::new(ErrorKind::Ipc, format!("connect to PDDB main server: {:?}", e))
-        })?;
+        let xns = xous_names::XousNames::new()
+            .map_err(|e| Error::new(ErrorKind::Ipc, format!("XousNames::new failed: {:?}", e)))?;
+        let main_conn = xns
+            .request_connection_blocking(SERVER_NAME_PDDB)
+            .map_err(|e| Error::new(ErrorKind::Ipc, format!("connect to PDDB main server: {:?}", e)))?;
         let poller_conn = xns
             .request_connection_blocking(SERVER_NAME_PDDB_POLLER)
-            .map_err(|e| {
-                Error::new(ErrorKind::Ipc, format!("connect to PDDB mount poller: {:?}", e))
-            })?;
+            .map_err(|e| Error::new(ErrorKind::Ipc, format!("connect to PDDB mount poller: {:?}", e)))?;
         Ok(Self { main_conn, poller_conn })
     }
 
@@ -189,17 +181,14 @@ impl PddbClient {
     ///
     /// # Errors
     ///
-    /// - [`ErrorKind::InvalidInput`] if `dict.len() > DICT_NAME_LEN - 1`
-    ///   or `key.len() > KEY_NAME_LEN - 1` (validated client-side; no
-    ///   IPC is issued).
-    /// - [`ErrorKind::NotFound`] if either the dict or key doesn't
-    ///   exist and `opts.create_*` does not authorize creation.
-    /// - [`ErrorKind::AccessDenied`], [`ErrorKind::NotMounted`],
-    ///   [`ErrorKind::NoFreeSpace`] for the obvious server-side
-    ///   conditions.
-    /// - [`ErrorKind::Internal`] if the server returns success but
-    ///   does not stamp a token (should not happen against the
-    ///   upstream PDDB).
+    /// - [`ErrorKind::InvalidInput`] if `dict.len() > DICT_NAME_LEN - 1` or `key.len() > KEY_NAME_LEN - 1`
+    ///   (validated client-side; no IPC is issued).
+    /// - [`ErrorKind::NotFound`] if either the dict or key doesn't exist and `opts.create_*` does not
+    ///   authorize creation.
+    /// - [`ErrorKind::AccessDenied`], [`ErrorKind::NotMounted`], [`ErrorKind::NoFreeSpace`] for the obvious
+    ///   server-side conditions.
+    /// - [`ErrorKind::Internal`] if the server returns success but does not stamp a token (should not happen
+    ///   against the upstream PDDB).
     /// - [`ErrorKind::Ipc`] for transport failures.
     ///
     /// # Security
@@ -209,12 +198,7 @@ impl PddbClient {
     /// identifiers (e.g. `"signal-sessions"`) and not secret-bearing.
     /// No value bytes are sent on this opcode — the handle is the
     /// vehicle for value bytes on subsequent `Read`/`Write`.
-    pub fn open(
-        &self,
-        dict: &str,
-        key: &str,
-        opts: OpenOptions,
-    ) -> Result<KeyHandle<'_>, Error> {
+    pub fn open(&self, dict: &str, key: &str, opts: OpenOptions) -> Result<KeyHandle<'_>, Error> {
         if dict.len() > DICT_NAME_LEN - 1 {
             return Err(Error::new(ErrorKind::InvalidInput, "dictionary name too long"));
         }
@@ -234,8 +218,8 @@ impl PddbClient {
             cb_sid: None,
             result: PddbRequestCode::Uninit,
         };
-        let mut buf = Buffer::into_buf(request)
-            .map_err(|_| Error::new(ErrorKind::Ipc, "Buffer::into_buf"))?;
+        let mut buf =
+            Buffer::into_buf(request).map_err(|_| Error::new(ErrorKind::Ipc, "Buffer::into_buf"))?;
         buf.lend_mut(self.main_conn, Opcode::KeyRequest.to_u32().unwrap())
             .map_err(|_| Error::new(ErrorKind::Ipc, "lend_mut KeyRequest"))?;
         let response: PddbKeyRequest = buf
@@ -293,8 +277,8 @@ impl PddbClient {
             cb_sid: None,
             result: PddbRequestCode::Uninit,
         };
-        let mut buf = Buffer::into_buf(request)
-            .map_err(|_| Error::new(ErrorKind::Ipc, "Buffer::into_buf"))?;
+        let mut buf =
+            Buffer::into_buf(request).map_err(|_| Error::new(ErrorKind::Ipc, "Buffer::into_buf"))?;
         buf.lend_mut(self.main_conn, Opcode::DeleteKey.to_u32().unwrap())
             .map_err(|_| Error::new(ErrorKind::Ipc, "lend_mut DeleteKey"))?;
         let response: PddbKeyRequest = buf
@@ -303,9 +287,7 @@ impl PddbClient {
         match response.result {
             PddbRequestCode::NoErr => Ok(()),
             PddbRequestCode::NotFound => Err(Error::new(ErrorKind::NotFound, "key not found")),
-            PddbRequestCode::NotMounted => {
-                Err(Error::new(ErrorKind::NotMounted, "PDDB not mounted"))
-            }
+            PddbRequestCode::NotMounted => Err(Error::new(ErrorKind::NotMounted, "PDDB not mounted")),
             other => Err(Error::new(ErrorKind::Internal, format!("DeleteKey: {:?}", other))),
         }
     }
@@ -342,8 +324,8 @@ impl PddbClient {
             cb_sid: None,
             result: PddbRequestCode::Uninit,
         };
-        let mut buf = Buffer::into_buf(request)
-            .map_err(|_| Error::new(ErrorKind::Ipc, "Buffer::into_buf"))?;
+        let mut buf =
+            Buffer::into_buf(request).map_err(|_| Error::new(ErrorKind::Ipc, "Buffer::into_buf"))?;
         buf.lend_mut(self.main_conn, Opcode::DeleteDict.to_u32().unwrap())
             .map_err(|_| Error::new(ErrorKind::Ipc, "lend_mut DeleteDict"))?;
         let response: PddbKeyRequest = buf
@@ -352,9 +334,7 @@ impl PddbClient {
         match response.result {
             PddbRequestCode::NoErr => Ok(()),
             PddbRequestCode::NotFound => Ok(()), // delete-non-existent is fine
-            PddbRequestCode::NotMounted => {
-                Err(Error::new(ErrorKind::NotMounted, "PDDB not mounted"))
-            }
+            PddbRequestCode::NotMounted => Err(Error::new(ErrorKind::NotMounted, "PDDB not mounted")),
             other => Err(Error::new(ErrorKind::Internal, format!("DeleteDict: {:?}", other))),
         }
     }
@@ -363,12 +343,9 @@ impl PddbClient {
     ///
     /// Two-phase wire protocol:
     ///
-    /// 1. [`crate::api::Opcode::KeyCountInDict`] establishes a fresh
-    ///    listing token server-side.
-    /// 2. [`crate::api::Opcode::ListKeyV2`] is repeated until the
-    ///    server sets `end = true`; each page carries up to
-    ///    [`crate::api::MAX_PDDBKLISTLEN`] = 4064 bytes of packed
-    ///    `(u8 length, [u8] name)` records.
+    /// 1. [`crate::api::Opcode::KeyCountInDict`] establishes a fresh listing token server-side.
+    /// 2. [`crate::api::Opcode::ListKeyV2`] is repeated until the server sets `end = true`; each page carries
+    ///    up to [`crate::api::MAX_PDDBKLISTLEN`] = 4064 bytes of packed `(u8 length, [u8] name)` records.
     ///
     /// Returns an empty `Vec` for a present-but-empty dictionary;
     /// returns [`ErrorKind::NotFound`] if the dictionary itself does
@@ -388,10 +365,9 @@ impl PddbClient {
     /// - [`ErrorKind::InvalidInput`] if `dict.len() > DICT_NAME_LEN - 1`.
     /// - [`ErrorKind::NotFound`] if the dict is absent.
     /// - [`ErrorKind::NotMounted`] if PDDB is locked.
-    /// - [`ErrorKind::AccessDenied`] if another listing holds the
-    ///   server-side lock against this dict.
-    /// - [`ErrorKind::Internal`] if a `ListKeyV2` response is
-    ///   malformed (length-prefix overruns the buffer, name not UTF-8).
+    /// - [`ErrorKind::AccessDenied`] if another listing holds the server-side lock against this dict.
+    /// - [`ErrorKind::Internal`] if a `ListKeyV2` response is malformed (length-prefix overruns the buffer,
+    ///   name not UTF-8).
     /// - [`ErrorKind::Ipc`] for transport failures.
     ///
     /// # Security
@@ -448,8 +424,8 @@ impl PddbClient {
                 retcode: PddbRetcode::Uninit,
                 data: [0u8; MAX_PDDBKLISTLEN],
             };
-            let mut buf = Buffer::into_buf(req)
-                .map_err(|_| Error::new(ErrorKind::Ipc, "Buffer::into_buf KeyList"))?;
+            let mut buf =
+                Buffer::into_buf(req).map_err(|_| Error::new(ErrorKind::Ipc, "Buffer::into_buf KeyList"))?;
             buf.lend_mut(self.main_conn, Opcode::ListKeyV2.to_u32().unwrap())
                 .map_err(|_| Error::new(ErrorKind::Ipc, "lend_mut ListKeyV2"))?;
             let response: PddbKeyList = buf
@@ -459,10 +435,7 @@ impl PddbClient {
             match response.retcode {
                 PddbRetcode::Ok => {}
                 PddbRetcode::AccessDenied => {
-                    return Err(Error::new(
-                        ErrorKind::AccessDenied,
-                        "key list locked by another process",
-                    ));
+                    return Err(Error::new(ErrorKind::AccessDenied, "key list locked by another process"));
                 }
                 other => {
                     return Err(Error::new(ErrorKind::Internal, format!("ListKeyV2: {:?}", other)));
@@ -481,9 +454,8 @@ impl PddbClient {
                 if idx + strlen > MAX_PDDBKLISTLEN {
                     return Err(Error::new(ErrorKind::Internal, "key list overran buffer"));
                 }
-                let name = std::str::from_utf8(&response.data[idx..idx + strlen]).map_err(|_| {
-                    Error::new(ErrorKind::Internal, "key name not utf-8")
-                })?;
+                let name = std::str::from_utf8(&response.data[idx..idx + strlen])
+                    .map_err(|_| Error::new(ErrorKind::Internal, "key name not utf-8"))?;
                 keys.push(name.to_string());
                 idx += strlen;
             }
@@ -548,13 +520,11 @@ impl PddbClient {
     ///
     /// # Errors
     ///
-    /// - [`ErrorKind::InvalidInput`] for empty dict names, dict /
-    ///   key names exceeding the wire caps, value lengths
-    ///   exceeding `u16::MAX`, or a packed total over the cap.
-    /// - [`ErrorKind::NotFound`] (basis lost),
-    ///   [`ErrorKind::AccessDenied`], [`ErrorKind::NoFreeSpace`]
-    ///   (disk full), [`ErrorKind::Internal`] (unexpected EOF /
-    ///   server uninit sentinel) for server-reported failures.
+    /// - [`ErrorKind::InvalidInput`] for empty dict names, dict / key names exceeding the wire caps, value
+    ///   lengths exceeding `u16::MAX`, or a packed total over the cap.
+    /// - [`ErrorKind::NotFound`] (basis lost), [`ErrorKind::AccessDenied`], [`ErrorKind::NoFreeSpace`] (disk
+    ///   full), [`ErrorKind::Internal`] (unexpected EOF / server uninit sentinel) for server-reported
+    ///   failures.
     /// - [`ErrorKind::Ipc`] for transport failures.
     ///
     /// # Security
@@ -640,16 +610,11 @@ impl PddbClient {
             PddbRetcode::BasisLost => Err(Error::new(ErrorKind::NotFound, "basis lost")),
             PddbRetcode::AccessDenied => Err(Error::new(ErrorKind::AccessDenied, "access denied")),
             PddbRetcode::DiskFull => Err(Error::new(ErrorKind::NoFreeSpace, "disk full")),
-            PddbRetcode::UnexpectedEof => {
-                Err(Error::new(ErrorKind::Internal, "unexpected EOF"))
+            PddbRetcode::UnexpectedEof => Err(Error::new(ErrorKind::Internal, "unexpected EOF")),
+            PddbRetcode::InternalError => Err(Error::new(ErrorKind::Internal, "internal error")),
+            PddbRetcode::Uninit => {
+                Err(Error::new(ErrorKind::Internal, "server returned without setting retcode"))
             }
-            PddbRetcode::InternalError => {
-                Err(Error::new(ErrorKind::Internal, "internal error"))
-            }
-            PddbRetcode::Uninit => Err(Error::new(
-                ErrorKind::Internal,
-                "server returned without setting retcode",
-            )),
         }
     }
 
@@ -657,13 +622,9 @@ impl PddbClient {
     /// server-mutated reply. Helper for opcodes that share the
     /// `PddbDictRequest` wire shape — currently only
     /// [`crate::api::Opcode::KeyCountInDict`].
-    fn dict_request_send(
-        &self,
-        request: PddbDictRequest,
-        op: Opcode,
-    ) -> Result<PddbDictRequest, Error> {
-        let mut buf = Buffer::into_buf(request)
-            .map_err(|_| Error::new(ErrorKind::Ipc, "Buffer::into_buf"))?;
+    fn dict_request_send(&self, request: PddbDictRequest, op: Opcode) -> Result<PddbDictRequest, Error> {
+        let mut buf =
+            Buffer::into_buf(request).map_err(|_| Error::new(ErrorKind::Ipc, "Buffer::into_buf"))?;
         buf.lend_mut(self.main_conn, op.to_u32().unwrap())
             .map_err(|_| Error::new(ErrorKind::Ipc, format!("lend_mut {:?}", op)))?;
         buf.to_original::<PddbDictRequest, _>()
@@ -715,9 +676,7 @@ impl OpenOptions {
     /// Construct options enabling both `create_dict` and
     /// `create_key`. Equivalent to `OpenOptions { create_dict: true,
     /// create_key: true, alloc_hint: None }`.
-    pub fn create_all() -> Self {
-        Self { create_dict: true, create_key: true, alloc_hint: None }
-    }
+    pub fn create_all() -> Self { Self { create_dict: true, create_key: true, alloc_hint: None } }
 }
 
 /// Streaming handle to an open `(dict, key)` pair.
@@ -729,12 +688,11 @@ impl OpenOptions {
 ///
 /// # Invariants
 ///
-/// - `token` is a server-issued [`crate::api::ApiToken`] valid until
-///   `Drop` issues an [`crate::api::Opcode::KeyDrop`].
+/// - `token` is a server-issued [`crate::api::ApiToken`] valid until `Drop` issues an
+///   [`crate::api::Opcode::KeyDrop`].
 /// - `pos` advances by `len` after every successful `read` / `write`.
-/// - `buf` is a page-aligned 4 KiB allocation reused across all
-///   reads and writes; its contents persist between calls but are
-///   not visible to external callers.
+/// - `buf` is a page-aligned 4 KiB allocation reused across all reads and writes; its contents persist
+///   between calls but are not visible to external callers.
 ///
 /// # rv32 / 16 MiB constraint
 ///
@@ -764,6 +722,7 @@ impl OpenOptions {
 ///
 /// ```no_run
 /// use std::io::Read;
+///
 /// use xous_pddb_ipc::{OpenOptions, PddbClient};
 ///
 /// # fn try_main() -> Result<(), Box<dyn std::error::Error>> {
@@ -796,11 +755,9 @@ impl<'a> KeyHandle<'a> {
     /// a full basis sync after every successful write (upstream
     /// `main.rs:2293-2294`). Retained for two reasons:
     ///
-    /// 1. The `std::io::Write::flush` shim on this type maps onto
-    ///    it, so callers using standard patterns get a working
-    ///    flush.
-    /// 2. If a future upstream WriteKey handler drops the
-    ///    per-write sync, this method becomes the durability
+    /// 1. The `std::io::Write::flush` shim on this type maps onto it, so callers using standard patterns get
+    ///    a working flush.
+    /// 2. If a future upstream WriteKey handler drops the per-write sync, this method becomes the durability
     ///    boundary again.
     ///
     /// This call does **not** witness durability — `Ok(())` only
@@ -810,13 +767,11 @@ impl<'a> KeyHandle<'a> {
     ///
     /// # Errors
     ///
-    /// - [`ErrorKind::Internal`] for `BasisLost` (basis unmounted
-    ///   mid-flush), `InternalError`, the `Uninit` sentinel, or an
-    ///   unrecognized retcode.
+    /// - [`ErrorKind::Internal`] for `BasisLost` (basis unmounted mid-flush), `InternalError`, the `Uninit`
+    ///   sentinel, or an unrecognized retcode.
     /// - [`ErrorKind::NoFreeSpace`] for `DiskFull`.
     /// - [`ErrorKind::AccessDenied`] for `AccessDenied`.
-    /// - [`ErrorKind::Ipc`] for kernel transport failures or an
-    ///   unexpected reply shape.
+    /// - [`ErrorKind::Ipc`] for kernel transport failures or an unexpected reply shape.
     pub fn flush_writes(&mut self) -> Result<(), Error> {
         let token = self.token;
         let resp = send_message(
@@ -831,33 +786,25 @@ impl<'a> KeyHandle<'a> {
         )
         .map_err(|e| Error::new(ErrorKind::Ipc, format!("WriteKeyFlush: {:?}", e)))?;
         let xous::Result::Scalar1(rcode) = resp else {
-            return Err(Error::new(
-                ErrorKind::Ipc,
-                format!("WriteKeyFlush: unexpected {:?}", resp),
-            ));
+            return Err(Error::new(ErrorKind::Ipc, format!("WriteKeyFlush: unexpected {:?}", resp)));
         };
         match rcode {
             r if r == PddbRetcode::Ok as usize => Ok(()),
-            r if r == PddbRetcode::BasisLost as usize => Err(Error::new(
-                ErrorKind::Internal,
-                "WriteKeyFlush: BasisLost",
-            )),
-            r if r == PddbRetcode::DiskFull as usize => Err(Error::new(
-                ErrorKind::NoFreeSpace,
-                "WriteKeyFlush: DiskFull",
-            )),
-            r if r == PddbRetcode::AccessDenied as usize => Err(Error::new(
-                ErrorKind::AccessDenied,
-                "WriteKeyFlush: AccessDenied",
-            )),
-            r if r == PddbRetcode::InternalError as usize => Err(Error::new(
-                ErrorKind::Internal,
-                "WriteKeyFlush: InternalError",
-            )),
-            other => Err(Error::new(
-                ErrorKind::Internal,
-                format!("WriteKeyFlush: unknown retcode={}", other),
-            )),
+            r if r == PddbRetcode::BasisLost as usize => {
+                Err(Error::new(ErrorKind::Internal, "WriteKeyFlush: BasisLost"))
+            }
+            r if r == PddbRetcode::DiskFull as usize => {
+                Err(Error::new(ErrorKind::NoFreeSpace, "WriteKeyFlush: DiskFull"))
+            }
+            r if r == PddbRetcode::AccessDenied as usize => {
+                Err(Error::new(ErrorKind::AccessDenied, "WriteKeyFlush: AccessDenied"))
+            }
+            r if r == PddbRetcode::InternalError as usize => {
+                Err(Error::new(ErrorKind::Internal, "WriteKeyFlush: InternalError"))
+            }
+            other => {
+                Err(Error::new(ErrorKind::Internal, format!("WriteKeyFlush: unknown retcode={}", other)))
+            }
         }
     }
 }
@@ -882,10 +829,9 @@ impl<'a> Read for KeyHandle<'a> {
     ///
     /// # Errors
     ///
-    /// - `io::ErrorKind::Other` for IPC transport failures, malformed
-    ///   over-length replies, or unexpected retcodes.
-    /// - `io::ErrorKind::BrokenPipe` for `BasisLost` (basis
-    ///   unmounted mid-stream).
+    /// - `io::ErrorKind::Other` for IPC transport failures, malformed over-length replies, or unexpected
+    ///   retcodes.
+    /// - `io::ErrorKind::BrokenPipe` for `BasisLost` (basis unmounted mid-stream).
     /// - `io::ErrorKind::PermissionDenied` for `AccessDenied`.
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() {
@@ -927,10 +873,9 @@ impl<'a> Read for KeyHandle<'a> {
             // Ok(0) for EOF.
             PddbRetcode::UnexpectedEof => Ok(0),
             PddbRetcode::BasisLost => Err(io::Error::new(io::ErrorKind::BrokenPipe, "basis lost")),
-            PddbRetcode::AccessDenied => Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "access denied",
-            )),
+            PddbRetcode::AccessDenied => {
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "access denied"))
+            }
             other => Err(io::Error::other(format!("ReadKey retcode {:?}", other))),
         }
     }
@@ -965,8 +910,8 @@ impl<'a> Write for KeyHandle<'a> {
     ///
     /// # Errors
     ///
-    /// - `io::ErrorKind::Other` for IPC transport failures, malformed
-    ///   over-length acknowledgments, or unexpected retcodes.
+    /// - `io::ErrorKind::Other` for IPC transport failures, malformed over-length acknowledgments, or
+    ///   unexpected retcodes.
     /// - `io::ErrorKind::OutOfMemory` for `DiskFull`.
     /// - `io::ErrorKind::BrokenPipe` for `BasisLost`.
     /// - `io::ErrorKind::PermissionDenied` for `AccessDenied`.
@@ -1012,10 +957,9 @@ impl<'a> Write for KeyHandle<'a> {
             }
             PddbRetcode::DiskFull => Err(io::Error::new(io::ErrorKind::OutOfMemory, "disk full")),
             PddbRetcode::BasisLost => Err(io::Error::new(io::ErrorKind::BrokenPipe, "basis lost")),
-            PddbRetcode::AccessDenied => Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "access denied",
-            )),
+            PddbRetcode::AccessDenied => {
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "access denied"))
+            }
             other => Err(io::Error::other(format!("WriteKey retcode {:?}", other))),
         }
     }
@@ -1031,8 +975,7 @@ impl<'a> Write for KeyHandle<'a> {
     /// `io::ErrorKind::Other`; use [`KeyHandle::flush_writes`]
     /// directly to access the typed [`ErrorKind`] discriminant.
     fn flush(&mut self) -> io::Result<()> {
-        self.flush_writes()
-            .map_err(|e| io::Error::other(format!("WriteKeyFlush: {}", e)))
+        self.flush_writes().map_err(|e| io::Error::other(format!("WriteKeyFlush: {}", e)))
     }
 }
 
@@ -1090,6 +1033,4 @@ impl<'a> Drop for KeyHandle<'a> {
 /// returned because callers (`PddbClient::list_keys`) cannot
 /// usefully recover and the panic surfaces with a clear backtrace
 /// rather than `ErrorKind::Internal`.
-fn random_token_4() -> [u32; 4] {
-    xous::create_server_id().expect("create_server_id").to_array()
-}
+fn random_token_4() -> [u32; 4] { xous::create_server_id().expect("create_server_id").to_array() }

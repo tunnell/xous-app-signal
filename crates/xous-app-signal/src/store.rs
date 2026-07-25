@@ -24,9 +24,7 @@
 
 use uuid::Uuid;
 
-use crate::dialogue::{
-    DialogueSummary, SendStatus, ThreadMessage, looks_like_raw_uuid, rebuild_summaries,
-};
+use crate::dialogue::{DialogueSummary, SendStatus, ThreadMessage, looks_like_raw_uuid, rebuild_summaries};
 
 /// Bounded in-RAM message buffer plus the per-conversation summary
 /// cache derived from it.
@@ -51,9 +49,7 @@ impl MessageStore {
     // ---- read surface ----
 
     /// Per-conversation summaries, newest-activity first.
-    pub fn dialogues(&self) -> &[DialogueSummary] {
-        &self.dialogues
-    }
+    pub fn dialogues(&self) -> &[DialogueSummary] { &self.dialogues }
 
     /// Messages belonging to one conversation, insertion order.
     /// Takes `Uuid` by value (it's `Copy`) so the returned iterator
@@ -63,9 +59,7 @@ impl MessageStore {
     }
 
     /// Sum of unread counts across all conversations (Home header).
-    pub fn total_unread(&self) -> u32 {
-        self.dialogues.iter().map(|d| d.unread_count).sum()
-    }
+    pub fn total_unread(&self) -> u32 { self.dialogues.iter().map(|d| d.unread_count).sum() }
 
     // ---- mutation funnel ----
 
@@ -177,8 +171,7 @@ impl MessageStore {
     }
 
     fn set_outgoing_status(&mut self, timestamp: u64, status: SendStatus) -> bool {
-        let matched =
-            self.messages.iter_mut().rev().find(|m| m.outgoing && m.timestamp == timestamp);
+        let matched = self.messages.iter_mut().rev().find(|m| m.outgoing && m.timestamp == timestamp);
         match matched {
             Some(m) => {
                 m.status = status;
@@ -189,9 +182,7 @@ impl MessageStore {
         }
     }
 
-    fn rebuild(&mut self) {
-        self.dialogues = rebuild_summaries(&self.messages);
-    }
+    fn rebuild(&mut self) { self.dialogues = rebuild_summaries(&self.messages); }
 }
 
 #[cfg(test)]
@@ -200,16 +191,10 @@ mod tests {
 
     const CAP: usize = 5;
 
-    fn uuid_a() -> Uuid {
-        Uuid::from_u128(0x0123_4567_89ab_cdef_0011_2233_4455_6677)
-    }
-    fn uuid_b() -> Uuid {
-        Uuid::from_u128(0xf0f0_f0f0_f0f0_f0f0_f0f0_f0f0_f0f0_f0f0)
-    }
+    fn uuid_a() -> Uuid { Uuid::from_u128(0x0123_4567_89ab_cdef_0011_2233_4455_6677) }
+    fn uuid_b() -> Uuid { Uuid::from_u128(0xf0f0_f0f0_f0f0_f0f0_f0f0_f0f0_f0f0_f0f0) }
 
-    fn store() -> MessageStore {
-        MessageStore::new(CAP)
-    }
+    fn store() -> MessageStore { MessageStore::new(CAP) }
 
     #[test]
     fn starts_empty() {
@@ -270,10 +255,7 @@ mod tests {
             s.push_incoming(uuid_a(), "Alice".into(), format!("m{}", i), 100 + i);
         }
         s.push_outgoing_pending(uuid_b(), "reply".into(), 999);
-        assert_eq!(
-            s.thread_messages(uuid_a()).count() + s.thread_messages(uuid_b()).count(),
-            CAP
-        );
+        assert_eq!(s.thread_messages(uuid_a()).count() + s.thread_messages(uuid_b()).count(), CAP);
     }
 
     #[test]

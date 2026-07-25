@@ -1,16 +1,12 @@
 //! `IdentityKeyStore` impl. Five methods.
 //!
-//! - `get_identity_key_pair`: pulled from the StateStore-side
-//!   `signal.state["{aci|pni}_identity_key_pair"]` key written by
-//!   `set_aci_identity_key_pair` / `set_pni_identity_key_pair`. The
-//!   bytes are libsignal's binary `IdentityKeyPair::serialize()`
-//!   format (private + public halves inline).
-//! - `get_local_registration_id`: comes from the registration blob
-//!   loaded by `StateStore::load_registration_data`. Same source the
-//!   sqlite store uses.
-//! - `save_identity` / `is_trusted_identity` / `get_identity`: per-
-//!   `ProtocolAddress` keys in `signal.protocol.{aci,pni}.identity`.
-//!   These hold **peer** identity public keys; no private material
+//! - `get_identity_key_pair`: pulled from the StateStore-side `signal.state["{aci|pni}_identity_key_pair"]`
+//!   key written by `set_aci_identity_key_pair` / `set_pni_identity_key_pair`. The bytes are libsignal's
+//!   binary `IdentityKeyPair::serialize()` format (private + public halves inline).
+//! - `get_local_registration_id`: comes from the registration blob loaded by
+//!   `StateStore::load_registration_data`. Same source the sqlite store uses.
+//! - `save_identity` / `is_trusted_identity` / `get_identity`: per- `ProtocolAddress` keys in
+//!   `signal.protocol.{aci,pni}.identity`. These hold **peer** identity public keys; no private material
 //!   crosses this dict.
 //!
 //! # Trust boundary
@@ -33,12 +29,10 @@
 //! are the single most sensitive value in this entire crate.
 //! Compromise of these bytes:
 //!
-//! - destroys the deniable-authentication property of every past and
-//!   future session for this identity (ACI or PNI);
-//! - lets the holder impersonate the user to any Signal peer (until
-//!   the user rekeys);
-//! - lets the holder decrypt prekey-initiated sessions that haven't
-//!   yet ratcheted forward.
+//! - destroys the deniable-authentication property of every past and future session for this identity (ACI or
+//!   PNI);
+//! - lets the holder impersonate the user to any Signal peer (until the user rekeys);
+//! - lets the holder decrypt prekey-initiated sessions that haven't yet ratcheted forward.
 //!
 //! The `Vec<u8>` returned by `backend.get(...)` does **not** zero on
 //! drop. libsignal's `IdentityKeyPair` itself zeroes its internal
@@ -89,16 +83,9 @@ fn identity_key(address: &ProtocolAddress) -> String {
 impl IdentityKeyStore for PddbProtocolStore {
     async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair, SignalProtocolError> {
         let key = state_key_identity_key_pair(self.identity);
-        let bytes = self
-            .store
-            .backend
-            .get(STATE_DICT, key)
-            .map_err(protocol_backend_err)?
-            .ok_or_else(|| {
-                SignalProtocolError::InvalidState(
-                    "get_identity_key_pair",
-                    format!("no {key} stored"),
-                )
+        let bytes =
+            self.store.backend.get(STATE_DICT, key).map_err(protocol_backend_err)?.ok_or_else(|| {
+                SignalProtocolError::InvalidState("get_identity_key_pair", format!("no {key} stored"))
             })?;
         IdentityKeyPair::try_from(&bytes[..])
     }
@@ -108,14 +95,9 @@ impl IdentityKeyStore for PddbProtocolStore {
             .store
             .load_registration_data()
             .await
-            .map_err(|e| {
-                SignalProtocolError::InvalidState("get_local_registration_id", e.to_string())
-            })?
+            .map_err(|e| SignalProtocolError::InvalidState("get_local_registration_id", e.to_string()))?
             .ok_or_else(|| {
-                SignalProtocolError::InvalidState(
-                    "get_local_registration_id",
-                    "no registration data".into(),
-                )
+                SignalProtocolError::InvalidState("get_local_registration_id", "no registration data".into())
             })?;
         Ok(data.registration_id)
     }
@@ -129,17 +111,10 @@ impl IdentityKeyStore for PddbProtocolStore {
         let key = identity_key(address);
         let new_bytes = identity.serialize();
 
-        let prior = self
-            .store
-            .backend
-            .get(&dict, &key)
-            .map_err(protocol_backend_err)?;
+        let prior = self.store.backend.get(&dict, &key).map_err(protocol_backend_err)?;
         let changed = matches!(prior, Some(ref old) if old.as_slice() != new_bytes.as_ref());
 
-        self.store
-            .backend
-            .put(&dict, &key, &new_bytes)
-            .map_err(protocol_backend_err)?;
+        self.store.backend.put(&dict, &key, &new_bytes).map_err(protocol_backend_err)?;
 
         Ok(IdentityChange::from_changed(changed))
     }
@@ -153,19 +128,15 @@ impl IdentityKeyStore for PddbProtocolStore {
         match self.get_identity(address).await? {
             // TOFU policy matching presage-store-sqlite. Three cases:
             //  - known-and-equal: trusted unconditionally.
-            //  - known-and-different: a rotation. The store-level
-            //    `trust_new_identities` flag decides. `Trust` accepts
-            //    silently (libsignal will surface the safety-number
-            //    change to UI); `Reject` refuses and blocks the
-            //    message until the user re-verifies.
-            //  - unknown: trust-on-first-use. Always accepted, but a
-            //    warning is logged so audit can see a fresh identity
-            //    showed up.
+            //  - known-and-different: a rotation. The store-level `trust_new_identities` flag decides.
+            //    `Trust` accepts silently (libsignal will surface the safety-number change to UI); `Reject`
+            //    refuses and blocks the message until the user re-verifies.
+            //  - unknown: trust-on-first-use. Always accepted, but a warning is logged so audit can see a
+            //    fresh identity showed up.
             Some(stored) if &stored == identity => Ok(true),
-            Some(_) => Ok(matches!(
-                self.store.trust_new_identities,
-                presage::model::identity::OnNewIdentity::Trust
-            )),
+            Some(_) => {
+                Ok(matches!(self.store.trust_new_identities, presage::model::identity::OnNewIdentity::Trust))
+            }
             None => {
                 warn!(?address, "trusting new identity (TOFU)");
                 Ok(true)
@@ -179,12 +150,7 @@ impl IdentityKeyStore for PddbProtocolStore {
     ) -> Result<Option<IdentityKey>, SignalProtocolError> {
         let dict = dict_identity(self.identity);
         let key = identity_key(address);
-        match self
-            .store
-            .backend
-            .get(&dict, &key)
-            .map_err(protocol_backend_err)?
-        {
+        match self.store.backend.get(&dict, &key).map_err(protocol_backend_err)? {
             Some(bytes) => Ok(Some(IdentityKey::decode(&bytes)?)),
             None => Ok(None),
         }

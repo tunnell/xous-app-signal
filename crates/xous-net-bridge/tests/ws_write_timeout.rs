@@ -16,12 +16,10 @@
 //!
 //! 1. `set_write_timeout(Some(d))` succeeds (does not error on hosted).
 //! 2. `write_timeout()` round-trips the value we set.
-//! 3. A `write_all` against a peer that doesn't drain its receive buffer
-//!    terminates in finite time with an error whose `ErrorKind` is one of
-//!    `TimedOut`, `WouldBlock`, or `BrokenPipe` (the third because Linux
-//!    converts an exhausted TCP retransmit budget to `ETIMEDOUT`/`EPIPE`,
-//!    and either is acceptable evidence that the call did not hang
-//!    indefinitely).
+//! 3. A `write_all` against a peer that doesn't drain its receive buffer terminates in finite time with an
+//!    error whose `ErrorKind` is one of `TimedOut`, `WouldBlock`, or `BrokenPipe` (the third because Linux
+//!    converts an exhausted TCP retransmit budget to `ETIMEDOUT`/`EPIPE`, and either is acceptable evidence
+//!    that the call did not hang indefinitely).
 //!
 //! ## Why this is a regression net, not a behavioural proof
 //!
@@ -86,11 +84,7 @@ fn set_recv_buf(fd: std::os::fd::RawFd, bytes: i32) {
             std::mem::size_of::<i32>() as u32,
         );
         if rc != 0 {
-            eprintln!(
-                "set_recv_buf({}) failed: {:?}",
-                bytes,
-                std::io::Error::last_os_error()
-            );
+            eprintln!("set_recv_buf({}) failed: {:?}", bytes, std::io::Error::last_os_error());
         }
     }
 }
@@ -117,11 +111,7 @@ fn set_send_buf(fd: std::os::fd::RawFd, bytes: i32) {
             std::mem::size_of::<i32>() as u32,
         );
         if rc != 0 {
-            eprintln!(
-                "set_send_buf({}) failed: {:?}",
-                bytes,
-                std::io::Error::last_os_error()
-            );
+            eprintln!("set_send_buf({}) failed: {:?}", bytes, std::io::Error::last_os_error());
         }
     }
 }
@@ -145,9 +135,7 @@ fn set_write_timeout_roundtrips() {
     // Pre-set: should be None.
     assert_eq!(stream.write_timeout().expect("read"), None);
     let want = Duration::from_secs(30);
-    stream
-        .set_write_timeout(Some(want))
-        .expect("set_write_timeout supported on hosted std");
+    stream.set_write_timeout(Some(want)).expect("set_write_timeout supported on hosted std");
     let got = stream.write_timeout().expect("read back");
     assert_eq!(got, Some(want), "write_timeout round-trip mismatch");
     // And clearing back to None.
@@ -168,9 +156,7 @@ fn write_to_non_reading_peer_does_not_block_forever() {
     // Use a short SO_SNDTIMEO so any individual blocking write bounces
     // quickly; combined with the kernel-level retransmit timeout, this
     // bounds the total `write_all` wall time well under 60 s.
-    stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
-        .expect("set_write_timeout");
+    stream.set_write_timeout(Some(Duration::from_secs(2))).expect("set_write_timeout");
 
     // 16 MiB — far larger than any per-end buffer, so write_all must
     // make many syscalls and at least one will block waiting for window.
@@ -180,10 +166,7 @@ fn write_to_non_reading_peer_does_not_block_forever() {
     let elapsed = start.elapsed();
     let err = result.expect_err("write_all to non-reading peer should fail, not Ok");
     let kind = err.kind();
-    eprintln!(
-        "write_to_non_reading_peer: terminated after {:?} with kind={:?} err={:?}",
-        elapsed, kind, err
-    );
+    eprintln!("write_to_non_reading_peer: terminated after {:?} with kind={:?} err={:?}", elapsed, kind, err);
     assert!(
         elapsed < Duration::from_secs(120),
         "write_all did not terminate within 120 s (elapsed {:?}); set_write_timeout regressed",

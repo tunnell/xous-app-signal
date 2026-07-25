@@ -6,17 +6,14 @@
 //! - `signal.groups` — per master_key (hex), JSON `Group`.
 //! - `signal.group_avatars` — per master_key (hex), raw bytes.
 //! - `signal.profile_keys` — per uuid, JSON `ProfileKey`.
-//! - `signal.profiles` — per `sha256(uuid || profile_key)`, JSON
-//!   `Profile`. Same key-derivation scheme presage-store-sled uses.
+//! - `signal.profiles` — per `sha256(uuid || profile_key)`, JSON `Profile`. Same key-derivation scheme
+//!   presage-store-sled uses.
 //! - `signal.profile_avatars` — same key, raw avatar bytes.
 //! - `signal.sticker_packs` — per pack id (hex), JSON `StickerPack`.
-//! - `signal.threads.<thread_hex>` — one **dictionary per thread**.
-//!   `thread_hex` is `sha256("contact:" + uuid)` or
-//!   `sha256("group:" + base64(master_key))`. Keys inside the
-//!   dictionary are 16-hex-character zero-padded `u64` timestamps so
-//!   that `list_keys` order matches arrival order under PDDB's
-//!   lexicographic key sort. Values are JSON `StoredMessage`
-//!   envelopes wrapping libsignal's binary `Content` protobuf body
+//! - `signal.threads.<thread_hex>` — one **dictionary per thread**. `thread_hex` is `sha256("contact:" +
+//!   uuid)` or `sha256("group:" + base64(master_key))`. Keys inside the dictionary are 16-hex-character
+//!   zero-padded `u64` timestamps so that `list_keys` order matches arrival order under PDDB's lexicographic
+//!   key sort. Values are JSON `StoredMessage` envelopes wrapping libsignal's binary `Content` protobuf body
 //!   alongside its `Metadata`.
 //!
 //! Messages-by-thread serialization choice — JSON envelope around
@@ -33,29 +30,21 @@
 //! account-credential layer and ProtocolStore's key-material layer).
 //! Sensitivity tiers here are different:
 //!
-//! - **`ProfileKey`** (`profile_keys`, derived into the
-//!   `profile_dict_key` hash, also embedded in `RegistrationData`):
-//!   the 32-byte symmetric profile encryption key per contact.
-//!   Compromise lets the holder decrypt that contact's profile
-//!   metadata (name, about, avatar). Stored as JSON of the upstream
+//! - **`ProfileKey`** (`profile_keys`, derived into the `profile_dict_key` hash, also embedded in
+//!   `RegistrationData`): the 32-byte symmetric profile encryption key per contact. Compromise lets the
+//!   holder decrypt that contact's profile metadata (name, about, avatar). Stored as JSON of the upstream
 //!   `ProfileKey` struct (`{"bytes": [...]}`).
-//! - **`Group` master keys** (used as the dict-key in `signal.groups`
-//!   and `signal.group_avatars`): 32-byte keys identifying a Signal
-//!   group. Compromise lets the holder derive the group's access
-//!   credentials. Stored hex-encoded as the dict-key string — i.e.
-//!   the master key is itself embedded in the PDDB key namespace, not
-//!   in the value. PDDB's per-page AEAD covers the keyspace, but
-//!   `list_keys` returns hex-encoded master keys to whoever calls it.
-//! - **Message bodies** (`signal.threads.<...>` values): the decrypted
-//!   plaintext (`proto::Content`) of every message the user has sent
-//!   or received in that thread. Compromise reveals all of the user's
-//!   message history with that contact / group. Stored as JSON
-//!   envelope with a `body_proto: Vec<u8>` field carrying the
-//!   protobuf-encoded `Content`.
-//! - **Contacts / groups / profiles / sticker packs**: metadata about
-//!   the user's social graph. Not secret-equivalent but highly
-//!   privacy-sensitive — knowing who the user talks to is a metadata
-//!   leak.
+//! - **`Group` master keys** (used as the dict-key in `signal.groups` and `signal.group_avatars`): 32-byte
+//!   keys identifying a Signal group. Compromise lets the holder derive the group's access credentials.
+//!   Stored hex-encoded as the dict-key string — i.e. the master key is itself embedded in the PDDB key
+//!   namespace, not in the value. PDDB's per-page AEAD covers the keyspace, but `list_keys` returns
+//!   hex-encoded master keys to whoever calls it.
+//! - **Message bodies** (`signal.threads.<...>` values): the decrypted plaintext (`proto::Content`) of every
+//!   message the user has sent or received in that thread. Compromise reveals all of the user's message
+//!   history with that contact / group. Stored as JSON envelope with a `body_proto: Vec<u8>` field carrying
+//!   the protobuf-encoded `Content`.
+//! - **Contacts / groups / profiles / sticker packs**: metadata about the user's social graph. Not
+//!   secret-equivalent but highly privacy-sensitive — knowing who the user talks to is a metadata leak.
 //! - **Avatar bytes**: raw images, stored unframed.
 //!
 //! All values cross the PDDB trust boundary as `Vec<u8>` that do not
@@ -121,13 +110,9 @@ fn profile_dict_key(uuid: Uuid, key: ProfileKey) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn group_key(master_key: &GroupMasterKeyBytes) -> String {
-    hex_encode(master_key)
-}
+fn group_key(master_key: &GroupMasterKeyBytes) -> String { hex_encode(master_key) }
 
-fn sticker_pack_key(id: &[u8]) -> String {
-    hex_encode(id)
-}
+fn sticker_pack_key(id: &[u8]) -> String { hex_encode(id) }
 
 fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -161,9 +146,7 @@ fn thread_dict_name(thread: &Thread) -> String {
 /// Sortable lexicographic timestamp key. PDDB doesn't expose a
 /// numeric ordering on keys, so we zero-pad to 16 hex digits — that
 /// gives us `list_keys` in arrival order without parsing.
-fn message_key(timestamp: u64) -> String {
-    format!("{timestamp:016x}")
-}
+fn message_key(timestamp: u64) -> String { format!("{timestamp:016x}") }
 
 // --- Message storage envelope ---
 
@@ -218,17 +201,9 @@ impl StoredMessage {
             .map_err(|e| Error::Decode(format!("body_proto decode: {e}")))?;
         let sender = ServiceId::parse_from_service_id_string(&self.sender)
             .ok_or_else(|| Error::Decode(format!("invalid sender service id: {}", self.sender)))?;
-        let destination =
-            ServiceId::parse_from_service_id_string(&self.destination).ok_or_else(|| {
-                Error::Decode(format!(
-                    "invalid destination service id: {}",
-                    self.destination
-                ))
-            })?;
-        let server_guid = self
-            .server_guid
-            .as_deref()
-            .and_then(|s| Uuid::parse_str(s).ok());
+        let destination = ServiceId::parse_from_service_id_string(&self.destination)
+            .ok_or_else(|| Error::Decode(format!("invalid destination service id: {}", self.destination)))?;
+        let server_guid = self.server_guid.as_deref().and_then(|s| Uuid::parse_str(s).ok());
         let sender_device = DeviceId::try_from(self.sender_device)
             .map_err(|e| Error::Decode(format!("sender_device: {e}")))?;
         let metadata = Metadata {
@@ -242,8 +217,7 @@ impl StoredMessage {
             was_plaintext: self.was_plaintext,
         };
 
-        Content::from_proto(proto, metadata)
-            .map_err(|e| Error::Decode(format!("Content::from_proto: {e:?}")))
+        Content::from_proto(proto, metadata).map_err(|e| Error::Decode(format!("Content::from_proto: {e:?}")))
     }
 }
 
@@ -266,21 +240,15 @@ fn deserialize_profile_key(bytes: &[u8]) -> Result<ProfileKey, Error> {
 // --- ContentsStore impl ---
 
 impl ContentsStore for PddbStore {
-    type ContentsStoreError = Error;
-
     type ContactsIter = std::vec::IntoIter<Result<Contact, Error>>;
+    type ContentsStoreError = Error;
     type GroupsIter = std::vec::IntoIter<Result<(GroupMasterKeyBytes, Group), Error>>;
     type MessagesIter = std::vec::IntoIter<Result<Content, Error>>;
     type StickerPacksIter = std::vec::IntoIter<Result<StickerPack, Error>>;
 
     // --- Profiles ---
 
-    async fn save_profile(
-        &mut self,
-        uuid: Uuid,
-        key: ProfileKey,
-        profile: Profile,
-    ) -> Result<(), Error> {
+    async fn save_profile(&mut self, uuid: Uuid, key: ProfileKey, profile: Profile) -> Result<(), Error> {
         let dict_key = profile_dict_key(uuid, key);
         backend_put_json(&*self.backend, DICT_PROFILES, &dict_key, &profile)
     }
@@ -301,11 +269,7 @@ impl ContentsStore for PddbStore {
         Ok(())
     }
 
-    async fn profile_avatar(
-        &self,
-        uuid: Uuid,
-        key: ProfileKey,
-    ) -> Result<Option<AvatarBytes>, Error> {
+    async fn profile_avatar(&self, uuid: Uuid, key: ProfileKey) -> Result<Option<AvatarBytes>, Error> {
         let dict_key = profile_dict_key(uuid, key);
         self.backend.get(DICT_PROFILE_AVATARS, &dict_key)
     }
@@ -408,10 +372,7 @@ impl ContentsStore for PddbStore {
         Ok(())
     }
 
-    async fn group_avatar(
-        &self,
-        master_key: GroupMasterKeyBytes,
-    ) -> Result<Option<AvatarBytes>, Error> {
+    async fn group_avatar(&self, master_key: GroupMasterKeyBytes) -> Result<Option<AvatarBytes>, Error> {
         let dict_key = group_key(&master_key);
         self.backend.get(DICT_GROUP_AVATARS, &dict_key)
     }
@@ -505,10 +466,9 @@ impl ContentsStore for PddbStore {
             .into_iter()
             .map(move |ts| {
                 let key = message_key(ts);
-                let stored: StoredMessage =
-                    backend_get_json_required(&*backend, &dict_owned, &key, || {
-                        format!("message disappeared: {key}")
-                    })?;
+                let stored: StoredMessage = backend_get_json_required(&*backend, &dict_owned, &key, || {
+                    format!("message disappeared: {key}")
+                })?;
                 stored.into_content()
             })
             .collect();
@@ -552,10 +512,7 @@ impl ContentsStore for PddbStore {
 
 fn parse_hex_master_key(hex: &str) -> Result<GroupMasterKeyBytes, Error> {
     if hex.len() != 64 {
-        return Err(Error::Decode(format!(
-            "group key not 64 hex chars: {} chars",
-            hex.len()
-        )));
+        return Err(Error::Decode(format!("group key not 64 hex chars: {} chars", hex.len())));
     }
     let mut out = [0u8; 32];
     for (i, byte) in out.iter_mut().enumerate() {

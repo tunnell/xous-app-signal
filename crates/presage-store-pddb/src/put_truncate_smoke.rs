@@ -15,8 +15,8 @@
 //! (`0xAA`/`0x55`) and the test runs against a dedicated dict, so
 //! it never touches user material.
 
-use crate::backend_pddb::PddbBackend;
 use crate::KvBackend;
+use crate::backend_pddb::PddbBackend;
 
 const DICT: &str = "xas.put_truncate_smoke";
 const KEY: &str = "buffer";
@@ -35,11 +35,7 @@ pub enum SmokeResult {
     /// the last 16 bytes of the read for diagnostic logging — if
     /// those bytes are all `LARGE_MARKER` (0xAA), the truncation
     /// bug regressed.
-    Fail {
-        expected_len: usize,
-        actual_len: usize,
-        sample_tail: Vec<u8>,
-    },
+    Fail { expected_len: usize, actual_len: usize, sample_tail: Vec<u8> },
     /// A step prerequisite (initial put, intermediate get) failed.
     /// String is the backend error rendering.
     Error(String),
@@ -85,10 +81,6 @@ pub fn smoke_put_truncates(backend: &PddbBackend) -> SmokeResult {
     if got.len() == SMALL_LEN && got.iter().all(|&b| b == SMALL_MARKER) {
         SmokeResult::Pass
     } else {
-        SmokeResult::Fail {
-            expected_len: SMALL_LEN,
-            actual_len: got.len(),
-            sample_tail: tail,
-        }
+        SmokeResult::Fail { expected_len: SMALL_LEN, actual_len: got.len(), sample_tail: tail }
     }
 }

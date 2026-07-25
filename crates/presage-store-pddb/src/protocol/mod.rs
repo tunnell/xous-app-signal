@@ -27,33 +27,25 @@
 //!
 //! Persisted material, by sensitivity tier (high → public):
 //!
-//! - **`IdentityKeyPair`** (state dict, see `identity_key_store`):
-//!   contains both the long-term Ed25519 private key and its public
-//!   half. **Compromise destroys the deniable-authentication property
-//!   of every past and future session.** Stored as libsignal's binary
-//!   `IdentityKeyPair::serialize()` (private bytes inline).
-//! - **`SessionRecord`** (`session` dict): the Double Ratchet state
-//!   for one `(uuid, device_id)`. Carries the current root key, chain
-//!   keys, and the next-message ratchet keys. **Compromise
-//!   reconstructs the last-ratchet plaintext window.** Stored as
-//!   libsignal's protobuf `SessionRecord::serialize()`. See the
+//! - **`IdentityKeyPair`** (state dict, see `identity_key_store`): contains both the long-term Ed25519
+//!   private key and its public half. **Compromise destroys the deniable-authentication property of every
+//!   past and future session.** Stored as libsignal's binary `IdentityKeyPair::serialize()` (private bytes
+//!   inline).
+//! - **`SessionRecord`** (`session` dict): the Double Ratchet state for one `(uuid, device_id)`. Carries the
+//!   current root key, chain keys, and the next-message ratchet keys. **Compromise reconstructs the
+//!   last-ratchet plaintext window.** Stored as libsignal's protobuf `SessionRecord::serialize()`. See the
 //!   write-coalescing note in `session_store.rs`.
-//! - **`KyberPreKeyRecord`** (`kyber_prekey` dict): post-quantum
-//!   secret material for one prekey. One-time keys are deleted on
-//!   first use; last-resort keys persist and are dedup-protected
-//!   against base-key reuse (`kyber_meta`).
-//! - **`SignedPreKeyRecord`** (`signed_prekey` dict): the EC private
-//!   key for a signed prekey plus the identity-key signature over its
-//!   public half.
-//! - **`PreKeyRecord`** (`prekey_bundle` packed key): one-time EC
-//!   private keys. Consumed on first use by the receiver; the dirty
-//!   set rewrites the whole bundle each time.
-//! - **`SenderKeyRecord`** (`sender_key` dict): the symmetric sender
-//!   key for a group distribution. Compromise lets the holder decrypt
-//!   every message sent under that distribution id.
-//! - **Identity public keys** (`identity` dict): peer identity keys
-//!   (no private half). The decision to trust a (possibly rotated) key
-//!   for an address is made by `is_trusted_identity` and governed by
+//! - **`KyberPreKeyRecord`** (`kyber_prekey` dict): post-quantum secret material for one prekey. One-time
+//!   keys are deleted on first use; last-resort keys persist and are dedup-protected against base-key reuse
+//!   (`kyber_meta`).
+//! - **`SignedPreKeyRecord`** (`signed_prekey` dict): the EC private key for a signed prekey plus the
+//!   identity-key signature over its public half.
+//! - **`PreKeyRecord`** (`prekey_bundle` packed key): one-time EC private keys. Consumed on first use by the
+//!   receiver; the dirty set rewrites the whole bundle each time.
+//! - **`SenderKeyRecord`** (`sender_key` dict): the symmetric sender key for a group distribution. Compromise
+//!   lets the holder decrypt every message sent under that distribution id.
+//! - **Identity public keys** (`identity` dict): peer identity keys (no private half). The decision to trust
+//!   a (possibly rotated) key for an address is made by `is_trusted_identity` and governed by
 //!   `PddbStore::trust_new_identities`.
 //!
 //! All persisted records are libsignal's own serialization — we do
@@ -91,30 +83,22 @@
 //!
 //! Dictionary layout:
 //!
-//! - `signal.protocol.{aci,pni}.session` — per `address.name()` (the
-//!   UUID), key = `"{uuid}"`, value = `SessionBundle` (`device_id ->
-//!   libsignal SessionRecord bytes`), bincode-versioned wrapper. **Hot.**
-//!   Read/write through the in-memory dirty-set cache;
-//!   [`crate::PddbStore::flush_sessions`] persists.
-//! - `signal.protocol.{aci,pni}.identity` — per `ProtocolAddress`,
-//!   key = `"{name}.{device_id}"`, value = peer identity *public* key
-//!   bytes (`IdentityKey::serialize()`).
-//! - `signal.protocol.{aci,pni}.prekey_bundle` — single packed key
-//!   (`"all"`) holding `Vec<(u32, Vec<u8>)>` of all current one-time
-//!   EC pre-keys. Packed because ~100 pre-keys × ~70 bytes is a
-//!   fraction of one PDDB page; per-key would burn one page-AEAD per
-//!   prekey.
-//! - `signal.protocol.{aci,pni}.signed_prekey` — per id, value =
-//!   libsignal `SignedPreKeyRecord::serialize()` bytes.
-//! - `signal.protocol.{aci,pni}.kyber_prekey` — per id; the
-//!   `is_last_resort` bit lives inside a JSON envelope alongside the
-//!   libsignal record bytes (see [`kyber_pre_key_store`]).
-//! - `signal.protocol.{aci,pni}.kyber_meta` — last-resort dedup table.
-//!   Key = `"{kyber_id}.{ec_id}"`, value = `base_key.serialize()`.
-//!   See `mark_kyber_pre_key_used` for the dedup semantics.
-//! - `signal.protocol.{aci,pni}.sender_key` — per
-//!   `(addr_name, device_id, distribution_uuid)`, value = libsignal
-//!   `SenderKeyRecord::serialize()` bytes.
+//! - `signal.protocol.{aci,pni}.session` — per `address.name()` (the UUID), key = `"{uuid}"`, value =
+//!   `SessionBundle` (`device_id -> libsignal SessionRecord bytes`), bincode-versioned wrapper. **Hot.**
+//!   Read/write through the in-memory dirty-set cache; [`crate::PddbStore::flush_sessions`] persists.
+//! - `signal.protocol.{aci,pni}.identity` — per `ProtocolAddress`, key = `"{name}.{device_id}"`, value = peer
+//!   identity *public* key bytes (`IdentityKey::serialize()`).
+//! - `signal.protocol.{aci,pni}.prekey_bundle` — single packed key (`"all"`) holding `Vec<(u32, Vec<u8>)>` of
+//!   all current one-time EC pre-keys. Packed because ~100 pre-keys × ~70 bytes is a fraction of one PDDB
+//!   page; per-key would burn one page-AEAD per prekey.
+//! - `signal.protocol.{aci,pni}.signed_prekey` — per id, value = libsignal `SignedPreKeyRecord::serialize()`
+//!   bytes.
+//! - `signal.protocol.{aci,pni}.kyber_prekey` — per id; the `is_last_resort` bit lives inside a JSON envelope
+//!   alongside the libsignal record bytes (see [`kyber_pre_key_store`]).
+//! - `signal.protocol.{aci,pni}.kyber_meta` — last-resort dedup table. Key = `"{kyber_id}.{ec_id}"`, value =
+//!   `base_key.serialize()`. See `mark_kyber_pre_key_used` for the dedup semantics.
+//! - `signal.protocol.{aci,pni}.sender_key` — per `(addr_name, device_id, distribution_uuid)`, value =
+//!   libsignal `SenderKeyRecord::serialize()` bytes.
 
 use std::fmt;
 
@@ -148,9 +132,7 @@ impl IdentityType {
 }
 
 impl fmt::Display for IdentityType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str(self.as_str()) }
 }
 
 /// PDDB-backed implementation of every libsignal protocol storage
@@ -181,9 +163,7 @@ pub struct PddbProtocolStore {
 }
 
 impl PddbProtocolStore {
-    pub(crate) fn new(store: PddbStore, identity: IdentityType) -> Self {
-        Self { store, identity }
-    }
+    pub(crate) fn new(store: PddbStore, identity: IdentityType) -> Self { Self { store, identity } }
 }
 
 // --- Dictionary name helpers ---
@@ -247,10 +227,7 @@ impl presage::libsignal_service::protocol::ProtocolStore for PddbProtocolStore {
 pub(crate) fn protocol_backend_err(
     e: crate::Error,
 ) -> presage::libsignal_service::protocol::SignalProtocolError {
-    presage::libsignal_service::protocol::SignalProtocolError::InvalidState(
-        "kv backend",
-        e.to_string(),
-    )
+    presage::libsignal_service::protocol::SignalProtocolError::InvalidState("kv backend", e.to_string())
 }
 
 /// Protocol-flavored [`crate::backend_get_json`]: takes a
