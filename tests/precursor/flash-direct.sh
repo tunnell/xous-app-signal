@@ -19,13 +19,13 @@
 #
 # Env vars (defaults shown):
 #   XOUS_CORE_DIR=../xous-core
-#   XOUS_TARGET=precursor-c809403e
+#   XOUS_TARGET=riscv32imac-unknown-xous-elf
 #   FLASH_LOG=/tmp/flash-$(date +%s).log
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 XOUS_CORE_DIR="${XOUS_CORE_DIR:-$REPO_ROOT/../xous-core}"
-XOUS_TARGET="${XOUS_TARGET:-precursor-c809403e}"
+XOUS_TARGET="${XOUS_TARGET:-riscv32imac-unknown-xous-elf}"
 FLASH_LOG="${FLASH_LOG:-/tmp/flash-$(date +%s).log}"
 
 XOUS_IMG="$XOUS_CORE_DIR/target/$XOUS_TARGET/release/xous.img"
