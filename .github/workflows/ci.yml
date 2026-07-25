@@ -26,10 +26,26 @@ jobs:
           path: xous-app-signal
 
       - name: Clone the pinned xous-core sibling (BUILDING.md §1)
+        # The apps.rs bootstrap is BUILDING.md §2.1: the file is
+        # xtask-generated and gitignored, but standalone cargo builds
+        # link gam::APP_NAME_XAS and need it on disk before any xtask
+        # has run. (The rustfmt job skips this — cargo metadata loads
+        # manifests only and never compiles gam.)
         run: |
           git clone --depth 1 -b xas-v0.2 https://github.com/tunnell/xous-core.git
           mkdir -p repos
           ln -s ../xous-core repos/xous-core
+          cat > xous-core/services/gam/src/apps.rs <<'EOF'
+          #![cfg_attr(rustfmt, rustfmt_skip)]
+          // CI stand-in for the xtask-generated apps.rs (BUILDING.md §2.1).
+          pub const APP_NAME_XAS: &'static str = "Signal";
+          pub const APP_MENU_0_XAS: &'static str = "Signal Submenu 0";
+
+          pub const EXPECTED_APP_CONTEXTS: &[&'static str] = &[
+              APP_NAME_XAS,
+              APP_MENU_0_XAS,
+          ];
+          EOF
 
       - name: Install system build deps
         # protobuf-compiler: the spqr (SparsePostQuantumRatchet) build
@@ -61,10 +77,26 @@ jobs:
           path: xous-app-signal
 
       - name: Clone the pinned xous-core sibling (BUILDING.md §1)
+        # The apps.rs bootstrap is BUILDING.md §2.1: the file is
+        # xtask-generated and gitignored, but standalone cargo builds
+        # link gam::APP_NAME_XAS and need it on disk before any xtask
+        # has run. (The rustfmt job skips this — cargo metadata loads
+        # manifests only and never compiles gam.)
         run: |
           git clone --depth 1 -b xas-v0.2 https://github.com/tunnell/xous-core.git
           mkdir -p repos
           ln -s ../xous-core repos/xous-core
+          cat > xous-core/services/gam/src/apps.rs <<'EOF'
+          #![cfg_attr(rustfmt, rustfmt_skip)]
+          // CI stand-in for the xtask-generated apps.rs (BUILDING.md §2.1).
+          pub const APP_NAME_XAS: &'static str = "Signal";
+          pub const APP_MENU_0_XAS: &'static str = "Signal Submenu 0";
+
+          pub const EXPECTED_APP_CONTEXTS: &[&'static str] = &[
+              APP_NAME_XAS,
+              APP_MENU_0_XAS,
+          ];
+          EOF
 
       - name: Install system build deps
         # protobuf-compiler: the spqr (SparsePostQuantumRatchet) build
