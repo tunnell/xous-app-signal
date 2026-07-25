@@ -87,7 +87,7 @@ or a roadmap item (planned but not yet built).
 | Username (`@alice.42`) on Profile | ❌ | No API to read one's own Signal username in our build (RegistrationData has no username field; Profile struct has no username field). The primary phone holds that state |
 | Username lookup in "New chat" | ✅ | F1 → enter `name.42` → presage's `lookup_username` resolves to ACI; UI opens a Thread |
 | Phone-number lookup in "New chat" | ❌ | Needs CDSI which requires boring-sys (BoringSSL) — disabled in this build because it can't target rv32-xous |
-| Logout | ⚠️ | Stub today (tells the user to wipe PDDB manually); real implementation on roadmap |
+| Logout | ✅ | Settings → Logout: confirmation modal, then the worker wipes link state from the PDDB (`Cmd::Logout`) and the UI returns to the pre-link menu |
 | Multiple linked accounts | ❌ | Single-account device by design |
 | Primary registration (this device IS the primary) | ❌ | Out of scope. Secondary-device only — your phone stays primary |
 
@@ -152,8 +152,9 @@ it before running any flash command.
 
 ## Upstream patches
 
-xas tracks three upstream fixes. Status as of 2026-07-06: **#1 and
-#3 below are merged upstream**; #2 is still an open draft. The
+xas tracks three upstream fixes. Status as of 2026-07-25: **#1 and
+#3 below are merged upstream**; #2 was **closed unmerged** by its
+author on 2026-07-18, so its fix stays vendored. The
 pinned `xas-v0.2` branch of [`tunnell/xous-core`](https://github.com/tunnell/xous-core)
 and the vendored copy of `libsignal-service-rs` carry whatever has
 not yet reached a release xas builds against.
@@ -177,17 +178,19 @@ not yet reached a release xas builds against.
    still open — a hosted-mode PDDB tweak, and the
    `apps/manifest.json` registration for xas).
 2. **`whisperfish/libsignal-service-rs` keepalive tolerance** —
-   [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431) (draft).
+   [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431)
+   (closed unmerged 2026-07-18).
    Upstream closes the WS the moment any keepalive is
    outstanding. Under any non-zero scheduling jitter (e.g.
-   rv32) this races and closes healthy connections. The PR adds
-   an opt-in `with_max_outstanding_keepalives(...)` constructor
-   so callers like xas can tolerate the race without changing
-   default behavior for other consumers. The patch lives in
-   `vendor/libsignal-service-rs/` in this repo as a constant
-   `MAX_OUTSTANDING_KEEPALIVES = 3` (semantically equivalent
-   for our use); the vendored copy will be re-aligned to the
-   builder shape after the upstream PR merges.
+   rv32) this races and closes healthy connections. The PR
+   proposed an opt-in `with_max_outstanding_keepalives(...)`
+   constructor so callers like xas could tolerate the race
+   without changing default behavior for other consumers. The
+   patch lives in `vendor/libsignal-service-rs/` in this repo as
+   a constant `MAX_OUTSTANDING_KEEPALIVES = 3` (semantically
+   equivalent for our use); with the PR closed, the vendored
+   constant is the long-term shape — no upstream re-alignment is
+   pending.
 3. **`rust-lang/rust` Xous std-side recv encoding** —
    [rust-lang/rust#156414](https://github.com/rust-lang/rust/pull/156414),
    **merged**. The long-arc fix that makes #1 unnecessary at the
@@ -196,8 +199,9 @@ not yet reached a release xas builds against.
    release the toolchain pin uses, the byte-1 mirror from #1
    becomes belt-and-suspenders rather than load-bearing.
 
-With #1 and #3 merged, the remaining upstream dependency is #2:
-its merge triggers a re-vendor of `libsignal-service-rs`.
+With #1 and #3 merged and #2 closed, no upstream merge is
+pending. The keepalive tolerance remains a vendored delta,
+tracked in `vendor/libsignal-service-rs.diff`.
 BUILDING.md keeps pointing at the pinned `xas-v0.2` fork branch
 until a future xas release re-pins against an upstream
 `betrusted-io/xous-core` that includes `2005a801c` and a

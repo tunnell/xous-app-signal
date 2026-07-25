@@ -38,7 +38,7 @@ jobs:
         with:
           workspaces: xous-app-signal
 
-      - name: Hosted unit tests (baseline 53/53)
+      - name: Hosted unit tests (baseline 39/39)
         working-directory: xous-app-signal
         run: cargo test --features hosted -p xous-app-signal --bins
 

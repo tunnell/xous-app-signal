@@ -39,8 +39,9 @@ probe-pddb = []
 # 2026-05-14 — they raced with xous-names server registration during
 # boot and crashed Precursor PVT2 hardware with a `ServerNotFound`
 # cascade. The bulk-write A/B benchmark now lives in shellchat as
-# `pddb bulk_probe`. See
-# research/2026-05-14-shellchat-probe-results.md.
+# `pddb bulk_probe` (user-invoked after PIN entry and PDDB mount);
+# the load-bearing NOTE in src/main.rs explains why no probe may
+# auto-fire after worker spawn.
 pddb-real = ["presage-store-pddb/pddb-backend"]
 
 # Probe that exercises `BufferingBackend` + `BatchGuard` against a
@@ -90,10 +91,10 @@ xous-signal-worker = { path = "../xous-signal-worker" }
 presage-store-pddb = { path = "../presage-store-pddb" }
 async-channel = { workspace = true }
 
-# The stdin-UI fallback (used by main.rs when gam_app::run() can't
-# reach a Xous server) lives inline at src/stdin_ui/. It used to
-# be its own crate (xous-app-signal-ui) but the boundary didn't
-# earn its keep — only main.rs consumed it.
+# (The former stdin-UI fallback at src/stdin_ui/ was removed:
+# xas always runs inside a Xous environment now, and a failed
+# gam_app::run() is a hard startup error rather than a fallback
+# trigger.)
 
 # log facade. Boot events log::info! through here so the
 # Renode UART tester can assert on them. Hosted binds env_logger
@@ -111,9 +112,8 @@ log = "0.4"
 #
 # Unconditional (not target-cfg-gated): gam is needed for both the
 # hosted-Xous emulation (target=linux, running inside cargo xtask
-# run) AND rv32 hardware. The fallback for "running standalone with
-# no Xous infra" is detected at runtime: gam_app::run() returns
-# Err and main() falls back to stdin Ui::run.
+# run) AND rv32 hardware. There is no standalone/no-Xous mode:
+# if gam_app::run() returns Err, main() exits with the error.
 gam = { path = "../../../repos/xous-core/services/gam" }
 # Direct dep on graphics-server so we can fan out the
 # `precursor` feature → `utralib/precursor` (otherwise

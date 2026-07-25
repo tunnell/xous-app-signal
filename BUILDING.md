@@ -129,10 +129,16 @@ rustup error there.
 ## 1. Clone the source
 
 xas depends on a forked `xous-core` because two upstream bugs
-need to be patched for the Wi-Fi + WebSocket path to work
-reliably. Both have PRs filed upstream and are in review (see
-the README's Upstream patches section for links and status); the
-forks below are the canonical source until those PRs merge.
+needed patching for the Wi-Fi + WebSocket path to work
+reliably. The kernel-side encoding fix has since **merged
+upstream** (betrusted-io/xous-core#877, commit `2005a801c`); the
+keepalive-tolerance PR (whisperfish/libsignal-service-rs#431)
+was **closed unmerged** and its fix is carried in `vendor/`
+instead (see the README's Upstream patches section for links and
+status). The forks below remain the canonical source: the pinned
+branch also carries fixes that are in no upstream release — the
+DNS CNAME-chain fix, the `services/net` reaper fix, and the
+`apps/manifest.json` registration for xas.
 
 The forks below are the published source of truth — pull `main`
 for the latest released code; pull `dev` if you want the
@@ -213,15 +219,16 @@ to load (`gam`, from `crates/xous-app-signal`) will fail with
 ### What each clone contributes to the build
 
 The two clones above plus the in-tree vendored copy give you the
-effective fixes from all three filed upstream PRs. If you ever
+effective fixes from all three upstream PRs xas has tracked (two
+merged, one closed in favor of the vendored carry). If you ever
 need to verify "am I actually building with the upstream PR
 content," this is the map:
 
 | Upstream PR | Where it lives in your build | How |
 |---|---|---|
-| [betrusted-io/xous-core#877](https://github.com/betrusted-io/xous-core/pull/877) (kernel byte-1 mirror) | `xous-core/services/net/src/std_glue.rs::respond_with_error` on the `xous-app-signal` branch | The `xous-app-signal` branch is `pr-net-encoding-fix` (= recent upstream main + PR #877's commit `cfcc12eee`) plus two cherry-picks: a CNAME-chain DNS fix (`43dcb4a59`) required for Signal connectivity but filed/tracked separately, and a small PDDB hosted-mode test convenience (`c22cfc678`). It contains the PR's commit verbatim — when PR #877 merges upstream, this branch becomes a clean fast-forward. Do not switch to the bare `pr-net-encoding-fix` branch for a working deploy — you'd lose the DNS fix. |
-| [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431) (keepalive tolerance) | `xous-app-signal/vendor/libsignal-service-rs/src/websocket/mod.rs` | The vendored copy uses a local `MAX_OUTSTANDING_KEEPALIVES = 3` constant. PR #431 reshapes this as an opt-in `with_max_outstanding_keepalives(...)` constructor (default = 1, preserves upstream behavior). The two are semantically equivalent for our use; the vendored copy will be re-aligned to the builder shape after PR #431 merges. No action needed — the vendored copy is part of the `xous-app-signal` clone above. |
-| [rust-lang/rust#156414](https://github.com/rust-lang/rust/pull/156414) (std recv byte-4 decode) | **Not in your build.** | PR #156414 fixes the bug at its actual source (the std-side recv decode reads byte 4 instead of byte 1). The build uses stock Rust whose std backend still has the byte-1 bug — and it doesn't matter, because PR #877's kernel-side mirror writes the code at byte 1 too. Once #156414 lands and propagates to a stable Rust release, the kernel-side mirror becomes belt-and-suspenders rather than load-bearing. No action needed for the current build. |
+| [betrusted-io/xous-core#877](https://github.com/betrusted-io/xous-core/pull/877) (kernel byte-1 mirror) | `xous-core/services/net/src/std_glue.rs::respond_with_error` on the pinned `xas-v0.2` branch | **Merged upstream 2026-06-02** as commit `2005a801c` — any `betrusted-io/xous-core` checkout at or after that commit carries it. The pinned `xas-v0.2` branch carried the identical commit pre-merge; the pin remains required for the deltas that are *not* upstream: the CNAME-chain DNS fix (`43dcb4a59`) required for Signal connectivity, the `services/net` reaper fix (tunnell/xous-core#26; upstream [#880](https://github.com/betrusted-io/xous-core/pull/880) still open), a small PDDB hosted-mode test convenience (`c22cfc678`), and the `apps/manifest.json` xas registration. |
+| [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431) (keepalive tolerance) | `xous-app-signal/vendor/libsignal-service-rs/src/websocket/mod.rs` | The vendored copy uses a local `MAX_OUTSTANDING_KEEPALIVES = 3` constant. PR #431 proposed the same tolerance as an opt-in `with_max_outstanding_keepalives(...)` constructor (default = 1, preserves upstream behavior); it was **closed unmerged by its author on 2026-07-18**, so the vendored constant is the long-term shape rather than a stopgap awaiting re-alignment. No action needed — the vendored copy is part of the `xous-app-signal` clone above, and the §5 grep check verifies it. |
+| [rust-lang/rust#156414](https://github.com/rust-lang/rust/pull/156414) (std recv byte-4 decode) | **Not in your build (yet).** | PR #156414 fixes the bug at its actual source (the std-side recv decode reads byte 4 instead of byte 1). It **merged 2026-06-04** (milestone 1.98.0) but has not reached a stable Rust release yet, so the toolchain this workspace builds with still has the byte-1 bug — and it doesn't matter, because PR #877's kernel-side mirror writes the code at byte 1 too. Once a stable release carrying the fix reaches the toolchain pin, the kernel-side mirror becomes belt-and-suspenders rather than load-bearing. No action needed for the current build. |
 
 ---
 
@@ -567,8 +574,10 @@ link/send/receive event dispatch. Should all pass green.
 ### 2.7 Renode test environment gotchas
 
 If you're running the robot-framework tests under renode
-(`xas-smoke.robot`, `xas-pddb-real-probe.robot`, etc.), three
-pitfalls the wrapper script does not paper over:
+(`xas-smoke.robot`, `xas-probe.robot`, `xas-pddb-probe.robot`,
+`xas-send-batch.robot`, `xas-bulk-write-boot.robot`,
+`xas-selective-sync.robot`, `xas-instrument-noise.robot`), three
+pitfalls to know about:
 
 **(a) `xas-smoke.resc` resolves `$xous_core_root` via the
 `repos/xous-core` symlink.** The `.resc` file defaults
@@ -579,12 +588,14 @@ boots the image built from your active xous-core checkout. If your
 layout differs (no `repos/` symlink, or you want to boot an image
 from a different checkout), pass
 `-e '$xous_core_root = @<path>'` ahead of `include @<resc>` in the
-wrapper. Note the wrapper builds the xas ELF but not the kernel
-image — see (b).
+wrapper.
 
-**(b) Robot tests need a pre-built `xous.img` + `loader.bin`.**
-The wrapper does not build the kernel image; it expects the
-artifacts to already exist. Build them yourself:
+**(b) Robot tests boot a bundled `xous.img` + `loader.bin`.**
+`run-renode-tests.sh` builds the rv32 xas ELF and re-bundles it
+into a fresh `xous.img` in the checkout the `.resc` boots (set
+`SKIP_BUNDLE=1` to reuse the existing image when the ELF hasn't
+changed). If you invoke `renode-test` directly instead of going
+through the wrapper, build the image yourself:
 
 ```sh
 cd ~/code/xas/xous-core
@@ -601,16 +612,35 @@ exact value doesn't matter so long as it parses; the literal
 `v0.9.21-0-g0000000` above matches upstream's format and is
 the value the hardware harness pins against.
 
-**(c) `xas-pddb-real-probe.robot` needs two extra build flags.**
-This test exercises the real PDDB backend instead of the
-in-memory shim, and the wrapper sets neither flag the run
-needs to terminate:
+**(c) Match the xas feature set to the robot you're running.**
+The wrapper builds `--features pddb-real,precursor` by default —
+right for `xas-smoke.robot` and the three boot-gate robots
+(`xas-bulk-write-boot.robot`, `xas-selective-sync.robot`,
+`xas-instrument-noise.robot`), wrong for the three probe robots,
+which assert UART lines that only exist when their probe feature
+is compiled in. Override via `XAS_FEATURES`:
 
 ```sh
-# xas binary
-cargo build --release --features probe-pddb-real
+XAS_FEATURES=precursor,probe-flow \
+    tests/renode/run-renode-tests.sh xas-probe.robot
+XAS_FEATURES=precursor,probe-pddb \
+    tests/renode/run-renode-tests.sh xas-pddb-probe.robot
+XAS_FEATURES=precursor,probe-send-batch \
+    tests/renode/run-renode-tests.sh xas-send-batch.robot
+```
 
-# kernel image
+(The former `probe-pddb-real` / `probe-bulk-ab` features and the
+`xas-pddb-real-probe.robot` companion no longer exist — removed
+2026-05-14 because auto-firing PDDB traffic right after worker
+spawn raced xous-names server registration and crashed hardware
+with a `ServerNotFound` cascade; see the load-bearing NOTE in
+`crates/xous-app-signal/src/main.rs`. Bulk-write benchmarking
+moved to the user-invoked shellchat `pddb bulk_probe` command.)
+
+The boot-gate robots additionally want the *kernel image* built
+with `--feature pddb/autobasis`:
+
+```sh
 cargo xtask app-image xas:... \
     --feature pddb/autobasis \
     --git-describe v0.9.21-0-g0000000
@@ -619,9 +649,7 @@ cargo xtask app-image xas:... \
 Without `pddb/autobasis` the first-boot path waits for a
 user-typed password to unlock the system basis; renode does
 not inject keystrokes on that screen, so the test hangs until
-the wrapper's outer timeout fires. Without `probe-pddb-real`
-xas takes the in-memory shim path, never touches the real
-PDDB, and the test is silently a no-op even when it "passes."
+the outer timeout fires.
 
 ---
 
@@ -809,7 +837,7 @@ When the Precursor boots into Xous:
 | `usb_update.py` permission denied (Linux host) | udev rule missing | Add `tools/49-precursor.rules` to `/etc/udev/rules.d/` and `udevadm control --reload`, or run with sudo (not recommended) |
 | Hosted xas shows "OOM during link" | Default heap cap too low | Run with `RUST_LOG=info` to see allocator messages; rebuild with `--features pddb-real,hosted` (the dist build is otherwise too lean) |
 | Hardware link succeeds but no messages flow | Wi-Fi connected to 5 GHz, or DNS broken | Re-run the wlan recipe; verify `net ping chat.signal.org` works before opening xas |
-| Send fails with "WebSocket closing" within 30s | Older xous-core without the encoding fix | Confirm you cloned the `xas-v0.2` branch of `tunnell/xous-core`, not upstream `betrusted-io/xous-core`. Relevant upstream PRs: [#877](https://github.com/betrusted-io/xous-core/pull/877) (encoding fix) and [tunnell/xous-core#26](https://github.com/tunnell/xous-core/pull/26) (services/net reaper fix shipped with v0.2). |
+| Send fails with "WebSocket closing" within 30s | Older xous-core without the encoding fix | Confirm you cloned the `xas-v0.2` branch of `tunnell/xous-core`. Relevant fixes: [#877](https://github.com/betrusted-io/xous-core/pull/877) (encoding fix — merged upstream 2026-06-02, so recent `betrusted-io/xous-core` also carries it, but only `xas-v0.2` adds the DNS + reaper + manifest deltas) and [tunnell/xous-core#26](https://github.com/tunnell/xous-core/pull/26) (services/net reaper fix shipped with v0.2). |
 | Flash completes but device boots into the old image | Loader didn't validate the new signature | Re-flash; if it persists, check `tools/usb_update.py` log for verification errors |
 
 ---
@@ -830,7 +858,7 @@ grep -F 'MAX_OUTSTANDING_KEEPALIVES: usize = 3' \
     vendor/libsignal-service-rs/src/websocket/mod.rs   # expect: 1 hit
 
 # In xous-core:
-git branch --show-current   # should be 'xous-app-signal'
+git branch --show-current   # should be 'xas-v0.2' (the §1 pin)
 
 # Confirm the byte-1 mirror is actually in respond_with_error
 # (effective equivalent of upstream PR betrusted-io/xous-core#877):
@@ -856,6 +884,6 @@ Hosted-mode builds don't produce a `xous.img` — they produce a
 - File issues at <https://github.com/tunnell/xous-app-signal/issues>.
 - This README's "Feature support" section tracks what works
   and what doesn't.
-- The README's "Upstream patches" section documents the patches
-  xas carries while their upstream PRs are in review, with links
-  to each PR.
+- The README's "Upstream patches" section documents the status
+  of each upstream fix xas has tracked (merged, closed, or still
+  carried in the pin/vendor), with links to each PR.

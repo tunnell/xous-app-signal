@@ -1,7 +1,9 @@
 # xas FAQ
 
 xas is an unofficial Signal client for Precursor running Xous OS.
-Status: alpha. Built on `presage` and `libsignal-service-rs`.
+Status: prototype — not for production use (see the README's
+feature-support matrix). Built on `presage` and
+`libsignal-service-rs`.
 
 If something here is wrong or out of date, file an issue or open a
 PR at <https://github.com/tunnell/xous-app-signal>.
@@ -35,11 +37,17 @@ PR at <https://github.com/tunnell/xous-app-signal>.
 ## Sending
 
 ### "Send fails with 'WebSocket closing'."
-- This is the known send issue we're tracking. The WS that send
-  rides on idle-closes after ~55s on Signal's server, and the
-  rv32-side keepalive may not be firing. **Workaround:** send
-  within ~10s of `LinkComplete`. Subsequent sends in the same
-  session may also fail until we land the keepalive fix.
+- Hard failures of this shape are addressed in the current build:
+  the vendored `libsignal-service-rs` tolerates in-flight
+  keepalives (`MAX_OUTSTANDING_KEEPALIVES = 3`) and the pinned
+  `xas-v0.2` xous-core carries the recv-encoding fix (upstream
+  betrusted-io/xous-core#877, since merged). If you still see it,
+  you're probably on an older xous-core — see BUILDING.md's
+  troubleshooting table.
+- The residual known issue is **latency, not failure**: a send
+  can take 1–4 minutes while the Signal edge server rotates the
+  WebSocket. The transport refactor on the roadmap addresses it.
+  Give a pending send a few minutes before declaring it dead.
 
 ### "Send fails with 'panic in send: …'."
 - `catch_unwind` around the libsignal-service send path surfaces
@@ -52,19 +60,19 @@ PR at <https://github.com/tunnell/xous-app-signal>.
 
 ### "I don't see a name, just a UUID."
 - Until you reply to that contact, xas only knows the UUID. Once
-  you send a message back (or the contact appears in a synced
-  contact list, once Sync is implemented), the human-readable
+  you send a message back — or pull the contact list from your
+  linked phone with F2 (Sync) on Home — the human-readable
   short-name kicks in.
 
 ### "Messages from groups don't appear."
-- Group messages aren't supported in alpha. Only 1:1 conversations
-  render. There's no roadmap for group support yet — file an issue
-  if you need it.
+- Group messages aren't supported yet. Only 1:1 conversations
+  render. Group support is a roadmap item (see the README's
+  feature-support matrix) — file an issue if you need it sooner.
 
 ### "Attachments don't appear."
-- Attachments aren't supported in alpha. The text body of an
-  attachment-only message renders as the body the sender attached
-  (if any).
+- Attachments aren't supported (out of scope — see the README's
+  feature-support matrix). The text body of an attachment-only
+  message renders as the body the sender attached (if any).
 
 ---
 
@@ -124,9 +132,11 @@ PR at <https://github.com/tunnell/xous-app-signal>.
   opening xas.
 
 ### "DNS fails for chat.signal.org."
-- xas includes a CNAME-chain fix for the Xous resolver
-  (`xous-core/services/net/src/connection_manager.rs`). If you're
-  on an older xous-core, pull the latest `xas` branch.
+- The pinned xous-core carries a CNAME-chain fix for the Xous DNS
+  parser (`xous-core/services/dns/src/main.rs`, commit
+  `43dcb4a59`). If you're on an older xous-core, switch to the
+  pinned `xas-v0.2` branch from BUILDING.md §1 (or a newer
+  `xas`-family branch).
 - If `net ping 1.1.1.1` succeeds but `net ping chat.signal.org`
   fails, your DNS resolver is misconfigured (or you're on an
   xous-core build that predates the CNAME fix). Check
@@ -137,11 +147,13 @@ PR at <https://github.com/tunnell/xous-app-signal>.
 ## Keyboard
 
 ### "What do F1–F4 do?"
-- **F1**: New chat (prompts for a UUID; phone-number and Signal
-  username lookup are TBD — see the Tier-2 roadmap items).
-- **F2**: Sync — placeholder; not yet implemented.
+- **F1**: New chat — prompts for a UUID or a Signal username
+  (`name.000` form, resolved over the network). Phone-number
+  lookup is not supported (CDSI is disabled in this build).
+- **F2**: Sync — pulls the contact list from your linked phone;
+  a notification confirms when it completes.
 - **F3**: Help — opens this FAQ summary in-app.
-- **F4**: Settings — Profile / Help / About / Logout / Quit.
+- **F4**: Settings — Profile / Help / About / Logout.
 - On Thread: F1 also sends (alias for Enter), F4 opens Settings.
 
 ### "Esc?"
@@ -159,15 +171,16 @@ PR at <https://github.com/tunnell/xous-app-signal>.
 
 ### "I want to test the UI without re-linking."
 - After a successful link, run `pddb dump` from shellchat. That
-  writes `xous-core/tools/pddb-images/full.bin`. Snapshot it via
-  `restore-hosted-pddb.sh save` (the script lives in the
-  out-of-repo working directory). Restore later with the same
-  script before launching hosted.
+  writes `xous-core/tools/pddb-images/full.bin`. Copy that file
+  somewhere safe, and copy it back into place before launching
+  hosted to restore the linked state.
 
 ### "How do I log out / re-link as a different account?"
-- Logout isn't yet implemented. Manual path: `pddb wipe` from
-  shellchat and re-link. (Or wipe the snapshot file in hosted
-  mode.) See the `Cmd::Logout` chore for the proper flow.
+- Settings (F4) → Logout. It asks for confirmation, then wipes
+  the link state from the PDDB and returns to the pre-link menu;
+  re-linking means another QR scan. Manual fallback if the app
+  is wedged: `pddb wipe` from shellchat (or wipe the snapshot
+  file in hosted mode).
 
 ---
 
@@ -181,6 +194,7 @@ PR at <https://github.com/tunnell/xous-app-signal>.
   - What you were doing when it happened (link / send / receive /
     idle).
 
-The two active known issues are the send-WebSocket close and the
-absence of contact sync. Anything else is probably a fresh bug —
+The best-known active issue is send latency (first send can take
+1–4 minutes — Signal edge-server WebSocket rotation; transport
+refactor on the roadmap). Anything else is probably a fresh bug —
 please report it.

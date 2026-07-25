@@ -138,8 +138,8 @@ if [ -z "$WIN_HEX" ]; then
 fi
 echo "==> Precursor window=$WIN_HEX"
 
-# Step 4: drive the link flow via XSendEvent. Reuses the proven
-# pattern from agent_notes/drive_to_signal.py.
+# Step 4: drive the link flow via XSendEvent (drive_link.py calls
+# libX11 directly via ctypes).
 echo "==> driving keystrokes to xas"
 python3 "$(dirname "$0")/drive_link.py" "$WIN_HEX" >"$DRIVE_LOG" 2>&1
 DRIVE_EC=$?

@@ -30,7 +30,7 @@ testing approaches.
 | `drive_link.py` | Helper used by `test_link_qr.sh` to script keystrokes into the minifb window. |
 | `scan_receive.sh` | Boots hosted with a longer hold so you can scan the QR from your phone and verify a receive end-to-end. |
 | `test_helpers.sh` | Shared bash helpers (sourced by the other scripts). |
-| `test_env.example` | Template for `tests/hosted/test.env` — copy and fill in before running scripts that need a peer phone number. |
+| `test_env.example` | Template for `tests/hosted/test_env` (gitignored) — copy and fill in before running scripts that need a peer phone number. |
 
 ## Running the headless link smoke test
 

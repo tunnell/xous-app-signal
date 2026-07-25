@@ -10,8 +10,8 @@ With `--press-enter`, sends a single Return keypress and exits —
 the wrapper's retry-Enter loop uses this to accept the device-name
 modal through the same XSendEvent path as the main flow.
 
-Reuses the XSendEvent ctypes pattern from `agent_notes/
-drive_to_signal.py` (more reliable than xdotool under SSH X11).
+Injects keystrokes by calling libX11's XSendEvent directly via
+ctypes (more reliable than xdotool under SSH X11).
 """
 
 import ctypes

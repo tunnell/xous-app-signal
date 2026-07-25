@@ -39,11 +39,12 @@ approaches are in [tests/README.md]. Common commands:
 
 | Goal | Command |
 |---|---|
-| Hosted build | `cargo run --release` |
+| Hosted build | `cargo build --release -p xous-app-signal --features pddb-real,hosted` |
+| Hosted run (from the `xous-core/` sibling) | `cargo xtask run xas:../xous-app-signal/target/release/xas` |
 | Hardware bundle | `bash tests/precursor/build-and-bundle.sh` |
 | Flash via Pi rig | `bash tests/precursor/flash-via-pi.sh` |
 | Renode smoke | `bash tests/renode/run-renode-tests.sh` |
-| Hosted integration | `bash tests/hosted/test_xas_round_trip.sh` |
+| Hosted integration | `python3 tests/hosted/test_xas_round_trip.py` |
 
 ## Vendored + frozen branches
 
