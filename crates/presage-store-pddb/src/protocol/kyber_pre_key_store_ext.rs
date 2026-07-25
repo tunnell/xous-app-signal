@@ -16,12 +16,12 @@ use presage::libsignal_service::protocol::{
     GenericSignedPreKey, KyberPreKeyId, KyberPreKeyRecord, SignalProtocolError,
 };
 
-use crate::list_keys_as_u32s;
-
 use super::{
-    PddbProtocolStore, dict_kyber_prekey, protocol_backend_err,
+    PddbProtocolStore, dict_kyber_prekey,
     kyber_pre_key_store::{KyberStored, load_envelope, store_envelope},
+    protocol_backend_err,
 };
+use crate::list_keys_as_u32s;
 
 #[async_trait(?Send)]
 impl KyberPreKeyStoreExt for PddbProtocolStore {
@@ -30,25 +30,16 @@ impl KyberPreKeyStoreExt for PddbProtocolStore {
         kyber_prekey_id: KyberPreKeyId,
         record: &KyberPreKeyRecord,
     ) -> Result<(), SignalProtocolError> {
-        store_envelope(
-            self,
-            kyber_prekey_id,
-            record,
-            /* is_last_resort */ true,
-        )
+        store_envelope(self, kyber_prekey_id, record, /* is_last_resort */ true)
     }
 
-    async fn load_last_resort_kyber_pre_keys(
-        &self,
-    ) -> Result<Vec<KyberPreKeyRecord>, SignalProtocolError> {
+    async fn load_last_resort_kyber_pre_keys(&self) -> Result<Vec<KyberPreKeyRecord>, SignalProtocolError> {
         let dict = dict_kyber_prekey(self.identity);
         let ids = list_keys_as_u32s(&*self.store.backend, &dict).map_err(protocol_backend_err)?;
         let mut out = Vec::new();
         for id in ids {
-            if let Some(KyberStored {
-                record,
-                is_last_resort: true,
-            }) = load_envelope(self, KyberPreKeyId::from(id))?
+            if let Some(KyberStored { record, is_last_resort: true }) =
+                load_envelope(self, KyberPreKeyId::from(id))?
             {
                 out.push(KyberPreKeyRecord::deserialize(&record)?);
             }

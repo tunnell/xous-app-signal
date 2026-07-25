@@ -9,15 +9,11 @@
 //!
 //! # Crate boundaries
 //!
-//! - Upstream of this crate: the binary in `xous-app-signal` (sends
-//!   [`Cmd`], receives [`Event`]).
+//! - Upstream of this crate: the binary in `xous-app-signal` (sends [`Cmd`], receives [`Event`]).
 //! - Below this crate:
-//!   - [`presage_store_pddb`] for storage (passed in as
-//!     [`PddbStore`]).
-//!   - [`xous_net_bridge`] for transport (installed as a
-//!     `thread_local!` `HttpClient` here).
-//!   - `presage::Manager` and `libsignal-service-rs` consumed via the
-//!     vendored copies.
+//!   - [`presage_store_pddb`] for storage (passed in as [`PddbStore`]).
+//!   - [`xous_net_bridge`] for transport (installed as a `thread_local!` `HttpClient` here).
+//!   - `presage::Manager` and `libsignal-service-rs` consumed via the vendored copies.
 //!
 //! # Why a `LocalExecutor`
 //!
@@ -51,13 +47,12 @@
 
 mod cmd;
 
-pub use cmd::{Cmd, Event};
-
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use async_channel::{Receiver, Sender};
 use async_executor::LocalExecutor;
+pub use cmd::{Cmd, Event};
 use futures_lite::future::block_on;
 use presage::Manager;
 use presage::libsignal_service::configuration::SignalServers;
@@ -90,10 +85,8 @@ const WORKER_STACK_BYTES: usize = 2 * 1024 * 1024;
 /// Returns a [`JoinHandle`] for the worker thread itself. The worker
 /// terminates when either:
 ///
-/// - `cmd_rx` returns `Err(RecvError)` (the main thread dropped its
-///   sender — implicit shutdown), or
-/// - it processes a [`Cmd::Shutdown`] and emits
-///   [`Event::ShuttingDown`].
+/// - `cmd_rx` returns `Err(RecvError)` (the main thread dropped its sender — implicit shutdown), or
+/// - it processes a [`Cmd::Shutdown`] and emits [`Event::ShuttingDown`].
 ///
 /// `event_tx` is held across `await` points so the executor parks on
 /// I/O rather than busy-waiting; cloning is cheap (the channel
@@ -124,11 +117,7 @@ const WORKER_STACK_BYTES: usize = 2 * 1024 * 1024;
 /// (`WORKER_STACK_BYTES`). Calling this twice produces two threads
 /// and two stack reservations — there is no intent for multiple
 /// workers to coexist; the binary spawns exactly one.
-pub fn run_signal_worker(
-    store: PddbStore,
-    cmd_rx: Receiver<Cmd>,
-    event_tx: Sender<Event>,
-) -> JoinHandle<()> {
+pub fn run_signal_worker(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>) -> JoinHandle<()> {
     thread::Builder::new()
         .name("signal-worker".into())
         .stack_size(WORKER_STACK_BYTES)
@@ -166,12 +155,10 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
     // presage require on every thread that calls their async APIs.
     // The worker is the only such thread.
     //
-    // 1. `HttpClient` — the sync HTTP/1.1 + WebSocket transport
-    //    (`SyncHttpClient` from `xous-net-bridge`). Cloning is cheap
-    //    (Arc-shaped).
-    // 2. `TaskSpawner` — closure used by libsignal-service-rs's
-    //    internals (`provisioning::link_device`, WS handlers) to
-    //    fire-and-forget detached tasks onto our local executor.
+    // 1. `HttpClient` — the sync HTTP/1.1 + WebSocket transport (`SyncHttpClient` from `xous-net-bridge`).
+    //    Cloning is cheap (Arc-shaped).
+    // 2. `TaskSpawner` — closure used by libsignal-service-rs's internals (`provisioning::link_device`, WS
+    //    handlers) to fire-and-forget detached tasks onto our local executor.
     //
     // Without either, `Manager::link_secondary_device` panics on its
     // first internal `PushService` construction or `ws()` call.
@@ -654,13 +641,7 @@ async fn handle_link_device(
             let device_name = data.device_name.clone().unwrap_or_default();
             let aci = data.service_ids.aci.to_string();
             let phone = data.phone_number.to_string();
-            let _ = event_tx
-                .send(Event::LinkComplete {
-                    device_name,
-                    aci,
-                    phone,
-                })
-                .await;
+            let _ = event_tx.send(Event::LinkComplete { device_name, aci, phone }).await;
             // NOTE: load-bearing — do NOT auto-fetch contacts on link.
             //
             // `manager.request_contacts()` does multiple WS round-trips
@@ -817,19 +798,15 @@ fn spawn_manager_task(
 /// The receive loop reads `manager.last_identified_close_code()` to
 /// distinguish three failure modes on a failed reconnect:
 ///
-/// - `4409 "Connected elsewhere"` — another authenticated WS for
-///   the same `(account, deviceId)` displaced this one. Treated as
-///   terminal (auto-reconnect would self-displace again); emits
+/// - `4409 "Connected elsewhere"` — another authenticated WS for the same `(account, deviceId)` displaced
+///   this one. Treated as terminal (auto-reconnect would self-displace again); emits
 ///   [`Event::SignalConflictingDevice`] and exits.
-/// - `4401 "Reauthentication required"` followed by repeated
-///   `HTTP 403 Forbidden` handshakes — credential rotation has
-///   failed permanently. After `MAX_REAUTH_403S` attempts emits
-///   [`Event::SignalAuthExpired`] and exits.
-/// - `1001 "Connection Idle Timeout"` and other transient closes —
-///   exponential backoff (base 1s × 1.5^n, capped at 30s) plus a
-///   close-code-specific settling delay (10 s after `4401`, 1 s
-///   after `1001`/`4409`) to let the server-side `(account,
-///   deviceId)` listener-slot eviction complete before reconnecting.
+/// - `4401 "Reauthentication required"` followed by repeated `HTTP 403 Forbidden` handshakes — credential
+///   rotation has failed permanently. After `MAX_REAUTH_403S` attempts emits [`Event::SignalAuthExpired`] and
+///   exits.
+/// - `1001 "Connection Idle Timeout"` and other transient closes — exponential backoff (base 1s × 1.5^n,
+///   capped at 30s) plus a close-code-specific settling delay (10 s after `4401`, 1 s after `1001`/`4409`) to
+///   let the server-side `(account, deviceId)` listener-slot eviction complete before reconnecting.
 ///
 /// # Pending-send grace window
 ///
@@ -1042,7 +1019,10 @@ async fn manager_task(
 
             log::info!(
                 "worker: manager_task — backoff {}ms before re-open (consecutive_failures={}, prev_close={:?}, extra_delay_ms={})",
-                backoff_ms, consecutive_failures, prev_close, extra_delay_ms,
+                backoff_ms,
+                consecutive_failures,
+                prev_close,
+                extra_delay_ms,
             );
             futures_timer::Delay::new(std::time::Duration::from_millis(backoff_ms)).await;
             if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
@@ -1072,7 +1052,8 @@ async fn manager_task(
                 let err_str = e.to_string();
                 log::warn!(
                     "worker: manager_task — receive_messages err (failure #{}): {}",
-                    consecutive_failures, err_str,
+                    consecutive_failures,
+                    err_str,
                 );
 
                 // Fetch the previous WS's close code once; reused by
@@ -1126,7 +1107,8 @@ async fn manager_task(
                     consecutive_reauth_403s = consecutive_reauth_403s.saturating_add(1);
                     log::warn!(
                         "worker: manager_task — 4401-then-403 #{}/{} (issue #13 Bug B)",
-                        consecutive_reauth_403s, MAX_REAUTH_403S,
+                        consecutive_reauth_403s,
+                        MAX_REAUTH_403S,
                     );
                     if consecutive_reauth_403s >= MAX_REAUTH_403S {
                         log::error!(
@@ -1152,9 +1134,7 @@ async fn manager_task(
                 // above is the exception — that's a terminal event, not
                 // a transient error banner.)
                 if consecutive_failures == 1 {
-                    let _ = event_tx
-                        .send(Event::ReceiveError(format!("receive_messages: {e}")))
-                        .await;
+                    let _ = event_tx.send(Event::ReceiveError(format!("receive_messages: {e}"))).await;
                 }
                 continue 'outer;
             }
@@ -1265,11 +1245,7 @@ async fn manager_task(
                             .map(|n| {
                                 let g = n.given_name.trim();
                                 let f = n.family_name.as_deref().unwrap_or("").trim();
-                                if f.is_empty() {
-                                    g.to_string()
-                                } else {
-                                    format!("{} {}", g, f)
-                                }
+                                if f.is_empty() { g.to_string() } else { format!("{} {}", g, f) }
                             })
                             .unwrap_or_default();
                         if name_str.is_empty() {
@@ -1279,21 +1255,14 @@ async fn manager_task(
                             );
                             continue;
                         }
-                        log::info!(
-                            "worker/profile: {} resolved → {:?}",
-                            aci_uuid, name_str
-                        );
-                        let _ = event_tx
-                            .send(Event::ContactResolved {
-                                aci_uuid,
-                                name: name_str,
-                            })
-                            .await;
+                        log::info!("worker/profile: {} resolved → {:?}", aci_uuid, name_str);
+                        let _ = event_tx.send(Event::ContactResolved { aci_uuid, name: name_str }).await;
                     }
                     Err(e) => {
                         log::info!(
                             "worker/profile: {} fetch failed (will not retry this run): {}",
-                            aci_uuid, e
+                            aci_uuid,
+                            e
                         );
                     }
                 }
@@ -1321,14 +1290,12 @@ async fn manager_task(
                 consecutive_failures = consecutive_failures.saturating_add(1);
                 log::warn!(
                     "worker: manager_task — stream closed (failure #{}, reason={}), re-opening with backoff",
-                    consecutive_failures, reason,
+                    consecutive_failures,
+                    reason,
                 );
                 if consecutive_failures == 1 {
                     let _ = event_tx
-                        .send(Event::ReceiveError(format!(
-                            "receive {} (auto-retrying)",
-                            reason
-                        )))
+                        .send(Event::ReceiveError(format!("receive {} (auto-retrying)", reason)))
                         .await;
                 }
             }
@@ -1346,20 +1313,14 @@ async fn manager_task(
 ///
 /// Three variants are handled:
 ///
-/// - `Received::Content(content)` — a decrypted-and-authenticated
-///   inbound message. `DataMessage`-style text bodies surface as
-///   [`Event::Message`]; `ReceiptMessage`s of type `DELIVERY` are
-///   peeled off to confirm pending deferred sends (see
-///   `pending_unconfirmed_sends` in [`manager_task`]); other body
-///   kinds are silently dropped because presage's internal handlers
-///   have already absorbed their effects into the store.
-/// - `Received::QueueEmpty` — server signals the message queue is
-///   drained. Triggers `store.flush_sessions()` to persist the
-///   batch of double-ratchet steps accumulated since the previous
-///   quiescence. Errors are logged but non-fatal — the next
-///   `QueueEmpty` retries.
-/// - `Received::Contacts` — contact-sync batch absorbed by the
-///   store internally; no user-visible event.
+/// - `Received::Content(content)` — a decrypted-and-authenticated inbound message. `DataMessage`-style text
+///   bodies surface as [`Event::Message`]; `ReceiptMessage`s of type `DELIVERY` are peeled off to confirm
+///   pending deferred sends (see `pending_unconfirmed_sends` in [`manager_task`]); other body kinds are
+///   silently dropped because presage's internal handlers have already absorbed their effects into the store.
+/// - `Received::QueueEmpty` — server signals the message queue is drained. Triggers `store.flush_sessions()`
+///   to persist the batch of double-ratchet steps accumulated since the previous quiescence. Errors are
+///   logged but non-fatal — the next `QueueEmpty` retries.
+/// - `Received::Contacts` — contact-sync batch absorbed by the store internally; no user-visible event.
 ///
 /// # Trust boundary
 ///
@@ -1396,11 +1357,14 @@ async fn process_received(
     use presage::libsignal_service::content::ContentBody;
     use presage::model::messages::Received;
 
-    log::info!("worker: process_received variant={}", match &item {
-        Received::Content(_) => "Content",
-        Received::QueueEmpty => "QueueEmpty",
-        Received::Contacts => "Contacts",
-    });
+    log::info!(
+        "worker: process_received variant={}",
+        match &item {
+            Received::Content(_) => "Content",
+            Received::QueueEmpty => "QueueEmpty",
+            Received::Contacts => "Contacts",
+        }
+    );
     match item {
         Received::Content(content) => {
             log::info!(
@@ -1408,13 +1372,16 @@ async fn process_received(
                 match &content.body {
                     presage::libsignal_service::content::ContentBody::NullMessage(_) => "NullMessage",
                     presage::libsignal_service::content::ContentBody::DataMessage(_) => "DataMessage",
-                    presage::libsignal_service::content::ContentBody::SynchronizeMessage(_) => "SynchronizeMessage",
+                    presage::libsignal_service::content::ContentBody::SynchronizeMessage(_) =>
+                        "SynchronizeMessage",
                     presage::libsignal_service::content::ContentBody::CallMessage(_) => "CallMessage",
                     presage::libsignal_service::content::ContentBody::ReceiptMessage(_) => "ReceiptMessage",
                     presage::libsignal_service::content::ContentBody::TypingMessage(_) => "TypingMessage",
-                    presage::libsignal_service::content::ContentBody::DecryptionErrorMessage(_) => "DecryptionErrorMessage",
+                    presage::libsignal_service::content::ContentBody::DecryptionErrorMessage(_) =>
+                        "DecryptionErrorMessage",
                     presage::libsignal_service::content::ContentBody::StoryMessage(_) => "StoryMessage",
-                    presage::libsignal_service::content::ContentBody::PniSignatureMessage(_) => "PniSignatureMessage",
+                    presage::libsignal_service::content::ContentBody::PniSignatureMessage(_) =>
+                        "PniSignatureMessage",
                     presage::libsignal_service::content::ContentBody::EditMessage(_) => "EditMessage",
                 }
             );
@@ -1434,11 +1401,7 @@ async fn process_received(
                                 "worker/send: ts={} confirmed by DELIVERY receipt; emitting SendComplete",
                                 ts,
                             );
-                            if event_tx
-                                .send(Event::SendComplete { timestamp: *ts })
-                                .await
-                                .is_err()
-                            {
+                            if event_tx.send(Event::SendComplete { timestamp: *ts }).await.is_err() {
                                 return false;
                             }
                         }
@@ -1474,10 +1437,7 @@ async fn process_received(
             use presage::store::ContentsStore;
             let (sender_phone, sender_name) = match store.contact_by_id(&sender_sid).await {
                 Ok(Some(c)) => {
-                    let phone = c
-                        .phone_number
-                        .as_ref()
-                        .map(|pn| pn.format().mode(Mode::E164).to_string());
+                    let phone = c.phone_number.as_ref().map(|pn| pn.format().mode(Mode::E164).to_string());
                     let name = if c.name.is_empty() { None } else { Some(c.name) };
                     (phone, name)
                 }
@@ -1510,16 +1470,7 @@ async fn process_received(
                 }
             }
 
-            event_tx
-                .send(Event::Message {
-                    sender,
-                    sender_phone,
-                    sender_name,
-                    body,
-                    timestamp,
-                })
-                .await
-                .is_ok()
+            event_tx.send(Event::Message { sender, sender_phone, sender_name, body, timestamp }).await.is_ok()
         }
         Received::QueueEmpty => {
             // Flush dirty sessions in batched chunks at
@@ -1558,10 +1509,8 @@ async fn sweep_expired_pending_sends(
         return;
     }
     let now = std::time::Instant::now();
-    let expired: Vec<u64> = pending
-        .iter()
-        .filter_map(|(ts, deadline)| if now >= *deadline { Some(*ts) } else { None })
-        .collect();
+    let expired: Vec<u64> =
+        pending.iter().filter_map(|(ts, deadline)| if now >= *deadline { Some(*ts) } else { None }).collect();
     for ts in expired {
         pending.remove(&ts);
         log::info!(
@@ -1599,9 +1548,7 @@ async fn run_manager_op(
             handle_send(manager, send, event_tx, pending_unconfirmed_sends, pending_grace).await
         }
         WorkerOp::SyncContacts => handle_sync_contacts(manager, event_tx).await,
-        WorkerOp::ResolveUsername(input) => {
-            handle_resolve_username(manager, input, event_tx).await
-        }
+        WorkerOp::ResolveUsername(input) => handle_resolve_username(manager, input, event_tx).await,
     }
 }
 
@@ -1613,10 +1560,7 @@ async fn run_manager_op(
 /// `ContentsStore`. Display names for already-rendered rows are then
 /// picked up by the `contact_by_id` resolution in
 /// [`process_received`] as further messages arrive.
-async fn handle_sync_contacts(
-    manager: &mut Manager<PddbStore, Registered>,
-    event_tx: &Sender<Event>,
-) {
+async fn handle_sync_contacts(manager: &mut Manager<PddbStore, Registered>, event_tx: &Sender<Event>) {
     match manager.request_contacts().await {
         Ok(()) => {
             log::info!("worker/sync: request_contacts OK");
@@ -1661,26 +1605,20 @@ async fn handle_resolve_username(
 /// Always emits exactly one event for the caller's timestamp:
 ///
 /// - [`Event::SendComplete`] on a successful send.
-/// - [`Event::SendError`] on a non-retryable failure (panic, bad
-///   recipient, batch begin failure, etc.).
-/// - Nothing immediately: on a `WebSocket closing`-shaped failure
-///   after the retry budget is exhausted, the timestamp is
-///   deferred into `pending_unconfirmed_sends` with deadline
-///   `now + pending_grace`. Either [`process_received`] surfaces
-///   a `SendComplete` when the DELIVERY receipt arrives, or
-///   [`sweep_expired_pending_sends`] emits the final `SendError`
-///   after the deadline.
+/// - [`Event::SendError`] on a non-retryable failure (panic, bad recipient, batch begin failure, etc.).
+/// - Nothing immediately: on a `WebSocket closing`-shaped failure after the retry budget is exhausted, the
+///   timestamp is deferred into `pending_unconfirmed_sends` with deadline `now + pending_grace`. Either
+///   [`process_received`] surfaces a `SendComplete` when the DELIVERY receipt arrives, or
+///   [`sweep_expired_pending_sends`] emits the final `SendError` after the deadline.
 ///
 /// # Recipient parsing
 ///
 /// `recipient` may be:
 ///
-/// - A UUID/ACI in dashed form (36 chars): converted directly to
-///   `ServiceId::Aci`.
-/// - A phone number in e164 form (`+<digits>`): resolved against
-///   the contacts store. Fails with `Event::SendError` if no
-///   contact matches (the user must either receive a message from
-///   that peer first, run `Cmd::SyncContacts`, or send by UUID).
+/// - A UUID/ACI in dashed form (36 chars): converted directly to `ServiceId::Aci`.
+/// - A phone number in e164 form (`+<digits>`): resolved against the contacts store. Fails with
+///   `Event::SendError` if no contact matches (the user must either receive a message from that peer first,
+///   run `Cmd::SyncContacts`, or send by UUID).
 /// - Anything else: fails with `Event::SendError`.
 ///
 /// # Retry policy
@@ -1808,10 +1746,7 @@ async fn handle_send(
         log::warn!("worker/send: recipient parse failed: {:?}", send.recipient);
         let _ = event_tx
             .send(Event::SendError {
-                reason: format!(
-                    "recipient must be ACI UUID or +e164 phone number; got {:?}",
-                    send.recipient
-                ),
+                reason: format!("recipient must be ACI UUID or +e164 phone number; got {:?}", send.recipient),
                 timestamp: Some(timestamp),
             })
             .await;
@@ -1851,10 +1786,7 @@ async fn handle_send(
 
     let mut last_err: Option<String> = None;
     for attempt in 1..=SEND_MAX_ATTEMPTS {
-        log::info!(
-            "worker/send: attempt {}/{} ts={}",
-            attempt, SEND_MAX_ATTEMPTS, timestamp,
-        );
+        log::info!("worker/send: attempt {}/{} ts={}", attempt, SEND_MAX_ATTEMPTS, timestamp,);
 
         // Open a send-time write batch. Each attempt gets its own
         // batch scope; on retry the previous attempt's guard has
@@ -1886,18 +1818,27 @@ async fn handle_send(
         let pipeline_start = std::time::Instant::now();
         log::info!(
             "perf/send: batch_scope_enter ts={} attempt={} buffered={}",
-            timestamp, attempt,
+            timestamp,
+            attempt,
             batch_guard.as_ref().map(|g| g.buffered_len()).unwrap_or(0)
         );
-        let send_fut = std::panic::AssertUnwindSafe(
-            manager.send_message(recipient.clone(), content_body.clone(), timestamp),
-        );
+        let send_fut = std::panic::AssertUnwindSafe(manager.send_message(
+            recipient.clone(),
+            content_body.clone(),
+            timestamp,
+        ));
         let outcome = send_fut.catch_unwind().await;
         let pipeline_ms = pipeline_start.elapsed().as_millis() as u64;
         log::info!(
             "perf/send: manager.send_message returned ts={} attempt={} pipeline_ms={} result={:?}",
-            timestamp, attempt, pipeline_ms,
-            match &outcome { Ok(Ok(())) => "ok", Ok(Err(_)) => "err", Err(_) => "panic" }
+            timestamp,
+            attempt,
+            pipeline_ms,
+            match &outcome {
+                Ok(Ok(())) => "ok",
+                Ok(Err(_)) => "err",
+                Err(_) => "panic",
+            }
         );
         let result_kind = match &outcome {
             Ok(Ok(())) => "ok",
@@ -1906,7 +1847,9 @@ async fn handle_send(
         };
         log::info!(
             "worker/send: attempt {} returned pipeline_ms={} result={}",
-            attempt, pipeline_ms, result_kind,
+            attempt,
+            pipeline_ms,
+            result_kind,
         );
 
         match outcome {
@@ -1947,24 +1890,27 @@ async fn handle_send(
                     match g.commit() {
                         Ok(n) => log::info!(
                             "worker/send: batch committed (sessions inside) ts={} (n={})",
-                            timestamp, n
+                            timestamp,
+                            n
                         ),
-                        Err(e) => log::warn!(
-                            "worker/send: batch commit failed ts={}: {}",
-                            timestamp, e
-                        ),
+                        Err(e) => log::warn!("worker/send: batch commit failed ts={}: {}", timestamp, e),
                     }
                 }
                 let _perf_commit_ms = _perf_pre_commit.elapsed().as_millis();
                 log::info!(
                     "perf/send: batch_scope_commit ts={} attempt={} buffered_at_commit={} flush_sessions_ms={} commit_ms={}",
-                    timestamp, attempt, _perf_buffered_at_commit,
-                    _perf_flush_ms, _perf_commit_ms
+                    timestamp,
+                    attempt,
+                    _perf_buffered_at_commit,
+                    _perf_flush_ms,
+                    _perf_commit_ms
                 );
                 log::info!("worker/send: SendComplete ts={} (attempt {})", timestamp, attempt);
                 log::info!(
                     "perf/cold-send: END ts={} attempt={} handle_send_total_ms={}",
-                    timestamp, attempt, _perf_handle_send_start.elapsed().as_millis()
+                    timestamp,
+                    attempt,
+                    _perf_handle_send_start.elapsed().as_millis()
                 );
                 let _ = event_tx.send(Event::SendComplete { timestamp }).await;
                 return;
@@ -1977,7 +1923,10 @@ async fn handle_send(
                     let delay = backoff_for(attempt);
                     log::info!(
                         "worker/send: WsClosing-shaped error; sleeping {:?} then retrying (attempt {}->{} of {})",
-                        delay, attempt, attempt + 1, SEND_MAX_ATTEMPTS,
+                        delay,
+                        attempt,
+                        attempt + 1,
+                        SEND_MAX_ATTEMPTS,
                     );
                     futures_timer::Delay::new(delay).await;
                     last_err = Some(msg);
@@ -1996,17 +1945,13 @@ async fn handle_send(
                     log::info!(
                         "worker/send: ts={} retries exhausted with WsClosing-shaped error; \
                          deferring SendError for {:?} pending delivery receipt",
-                        timestamp, pending_grace,
+                        timestamp,
+                        pending_grace,
                     );
                     let _ = last_err.replace(msg);
                     return;
                 }
-                let _ = event_tx
-                    .send(Event::SendError {
-                        reason: msg,
-                        timestamp: Some(timestamp),
-                    })
-                    .await;
+                let _ = event_tx.send(Event::SendError { reason: msg, timestamp: Some(timestamp) }).await;
                 return;
             }
             Err(panic_payload) => {
@@ -2017,10 +1962,7 @@ async fn handle_send(
                 } else {
                     "unknown panic payload".to_string()
                 };
-                log::error!(
-                    "worker/send: PANIC inside manager.send_message attempt {}: {}",
-                    attempt, msg,
-                );
+                log::error!("worker/send: PANIC inside manager.send_message attempt {}: {}", attempt, msg,);
                 let _ = event_tx
                     .send(Event::SendError {
                         reason: format!("panic in send: {msg}"),
@@ -2149,10 +2091,7 @@ mod tests {
         pending.insert(200, now + Duration::from_secs(60)); // not yet
         pending.insert(300, now - Duration::from_millis(1)); // expired
 
-        futures::executor::block_on(super::sweep_expired_pending_sends(
-            &mut pending,
-            &event_tx,
-        ));
+        futures::executor::block_on(super::sweep_expired_pending_sends(&mut pending, &event_tx));
 
         // Two SendError events expected, for ts=100 and ts=300, in
         // any order (HashMap iteration is unordered).

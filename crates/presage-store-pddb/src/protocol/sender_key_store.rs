@@ -27,12 +27,7 @@ use presage::libsignal_service::protocol::{
 use super::{PddbProtocolStore, dict_sender_key, protocol_backend_err};
 
 fn sender_key_key(address: &ProtocolAddress, distribution_id: Uuid) -> String {
-    format!(
-        "{}.{}.{}",
-        address.name(),
-        u32::from(address.device_id()),
-        distribution_id.simple()
-    )
+    format!("{}.{}.{}", address.name(), u32::from(address.device_id()), distribution_id.simple())
 }
 
 #[async_trait(?Send)]
@@ -46,10 +41,7 @@ impl SenderKeyStore for PddbProtocolStore {
         let dict = dict_sender_key(self.identity);
         let key = sender_key_key(sender, distribution_id);
         let bytes = record.serialize()?;
-        self.store
-            .backend
-            .put(&dict, &key, &bytes)
-            .map_err(protocol_backend_err)
+        self.store.backend.put(&dict, &key, &bytes).map_err(protocol_backend_err)
     }
 
     async fn load_sender_key(

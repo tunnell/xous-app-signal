@@ -11,19 +11,14 @@
 //!
 //! Three threads per WSS:
 //!
-//! - **setup thread** (`xous-net-bridge-ws-setup`): owns the TLS +
-//!   tungstenite handshake. On success, wraps the resulting
-//!   `WebSocket<RustlsStream>` in `Arc<Mutex<_>>` and spawns the
-//!   reader and writer. Holds no state after that — its only role
-//!   post-spawn is to `join` the children and close the inbound
-//!   channel.
-//! - **reader thread** (`xous-net-bridge-ws-reader`): acquires the
-//!   mutex, calls `WebSocket::read()`, releases the mutex, forwards
-//!   each frame into the incoming channel. The TCP read timeout
-//!   (5 s, set in [`crate::tls::tls_connect_with_config`]) gives the
-//!   writer a window to acquire the mutex on idle WSes.
-//! - **writer thread** (`xous-net-bridge-ws-writer`): acquires the
-//!   mutex, calls `WebSocket::send()`, releases the mutex.
+//! - **setup thread** (`xous-net-bridge-ws-setup`): owns the TLS + tungstenite handshake. On success, wraps
+//!   the resulting `WebSocket<RustlsStream>` in `Arc<Mutex<_>>` and spawns the reader and writer. Holds no
+//!   state after that — its only role post-spawn is to `join` the children and close the inbound channel.
+//! - **reader thread** (`xous-net-bridge-ws-reader`): acquires the mutex, calls `WebSocket::read()`, releases
+//!   the mutex, forwards each frame into the incoming channel. The TCP read timeout (5 s, set in
+//!   [`crate::tls::tls_connect_with_config`]) gives the writer a window to acquire the mutex on idle WSes.
+//! - **writer thread** (`xous-net-bridge-ws-writer`): acquires the mutex, calls `WebSocket::send()`, releases
+//!   the mutex.
 //!
 //! Single-threaded designs deadlock on `WebSocket::read()`: that call
 //! blocks the calling thread until a frame arrives, so a single
@@ -112,26 +107,20 @@ const FRAME_CHANNEL_CAPACITY: usize = 16;
 ///
 /// # Pipeline
 ///
-/// 1. Spawn the setup thread, which drives the TLS handshake via
-///    [`crate::tls::tls_connect_with_config`] and then the tungstenite
-///    HTTP/1.1 upgrade with `headers` and (optional) `auth`.
-/// 2. On handshake success, the setup thread wraps the `WebSocket` in
-///    `Arc<Mutex<_>>`, spawns the reader and writer threads, and
-///    signals success on `handshake_done_rx`.
-/// 3. This `async fn` resumes, returns the [`WebSocketChannels`] pair
-///    to the caller, and returns.
-/// 4. The reader and writer threads run until the WS closes, the
-///    socket errors, the mutex is poisoned, or `in_tx` / `out_rx`
-///    closes. On exit, the setup thread joins both and drops `in_tx`,
-///    which the async executor sees as channel-closed.
+/// 1. Spawn the setup thread, which drives the TLS handshake via [`crate::tls::tls_connect_with_config`] and
+///    then the tungstenite HTTP/1.1 upgrade with `headers` and (optional) `auth`.
+/// 2. On handshake success, the setup thread wraps the `WebSocket` in `Arc<Mutex<_>>`, spawns the reader and
+///    writer threads, and signals success on `handshake_done_rx`.
+/// 3. This `async fn` resumes, returns the [`WebSocketChannels`] pair to the caller, and returns.
+/// 4. The reader and writer threads run until the WS closes, the socket errors, the mutex is poisoned, or
+///    `in_tx` / `out_rx` closes. On exit, the setup thread joins both and drops `in_tx`, which the async
+///    executor sees as channel-closed.
 ///
 /// # Errors
 ///
-/// - `HttpError::Network` if the setup thread fails to spawn or dies
-///   before the handshake completes.
-/// - Any error from [`handshake`] (TLS connect, tungstenite upgrade)
-///   propagates through the `handshake_done_rx` channel and is
-///   returned here.
+/// - `HttpError::Network` if the setup thread fails to spawn or dies before the handshake completes.
+/// - Any error from [`handshake`] (TLS connect, tungstenite upgrade) propagates through the
+///   `handshake_done_rx` channel and is returned here.
 ///
 /// # Auth
 ///
@@ -153,8 +142,7 @@ pub(crate) async fn connect_websocket(
 ) -> Result<WebSocketChannels, HttpError> {
     let (handshake_done_tx, handshake_done_rx) = async_channel::bounded(1);
     let (out_tx, out_rx) = async_channel::bounded::<WsFrame>(FRAME_CHANNEL_CAPACITY);
-    let (in_tx, in_rx) =
-        async_channel::bounded::<Result<WsFrame, HttpError>>(FRAME_CHANNEL_CAPACITY);
+    let (in_tx, in_rx) = async_channel::bounded::<Result<WsFrame, HttpError>>(FRAME_CHANNEL_CAPACITY);
 
     // Reader/writer worker threads (spawned only after a successful
     // handshake; the handshake itself runs on a dedicated setup thread).
@@ -199,15 +187,9 @@ pub(crate) async fn connect_websocket(
         .map_err(|e| HttpError::Network(format!("ws setup thread spawn: {e}")))?;
 
     // Wait for the handshake to complete before returning.
-    handshake_done_rx
-        .recv()
-        .await
-        .map_err(|_| HttpError::Network("ws setup thread died".to_string()))??;
+    handshake_done_rx.recv().await.map_err(|_| HttpError::Network("ws setup thread died".to_string()))??;
 
-    Ok(WebSocketChannels {
-        outgoing: out_tx,
-        incoming: in_rx,
-    })
+    Ok(WebSocketChannels { outgoing: out_tx, incoming: in_rx })
 }
 
 /// Drive the TLS handshake then the tungstenite WSS upgrade.
@@ -223,21 +205,16 @@ pub(crate) async fn connect_websocket(
 /// # Errors
 ///
 /// - `HttpError::InvalidUrl` if `url` lacks a host.
-/// - `HttpError::Network` for any TLS or tungstenite handshake
-///   failure. The display of the inner error is included; rustls and
-///   tungstenite error strings contain peer hostname, error category,
-///   and (on cert verification) certificate subject — no secret
-///   material — so the message is safe to log.
+/// - `HttpError::Network` for any TLS or tungstenite handshake failure. The display of the inner error is
+///   included; rustls and tungstenite error strings contain peer hostname, error category, and (on cert
+///   verification) certificate subject — no secret material — so the message is safe to log.
 fn handshake(
     config: Arc<ClientConfig>,
     url: url::Url,
     headers: HeaderMap,
     auth: Option<BasicAuth>,
 ) -> Result<WebSocket<RustlsStream>, HttpError> {
-    let host = url
-        .host_str()
-        .ok_or_else(|| HttpError::InvalidUrl("missing host".to_string()))?
-        .to_string();
+    let host = url.host_str().ok_or_else(|| HttpError::InvalidUrl("missing host".to_string()))?.to_string();
     let port = url.port_or_known_default().unwrap_or(443);
 
     let stream = tls_connect_with_config(&host, port, config)
@@ -260,8 +237,8 @@ fn handshake(
         }
     }
 
-    let (ws, _resp) = tungstenite::client(request, stream)
-        .map_err(|e| HttpError::Network(format!("ws handshake: {e}")))?;
+    let (ws, _resp) =
+        tungstenite::client(request, stream).map_err(|e| HttpError::Network(format!("ws handshake: {e}")))?;
     Ok(ws)
 }
 
@@ -270,21 +247,15 @@ fn handshake(
 ///
 /// Terminates on any of:
 ///
-/// - `Message::Close` from the peer (forwards a `WsFrame::Close` to
-///   the caller before exiting).
+/// - `Message::Close` from the peer (forwards a `WsFrame::Close` to the caller before exiting).
 /// - `tungstenite::Error::ConnectionClosed` / `AlreadyClosed`.
 /// - Mutex poisoning (another thread panicked while holding it).
-/// - `tx.send_blocking` returning `Err` (the async caller dropped its
-///   receiver mid-frame).
-/// - `tx.is_closed()` observed at an idle read-timeout tick (the async
-///   caller dropped its receiver while no frame was in flight): the
-///   teardown checkpoint that stops an abandoned *idle* WS from
-///   leaking this thread + the socket. See the WouldBlock/TimedOut arm
-///   below.
-/// - Any tungstenite read error other than the WouldBlock / TimedOut
-///   pair; those two are otherwise absorbed as keepalive yield points
-///   (they are the writer's window to acquire the mutex on an idle
-///   socket).
+/// - `tx.send_blocking` returning `Err` (the async caller dropped its receiver mid-frame).
+/// - `tx.is_closed()` observed at an idle read-timeout tick (the async caller dropped its receiver while no
+///   frame was in flight): the teardown checkpoint that stops an abandoned *idle* WS from leaking this thread
+///   + the socket. See the WouldBlock/TimedOut arm below.
+/// - Any tungstenite read error other than the WouldBlock / TimedOut pair; those two are otherwise absorbed
+///   as keepalive yield points (they are the writer's window to acquire the mutex on an idle socket).
 ///
 /// Note this covers the reader/inbound half. The writer thread exits
 /// when its `out_rx` closes; a caller that drops `incoming` while
@@ -347,12 +318,7 @@ fn reader_loop(
                     None => (1005, String::new()),
                 };
                 frame_count += 1;
-                tracing::info!(
-                    frame_count,
-                    kind = "Close",
-                    code,
-                    "ws reader: recv frame, exiting",
-                );
+                tracing::info!(frame_count, kind = "Close", code, "ws reader: recv frame, exiting",);
                 let _ = tx.send_blocking(Ok(WsFrame::Close { code, reason }));
                 break;
             }
@@ -368,10 +334,7 @@ fn reader_loop(
             // Read timed out with nothing to read. Yield and re-loop —
             // see the keepalive comment above.
             Err(tungstenite::Error::Io(e))
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
+                if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) =>
             {
                 // The idle timeout doubles as the teardown checkpoint:
                 // if the async caller dropped its receiver, no frame
@@ -403,7 +366,9 @@ fn reader_loop(
         tracing::info!(frame_count, kind, payload_len, "ws reader: recv frame");
         tracing::info!(
             "perf/net: ws recv kind={} payload_len={} read_ms={}",
-            kind, payload_len, _perf_read_ms
+            kind,
+            payload_len,
+            _perf_read_ms
         );
 
         if tx.send_blocking(frame).is_err() {
@@ -420,14 +385,12 @@ fn reader_loop(
 ///
 /// Terminates on any of:
 ///
-/// - `rx` closing (the async caller dropped its sender — typically
-///   because `SignalWebSocketProcess::run` exited).
+/// - `rx` closing (the async caller dropped its sender — typically because `SignalWebSocketProcess::run`
+///   exited).
 /// - Mutex poisoning.
-/// - A `WebSocket::send` error. The error is logged with
-///   `write_timed_out` separated out so traces can distinguish the
-///   OS-level write-timeout firing on the inner TCP socket (the
-///   defense-in-depth bound set by [`crate::tls::tls_connect_with_config`])
-///   from a protocol-level tungstenite error.
+/// - A `WebSocket::send` error. The error is logged with `write_timed_out` separated out so traces can
+///   distinguish the OS-level write-timeout firing on the inner TCP socket (the defense-in-depth bound set by
+///   [`crate::tls::tls_connect_with_config`]) from a protocol-level tungstenite error.
 ///
 /// Each enqueued and each emitted frame is logged on the
 /// `ws writer:` and `perf/net:` channels.
@@ -476,7 +439,9 @@ fn writer_loop(ws: Arc<Mutex<WebSocket<RustlsStream>>>, rx: async_channel::Recei
                 tracing::info!(frame_count, kind, payload_len, "ws writer: send ok");
                 tracing::info!(
                     "perf/net: ws send kind={} payload_len={} send_ms={}",
-                    kind, payload_len, _perf_send_ms
+                    kind,
+                    payload_len,
+                    _perf_send_ms
                 );
             }
             Err(e) => {
@@ -492,7 +457,11 @@ fn writer_loop(ws: Arc<Mutex<WebSocket<RustlsStream>>>, rx: async_channel::Recei
                 tracing::warn!(frame_count, kind, ?e, write_timed_out, "ws writer: send failed, exiting");
                 tracing::info!(
                     "perf/net: ws send_err kind={} payload_len={} send_ms={} write_timed_out={} err={:?}",
-                    kind, payload_len, _perf_send_ms, write_timed_out, e
+                    kind,
+                    payload_len,
+                    _perf_send_ms,
+                    write_timed_out,
+                    e
                 );
                 break;
             }
@@ -549,11 +518,8 @@ mod tests {
 
         let mut roots = RootCertStore::empty();
         roots.add(cert_der).expect("trust test cert");
-        let client_config = Arc::new(
-            ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth(),
-        );
+        let client_config =
+            Arc::new(ClientConfig::builder().with_root_certificates(roots).with_no_client_auth());
 
         // Bind the same name the client dials ("localhost") so both
         // endpoints agree on its address family: the client connects
@@ -592,13 +558,9 @@ mod tests {
 
         // --- client: connect, then abandon the pump ---
         let url = url::Url::parse(&format!("wss://localhost:{port}/")).expect("url");
-        let channels = futures_lite::future::block_on(connect_websocket(
-            client_config,
-            url,
-            HeaderMap::new(),
-            None,
-        ))
-        .expect("connect_websocket");
+        let channels =
+            futures_lite::future::block_on(connect_websocket(client_config, url, HeaderMap::new(), None))
+                .expect("connect_websocket");
         drop(channels); // caller walks away: both halves dropped
 
         // The server observes its socket close only after the reader

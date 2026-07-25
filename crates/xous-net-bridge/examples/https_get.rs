@@ -23,11 +23,7 @@ fn main() -> std::io::Result<()> {
     let status_line = buf
         .split(|&b| b == b'\n')
         .next()
-        .map(|s| {
-            String::from_utf8_lossy(s)
-                .trim_end_matches('\r')
-                .to_string()
-        })
+        .map(|s| String::from_utf8_lossy(s).trim_end_matches('\r').to_string())
         .unwrap_or_default();
 
     println!("{status_line}");

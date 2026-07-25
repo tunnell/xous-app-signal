@@ -2,26 +2,21 @@
 //!
 //! Sits at the top of the crate stack. From bottom to top:
 //!
-//! - `xous-net-bridge` — sync TLS + WSS + HTTPS transport, owns the
-//!   `Arc<ClientConfig>` for TLS-1.3 ticket resumption.
-//! - `presage-store-pddb` — `presage::Store` impl backed by Xous's
-//!   PDDB (real) or an in-memory mock (hosted).
-//! - `xous-signal-worker` — owns the `presage::Manager` on a
-//!   dedicated worker thread driven by `smol-rs::LocalExecutor`,
-//!   exposes a [`Cmd`] / [`Event`] async-channel surface.
-//! - This crate — UI (`gam_app::App`, on hardware and hosted-Xous
-//!   emulation) wired to the worker via the two channels.
+//! - `xous-net-bridge` — sync TLS + WSS + HTTPS transport, owns the `Arc<ClientConfig>` for TLS-1.3 ticket
+//!   resumption.
+//! - `presage-store-pddb` — `presage::Store` impl backed by Xous's PDDB (real) or an in-memory mock (hosted).
+//! - `xous-signal-worker` — owns the `presage::Manager` on a dedicated worker thread driven by
+//!   `smol-rs::LocalExecutor`, exposes a [`Cmd`] / [`Event`] async-channel surface.
+//! - This crate — UI (`gam_app::App`, on hardware and hosted-Xous emulation) wired to the worker via the two
+//!   channels.
 //!
 //! The startup sequence is:
 //!
-//! 1. Wire up the rv32 TRNG-backed `getrandom` shim if compiling for
-//!    Xous; on hosted the OS RNG is used.
-//! 2. Construct a [`PddbStore`] (mock backend on hosted; real PDDB
-//!    behind the `pddb-backend` feature).
+//! 1. Wire up the rv32 TRNG-backed `getrandom` shim if compiling for Xous; on hosted the OS RNG is used.
+//! 2. Construct a [`PddbStore`] (mock backend on hosted; real PDDB behind the `pddb-backend` feature).
 //! 3. Spawn [`run_signal_worker`].
 //! 4. Hand the cmd/event channels to the UI and run.
-//! 5. The UI sends [`Cmd::Shutdown`] on quit; the worker drains and
-//!    emits `Event::ShuttingDown`.
+//! 5. The UI sends [`Cmd::Shutdown`] on quit; the worker drains and emits `Event::ShuttingDown`.
 //!
 //! See `docs/ARCHITECTURE.md` for the full data-flow walkthrough and
 //! `docs/UI.md` for the UI design.
@@ -70,10 +65,7 @@ use xous_signal_worker::{Cmd, Event, run_signal_worker};
 /// for `len` bytes; this function only writes into `dest[..len]`.
 #[cfg(target_os = "xous")]
 #[unsafe(no_mangle)]
-unsafe extern "Rust" fn __getrandom_v03_custom(
-    dest: *mut u8,
-    len: usize,
-) -> Result<(), getrandom::Error> {
+unsafe extern "Rust" fn __getrandom_v03_custom(dest: *mut u8, len: usize) -> Result<(), getrandom::Error> {
     use std::cell::OnceCell;
     thread_local! {
         static TRNG: OnceCell<trng::Trng> = const { OnceCell::new() };
@@ -100,11 +92,7 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
             let mut buf = [0u32; 1020];
             trng.fill_buf(&mut buf[..chunk]).map_err(|_| getrandom::Error::UNSUPPORTED)?;
             unsafe {
-                core::ptr::copy_nonoverlapping(
-                    buf.as_ptr() as *const u8,
-                    dest.add(filled_bytes),
-                    chunk * 4,
-                );
+                core::ptr::copy_nonoverlapping(buf.as_ptr() as *const u8, dest.add(filled_bytes), chunk * 4);
             }
             filled_bytes += chunk * 4;
             remaining_words -= chunk;
@@ -117,11 +105,7 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
             let mut scratch = [0u32; 1];
             trng.fill_buf(&mut scratch).map_err(|_| getrandom::Error::UNSUPPORTED)?;
             unsafe {
-                core::ptr::copy_nonoverlapping(
-                    scratch.as_ptr() as *const u8,
-                    dest.add(filled_bytes),
-                    tail,
-                );
+                core::ptr::copy_nonoverlapping(scratch.as_ptr() as *const u8, dest.add(filled_bytes), tail);
             }
         }
 
@@ -153,12 +137,9 @@ const CHAN_CAP: usize = 16;
 ///
 /// Selects backend based on feature flags:
 ///
-/// - default (hosted / smoke / probe-flow / probe-pddb): in-memory
-///   mock backend.
-/// - `pddb-real` on rv32-xous: real
-///   `PddbStore::with_pddb_backend`. On connect failure (PDDB
-///   service not yet up), logs a warning and falls back to mock so
-///   the binary still boots.
+/// - default (hosted / smoke / probe-flow / probe-pddb): in-memory mock backend.
+/// - `pddb-real` on rv32-xous: real `PddbStore::with_pddb_backend`. On connect failure (PDDB service not yet
+///   up), logs a warning and falls back to mock so the binary still boots.
 ///
 /// # Trust boundary
 ///
@@ -281,8 +262,7 @@ fn main() -> std::io::Result<()> {
 /// already been installed, e.g. by a test harness).
 #[cfg(not(target_os = "xous"))]
 fn init_logger() {
-    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .try_init();
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).try_init();
 }
 
 /// TCP-connect probe verifying Renode's WF200 wifi emulation
@@ -291,12 +271,11 @@ fn init_logger() {
 /// Three connect targets, each logged with elapsed time and
 /// result:
 ///
-/// 1. `8.8.8.8:53` — Google DNS over TCP. No DNS lookup needed;
-///    answers "is there any route to the internet".
-/// 2. `1.1.1.1:443` — Cloudflare HTTPS. Same shape as (1) but a
-///    different provider, in case route filtering is in play.
-/// 3. `chat.signal.org:443` — the real Signal endpoint. Requires
-///    DNS, so this also exercises the Xous `dns` service.
+/// 1. `8.8.8.8:53` — Google DNS over TCP. No DNS lookup needed; answers "is there any route to the internet".
+/// 2. `1.1.1.1:443` — Cloudflare HTTPS. Same shape as (1) but a different provider, in case route filtering
+///    is in play.
+/// 3. `chat.signal.org:443` — the real Signal endpoint. Requires DNS, so this also exercises the Xous `dns`
+///    service.
 ///
 /// Each probe has a 10-second timeout. Output goes to the same
 /// `INFO:xas:` stream the Robot smoke tests assert on.
@@ -321,12 +300,7 @@ fn probe_network() {
         let addrs: Result<Vec<SocketAddr>, _> = target.to_socket_addrs().map(|i| i.collect());
         match addrs {
             Err(e) => {
-                log::warn!(
-                    "probe: {} resolve FAIL after {:?}: {}",
-                    label,
-                    start.elapsed(),
-                    e
-                );
+                log::warn!("probe: {} resolve FAIL after {:?}: {}", label, start.elapsed(), e);
                 continue;
             }
             Ok(addrs) if addrs.is_empty() => {
@@ -337,12 +311,7 @@ fn probe_network() {
                 let addr = addrs[0];
                 match TcpStream::connect_timeout(&addr, timeout) {
                     Ok(_stream) => {
-                        log::info!(
-                            "probe: {} CONNECT OK to {} after {:?}",
-                            label,
-                            addr,
-                            start.elapsed()
-                        );
+                        log::info!("probe: {} CONNECT OK to {} after {:?}", label, addr, start.elapsed());
                     }
                     Err(e) => {
                         log::warn!(
@@ -372,14 +341,13 @@ fn probe_network() {
 /// returns a `Scalar1(0|1)` mount state.
 ///
 /// Outcomes:
-/// - `OK true` / `OK false` — IPC plumbing works; the value
-///   indicates whether the image auto-mounts or expects
-///   password-driven mount.
-/// - `connection refused` / no response — protocol drift (rkyv
-///   version, Buffer layout, or SID name mismatch).
+/// - `OK true` / `OK false` — IPC plumbing works; the value indicates whether the image auto-mounts or
+///   expects password-driven mount.
+/// - `connection refused` / no response — protocol drift (rkyv version, Buffer layout, or SID name mismatch).
 #[cfg(all(feature = "probe-pddb", target_os = "xous"))]
 fn probe_pddb() {
     use std::time::Instant;
+
     use xous::{Message, send_message};
 
     log::info!("probe-pddb: starting PDDB mount-poller probe");
@@ -401,11 +369,7 @@ fn probe_pddb() {
     let conn = match xns.request_connection_blocking("_PDDB Mount Poller_") {
         Ok(c) => c,
         Err(e) => {
-            log::warn!(
-                "probe-pddb: request_connection FAIL after {:?}: {:?}",
-                start.elapsed(),
-                e
-            );
+            log::warn!("probe-pddb: request_connection FAIL after {:?}: {:?}", start.elapsed(), e);
             return;
         }
     };
@@ -417,18 +381,10 @@ fn probe_pddb() {
     let resp = send_message(conn, Message::new_blocking_scalar(0, 0, 0, 0, 0));
     match resp {
         Ok(xous::Result::Scalar1(v)) => {
-            log::info!(
-                "probe-pddb: Poll OK is_mounted={} after {:?}",
-                v != 0,
-                poll_start.elapsed()
-            );
+            log::info!("probe-pddb: Poll OK is_mounted={} after {:?}", v != 0, poll_start.elapsed());
         }
         Ok(other) => {
-            log::warn!(
-                "probe-pddb: Poll unexpected response {:?} after {:?}",
-                other,
-                poll_start.elapsed()
-            );
+            log::warn!("probe-pddb: Poll unexpected response {:?} after {:?}", other, poll_start.elapsed());
         }
         Err(e) => {
             log::warn!("probe-pddb: Poll FAIL after {:?}: {:?}", poll_start.elapsed(), e);
@@ -437,7 +393,6 @@ fn probe_pddb() {
 
     log::info!("probe-pddb: probe done in {:?}", start.elapsed());
 }
-
 
 /// Exercise [`presage_store_pddb::BufferingBackend`] +
 /// [`presage_store_pddb::KvBackend`] semantics against a fresh
@@ -456,13 +411,11 @@ fn probe_pddb() {
 ///
 /// 1. Wrap a fresh `MockBackend` in a `BufferingBackend`.
 /// 2. `begin_batch` and confirm `is_batching` flips.
-/// 3. Three writes simulating a cold send (recipient identity,
-///    sender certificate, outbound message body).
+/// 3. Three writes simulating a cold send (recipient identity, sender certificate, outbound message body).
 /// 4. Intra-batch read-through (writes visible inside the batch).
 /// 5. Commit; confirm the replay count.
 /// 6. Post-commit reads (writes durable in the inner backend).
-/// 7. Abort path: open a second batch, write, drop without
-///    committing, verify the writes are gone.
+/// 7. Abort path: open a second batch, write, drop without committing, verify the writes are gone.
 #[cfg(all(feature = "probe-send-batch", target_os = "xous"))]
 fn probe_send_batch() {
     use std::sync::Arc;
@@ -495,15 +448,9 @@ fn probe_send_batch() {
     let phase = Instant::now();
     backend.put("signal.protocol.aci.identity", "peer.1", b"identity-bytes").unwrap();
     backend.put("signal.state", "sender_certificate", b"sender-cert-bytes").unwrap();
-    backend
-        .put("signal.contents.thread.peer", "00000000000186A0", b"hello world")
-        .unwrap();
+    backend.put("signal.contents.thread.peer", "00000000000186A0", b"hello world").unwrap();
     let buffered = guard.buffered_len();
-    log::info!(
-        "probe-send-batch: 3 writes buffered in {:?} (count={})",
-        phase.elapsed(),
-        buffered
-    );
+    log::info!("probe-send-batch: 3 writes buffered in {:?} (count={})", phase.elapsed(), buffered);
     if buffered != 3 {
         log::warn!("probe-send-batch: FAIL: expected 3 buffered, got {}", buffered);
         return;
@@ -530,11 +477,7 @@ fn probe_send_batch() {
         log::warn!("probe-send-batch: FAIL: still batching after commit");
         return;
     }
-    log::info!(
-        "probe-send-batch: commit OK in {:?} (replayed {})",
-        phase.elapsed(),
-        n
-    );
+    log::info!("probe-send-batch: commit OK in {:?} (replayed {})", phase.elapsed(), n);
 
     // --- 5. Post-commit reads.
     let r1 = backend.get("signal.protocol.aci.identity", "peer.1").unwrap();
@@ -558,17 +501,13 @@ fn probe_send_batch() {
     }
     let after_abort = backend.get("signal.state", "sender_certificate").unwrap();
     if after_abort.as_deref() != Some(b"sender-cert-bytes".as_slice()) {
-        log::warn!(
-            "probe-send-batch: FAIL: abort didn't restore inner ({:?})",
-            after_abort
-        );
+        log::warn!("probe-send-batch: FAIL: abort didn't restore inner ({:?})", after_abort);
         return;
     }
     log::info!("probe-send-batch: abort path OK");
 
     log::info!("probe-send-batch: probe done in {:?}", start.elapsed());
 }
-
 
 /// Install a `log` implementation for rv32-xous builds.
 ///
@@ -583,6 +522,4 @@ fn probe_send_batch() {
 /// not panic — subsequent `log::*!` calls become no-ops, matching
 /// the surface of a binary that never installed a logger.
 #[cfg(target_os = "xous")]
-fn init_logger() {
-    let _ = xous_api_log::init_wait();
-}
+fn init_logger() { let _ = xous_api_log::init_wait(); }

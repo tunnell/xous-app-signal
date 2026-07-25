@@ -16,24 +16,16 @@ use std::time::Duration;
 use tungstenite::Message;
 use tungstenite::protocol::CloseFrame;
 use tungstenite::protocol::frame::coding::CloseCode;
-
 use xous_net_bridge::{signal_production_roots, ws_connect};
 
 fn main() -> std::io::Result<()> {
-    let (mut ws, resp) = ws_connect(
-        "chat.signal.org",
-        443,
-        "/v1/websocket/provisioning/",
-        signal_production_roots(),
-    )?;
+    let (mut ws, resp) =
+        ws_connect("chat.signal.org", 443, "/v1/websocket/provisioning/", signal_production_roots())?;
     println!("handshake: {}", resp.status());
 
     // Set a read timeout on the underlying TcpStream so the read below
     // doesn't block indefinitely if the server has nothing to push yet.
-    ws.get_mut()
-        .get_ref()
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .ok();
+    ws.get_mut().get_ref().set_read_timeout(Some(Duration::from_secs(5))).ok();
 
     match ws.read() {
         Ok(Message::Ping(_)) => println!("got: server ping"),
@@ -48,10 +40,7 @@ fn main() -> std::io::Result<()> {
         Err(e) => println!("read error: {e}"),
     }
 
-    let _ = ws.close(Some(CloseFrame {
-        code: CloseCode::Normal,
-        reason: "stage 3 smoke test done".into(),
-    }));
+    let _ = ws.close(Some(CloseFrame { code: CloseCode::Normal, reason: "stage 3 smoke test done".into() }));
     println!("closed");
     Ok(())
 }

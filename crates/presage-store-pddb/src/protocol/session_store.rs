@@ -5,13 +5,11 @@
 //! least one 4 KiB page each (per-page AEAD); a write-through impl
 //! burns a page per ratchet step. So we buffer.
 //!
-//! - `store_session` writes to an in-memory `HashMap<SessionKey,
-//!   SessionRecord>` and marks the entry dirty. No PDDB write yet.
+//! - `store_session` writes to an in-memory `HashMap<SessionKey, SessionRecord>` and marks the entry dirty.
+//!   No PDDB write yet.
 //! - `load_session` consults the cache first, then PDDB.
-//! - [`crate::PddbStore::flush_sessions`] walks the dirty set and
-//!   persists. The receive loop calls this on
-//!   `Received::QueueEmpty`; tests call it explicitly to verify
-//!   durability.
+//! - [`crate::PddbStore::flush_sessions`] walks the dirty set and persists. The receive loop calls this on
+//!   `Received::QueueEmpty`; tests call it explicitly to verify durability.
 //!
 //! # Trust boundary
 //!
@@ -29,8 +27,7 @@
 //! - **root key** for the current Diffie-Hellman ratchet;
 //! - **chain keys** for the symmetric ratchets in each direction;
 //! - the **ephemeral private keys** for the next-ratchet step;
-//! - the *previous* root + chain keys retained for skipped-message
-//!   decryption.
+//! - the *previous* root + chain keys retained for skipped-message decryption.
 //!
 //! Compromise of the bytes for an active session lets the holder
 //! decrypt every plaintext that traverses that ratchet until the next
@@ -70,9 +67,9 @@
 //! devices), so one IPC per flushed address regardless of device
 //! count.
 
-use async_trait::async_trait;
 use std::collections::HashMap;
 
+use async_trait::async_trait;
 use presage::libsignal_service::protocol::{
     ProtocolAddress, SessionRecord, SessionStore, SignalProtocolError,
 };
@@ -87,11 +84,7 @@ use crate::{Error, KvBackend};
 pub(crate) type SessionKey = (IdentityType, String, u32);
 
 pub(crate) fn session_key(identity: IdentityType, address: &ProtocolAddress) -> SessionKey {
-    (
-        identity,
-        address.name().to_string(),
-        u32::from(address.device_id()),
-    )
+    (identity, address.name().to_string(), u32::from(address.device_id()))
 }
 
 /// On-disk shape for one PDDB session key: `device_id ->
@@ -218,32 +211,31 @@ impl SessionStore for PddbProtocolStore {
 
         // 1. Cache hit (most-recent ratchet state lives here until flush).
         {
-            let cache = self.store.session_cache.lock().map_err(|_| {
-                SignalProtocolError::InvalidState("session cache", "poisoned".into())
-            })?;
+            let cache = self
+                .store
+                .session_cache
+                .lock()
+                .map_err(|_| SignalProtocolError::InvalidState("session cache", "poisoned".into()))?;
             if let Some(rec) = cache.get(&key) {
                 return Ok(Some(rec.clone()));
             }
         }
 
-        // 2. Fall through to PDDB. One key per address; the value is a
-        //    `SessionBundle` (device_id → serialized SessionRecord).
+        // 2. Fall through to PDDB. One key per address; the value is a `SessionBundle` (device_id →
+        //    serialized SessionRecord).
         let dict = dict_session(self.identity);
-        let Some(bundle) = backend_get_session_bundle_protocol(
-            &*self.store.backend,
-            &dict,
-            &key.1,
-        )?
-        else {
+        let Some(bundle) = backend_get_session_bundle_protocol(&*self.store.backend, &dict, &key.1)? else {
             return Ok(None);
         };
 
         // Populate the cache with every device's record so a follow-up
         // `load_session` for a sibling device skips PDDB.
         {
-            let mut cache = self.store.session_cache.lock().map_err(|_| {
-                SignalProtocolError::InvalidState("session cache", "poisoned".into())
-            })?;
+            let mut cache = self
+                .store
+                .session_cache
+                .lock()
+                .map_err(|_| SignalProtocolError::InvalidState("session cache", "poisoned".into()))?;
             for (dev_id, ser) in &bundle {
                 let cache_key = (self.identity, key.1.clone(), *dev_id);
                 if !cache.contains_key(&cache_key) {
@@ -264,15 +256,17 @@ impl SessionStore for PddbProtocolStore {
         record: &SessionRecord,
     ) -> Result<(), SignalProtocolError> {
         let key = session_key(self.identity, address);
-        let mut cache =
-            self.store.session_cache.lock().map_err(|_| {
-                SignalProtocolError::InvalidState("session cache", "poisoned".into())
-            })?;
+        let mut cache = self
+            .store
+            .session_cache
+            .lock()
+            .map_err(|_| SignalProtocolError::InvalidState("session cache", "poisoned".into()))?;
         cache.insert(key.clone(), record.clone());
-        let mut dirty =
-            self.store.session_dirty.lock().map_err(|_| {
-                SignalProtocolError::InvalidState("session dirty", "poisoned".into())
-            })?;
+        let mut dirty = self
+            .store
+            .session_dirty
+            .lock()
+            .map_err(|_| SignalProtocolError::InvalidState("session dirty", "poisoned".into()))?;
         dirty.insert(key);
         Ok(())
     }
