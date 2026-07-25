@@ -161,6 +161,65 @@ falls due ~2026-11.)
 
 ---
 
+## 4. Security & hardening backlog (absorbed from issue #37)
+
+The v1 security/hardening umbrella (issue #37, closed 2026-07-25 when
+roadmap tracking moved from the issue tracker into this document)
+carried ten prioritized items from the post-v0.2 deep-read. Three
+exited earlier: item 9 shipped as SECURITY.md (PR #51), item 10 is
+§1.1 (typed WorkerError), item 4 is §2.2 (logout drain-then-wipe).
+The seven residual items, ranked active leak > latent leak >
+defense-in-depth > audit-readability (full rationale in the #37
+thread):
+
+### 4.1 [sec] Drop the provisioning URL from info-level logs (S)
+Active leak: the `sgnl://...` link URL is info-logged for the ~60 s
+pairing window; UART access lets an attacker pair their own device.
+Must land together with the closed #30's dev-ux ask: a default-off
+feature gate (e.g. `link-uri-uart`) that preserves the
+signal-cli-pairing pipeline and the test_link_qr.sh gate lines, with
+the default build emitting length only.
+
+### 4.2 [sec] Redact ACI / phone / device-name from info logs (M)
+Active leak: per-receive lines emit UUIDs, e164 numbers, and device
+names; one boot capture reconstructs the contact graph. Workspace
+redaction helper (last-4 / hashed-prefix), `verbose-pii` feature for
+ops triage. Sites: worker load_registered / handle_send /
+process_received, PddbBackend::get key logging, BufferingBackend
+perf-event strings.
+
+### 4.3 [sec] SecretBox + ZeroizeOnDrop for message bodies and key bytes (M)
+Latent leak: decrypted text and 32-byte key buffers live as bare
+String/Vec across Event::Message, InnerSend, the UI message store,
+profile-key fetches, and registration intermediates. Wrap in
+`secrecy::SecretBox`, redacting Debug impls, `.expose_secret()` at
+read sites.
+
+### 4.4 [sec] TLS session tickets into the type system (M)
+`CountingResumptionStore` holds bearer-token-class ticket bytes
+without Zeroize or a witness type; nothing type-blocks a future
+"persist tickets to PDDB" patch. SecretBox the inner blob and add
+the SECURITY.md review gate for any persistence change.
+
+### 4.5 [sec] Take libsignal's send path off catch_unwind (M local / L upstream)
+A panic mid-send can leave session state inconsistent while the
+worker keeps accepting sends. Either audit panic-able operations
+upstream or tear down manager_task on caught panic and force
+re-load_registered.
+
+### 4.6 [sec/maint] Witness types for trust transitions (M per boundary)
+TLS-verified / session-established / MAC-checked / durability
+transitions are all bare Result today. Zero-sized witness types,
+one boundary per release.
+
+### 4.7 [sec] Tier-A/B lint headers across the security-sensitive crates (S + L)
+`#![forbid(unsafe_code)]`, `deny(clippy::unwrap_used)`,
+`deny(clippy::indexing_slicing)` etc. per the rustls/RustCrypto
+convention; the long tail is refactoring the surfaced panic sites
+to Result.
+
+---
+
 ## Sequencing
 
 ```
@@ -169,6 +228,8 @@ Wave 1: 1.1 typed WorkerError → 1.2 MessageStore funnel → 1.3 gam_app split
 Wave 2: 2.1 ws_pump lifecycle → 2.2 logout/ownership → 2.3 retry fold-in
 Wave 3: 3.1 persistence (needs 1.2) · 3.2 fork-delta shrink ·
         3.3 UI spike (gate: aes provenance) · 3.4 vendor bookkeeping
+Wave 4: security backlog §4 (4.1/4.2 first: active leaks; 4.1
+        pairs with the closed #30 feature gate)
 ```
 
 Every structure-only commit keeps the PR #34 verification gate:

@@ -53,7 +53,8 @@ with the code in this tree plus its trust assumptions below.
    Known gaps).
 5. **Physical access with bus probing / side channels** (RAM
    readout, timing, suspend-state capture). Partially addressed:
-   this is the tier the hardening backlog (issue #37) targets —
+   this is the tier the hardening backlog targets
+   (docs/REFACTOR-PROPOSALS-2026-07.md §4, formerly issue #37) —
    zeroization, constant-time compares, secret wrapping. Reports
    welcome, fixes prioritized behind tier 1-4 issues.
 6. **Compromised Xous kernel, malicious gateware, or a compromised
@@ -89,11 +90,12 @@ someone holding the device.
 
 ## Known gaps (accepted, tracked)
 
-The maintainer's hardening backlog is public: issue #37 (log
+The maintainer's hardening backlog is public:
+docs/REFACTOR-PROPOSALS-2026-07.md §4, formerly issue #37 (log
 redaction of PII, SecretBox/zeroization of message bodies and key
 material, logout wipe completeness — also #9, panic handling on the
 send path, typed errors, lint tiers). A report that duplicates a
-#37 item will be linked there rather than treated as new. The
+backlog item will be linked there rather than treated as new. The
 in-RAM message buffer and UART logging discipline are the two areas
 where the current prototype knowingly falls short of the tier-4/5
 story above.
