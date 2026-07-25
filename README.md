@@ -173,9 +173,10 @@ not yet reached a release xas builds against.
    pinned `xas-v0.2` branch of `tunnell/xous-core`, which carried
    the identical commit pre-merge — the pin remains for the other
    deltas it holds (CNAME-chain DNS fix, `services/net` reaper fix
-   from tunnell/xous-core#26 — upstream as
+   from tunnell/xous-core#26 — filed upstream as
    [betrusted-io/xous-core#880](https://github.com/betrusted-io/xous-core/pull/880),
-   still open — a hosted-mode PDDB tweak, and the
+   closed unmerged pending the upstream Renode-CI net refactor —
+   a hosted-mode PDDB tweak, and the
    `apps/manifest.json` registration for xas).
 2. **`whisperfish/libsignal-service-rs` keepalive tolerance** —
    [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431)
@@ -205,7 +206,8 @@ tracked in `vendor/libsignal-service-rs.diff`.
 BUILDING.md keeps pointing at the pinned `xas-v0.2` fork branch
 until a future xas release re-pins against an upstream
 `betrusted-io/xous-core` that includes `2005a801c` and a
-resolution for the still-open reaper fix (#880).
+resolution for the reaper fix (#880, closed unmerged pending
+the upstream Renode-CI net refactor).
 
 ---
 
