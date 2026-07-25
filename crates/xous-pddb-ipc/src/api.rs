@@ -187,9 +187,12 @@ pub enum Opcode {
     /// Wire payload: [`PddbWriteBatch`] with `data` packed per the
     /// format documented on that type.
     ///
-    /// Added in `tunnell/xous-core@feat/pddb-bulk-write` (xous-core
-    /// commit `8f3894f2d`). The opcode number must match upstream
-    /// exactly — see `services/pddb/src/api.rs`.
+    /// Server side added in xous-core commit `8f3894f2d`, which
+    /// lives on `tunnell/xous-core` branch
+    /// `iter2-selective-dict-sync` — NOT on any deploy branch, so
+    /// callers must probe for the opcode and keep a per-entry
+    /// fallback. The opcode number must match that commit exactly —
+    /// see `services/pddb/src/api.rs`.
     WriteKeyBatch = 57,
 }
 
