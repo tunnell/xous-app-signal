@@ -5286,6 +5286,7 @@ dependencies = [
  "async-channel",
  "async-trait",
  "base64 0.22.1",
+ "futures-lite",
  "http",
  "libsignal-service",
  "rcgen",

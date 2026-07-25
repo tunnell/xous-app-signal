@@ -17,16 +17,16 @@ abstraction in 15 unit tests.
 
 Build / run sequence (mirrors xas-pddb-real-probe.robot):
 
-    cd /stor2/tunnell/xas
+    cd <xas repo root>
     cargo build --target=riscv32imac-unknown-xous-elf --release \
                 -p xous-app-signal --features precursor,probe-send-batch
     cp target/riscv32imac-unknown-xous-elf/release/xas \
                                              dist/xas-rv32/xas
     cd xous-core
     cargo xtask app-image \
-        xas:/stor2/tunnell/xas/target/riscv32imac-unknown-xous-elf/release/xas \
+        xas:<xas repo root>/target/riscv32imac-unknown-xous-elf/release/xas \
         --git-describe v0.9.21-0-g0000000
-    cd /stor2/tunnell/xas
+    cd <xas repo root>
     renode-test tests/renode/xas-send-batch.robot
 
 *** Settings ***

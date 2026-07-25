@@ -14,12 +14,17 @@
 #       cargo xtask app-image xas:$XAS_DIST_DIR/xas --git-describe v0.9.21-0-g0000000
 #   - The resulting `loader.bin` and `xous.img` live in
 #       xous-core/target/riscv32imac-unknown-xous-elf/release/
-#   - The xous-core repo path is at the location the variable below
-#     points to. Override via the Robot test's setup or
-#     `renode -e $xous_core_root=@/other/path` if needed.
+#   - The xous-core repo path is resolved below via the same
+#     `repos/xous-core` symlink that BUILDING.md §1 establishes and
+#     every Cargo manifest uses as the active-checkout pointer, so the
+#     image this smoke test boots is built from the same xous-core the
+#     xas ELF was compiled against. Override via the Robot test's setup
+#     or `renode -e $xous_core_root=@/other/path` if needed.
 
 # --- Variables ---
-$xous_core_root ?= @/home/tunnell/precursor-signal/repos/xous-core
+# $ORIGIN is tests/renode/; ../../../repos/xous-core is the
+# workspace-level symlink -> the active xous-core checkout.
+$xous_core_root ?= $ORIGIN/../../../repos/xous-core
 
 # --- Boot xous-core's standard Precursor image ---
 # This pulls in every peripheral wiring + kernel + base services +
