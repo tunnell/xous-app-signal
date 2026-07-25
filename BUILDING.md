@@ -570,15 +570,17 @@ If you're running the robot-framework tests under renode
 (`xas-smoke.robot`, `xas-pddb-real-probe.robot`, etc.), three
 pitfalls the wrapper script does not paper over:
 
-**(a) `xas-smoke.resc` hardcodes `$xous_core_root`.** The
-`.resc` file resolves the xous-core checkout via a literal path
-near the top of the script; the wrapper does not export or
-override that variable. If your `xous-core` lives anywhere
-other than the hardcoded path, renode loads no symbols and
-every assertion that depends on them fails in confusing ways.
-Either edit `$xous_core_root` in the `.resc` to your local
-layout, or pass `-e '$xous_core_root = @<path>'` ahead of
-`include @<resc>` in the wrapper.
+**(a) `xas-smoke.resc` resolves `$xous_core_root` via the
+`repos/xous-core` symlink.** The `.resc` file defaults
+`$xous_core_root` to `$ORIGIN/../../../repos/xous-core` — the
+workspace-level symlink BUILDING.md §1 establishes and every Cargo
+manifest uses — so with the standard layout it needs no editing and
+boots the image built from your active xous-core checkout. If your
+layout differs (no `repos/` symlink, or you want to boot an image
+from a different checkout), pass
+`-e '$xous_core_root = @<path>'` ahead of `include @<resc>` in the
+wrapper. Note the wrapper builds the xas ELF but not the kernel
+image — see (b).
 
 **(b) Robot tests need a pre-built `xous.img` + `loader.bin`.**
 The wrapper does not build the kernel image; it expects the

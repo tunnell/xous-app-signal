@@ -14,16 +14,20 @@ Run via:    renode-test tests/renode/xas-smoke.robot
 
 Prerequisites:
   - Renode 1.16+ on PATH.
-  - A Xous image with xas bundled. Build via:
-        cd ~/precursor-signal/repos/xous-core
-        cargo xtask app-image \
-            xas:~/precursor-signal/xous-app-signal/dist/xas-rv32/xas \
-            --git-describe v0.9.21-0-g0000000
-    The `--git-describe` is needed because the fork has no
-    reachable tags; xous-sign-image otherwise fails on
-    `git describe`. Any v-prefixed semver works.
-  - The `xas-smoke.resc` script's `$xous_core_root` variable
-    points at the local xous-core checkout.
+  - A Xous image with xas bundled. The easiest path is
+    `tests/renode/run-renode-tests.sh` (from the repo root),
+    which builds the rv32 ELF, bundles a fresh xous.img into the
+    xous-core the .resc boots, then runs this test. To do it by
+    hand, mirror that script: build with
+    `--features pddb-real,precursor`, then
+    `cargo xtask app-image-xip xas:<elf> vault transientdisk
+    --kernel-feature big-heap --git-describe v0.9.21-0-g0000000`
+    from your xous-core checkout. The `--git-describe` is needed
+    because the fork has no reachable tags; xous-sign-image
+    otherwise fails on `git describe`. Any v-prefixed semver works.
+  - `xas-smoke.resc` resolves `$xous_core_root` via the
+    repos/xous-core symlink (BUILDING.md §1); override with
+    `renode -e '$xous_core_root=@<path>'` for a non-standard layout.
 
 *** Settings ***
 Suite Setup     Setup
