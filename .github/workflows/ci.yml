@@ -32,7 +32,9 @@ jobs:
           ln -s ../xous-core repos/xous-core
 
       - name: Install system build deps
-        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev
+        # protobuf-compiler: the spqr (SparsePostQuantumRatchet) build
+        # script validates its protobufs with protoc at compile time.
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev protobuf-compiler
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -65,7 +67,9 @@ jobs:
           ln -s ../xous-core repos/xous-core
 
       - name: Install system build deps
-        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev
+        # protobuf-compiler: the spqr (SparsePostQuantumRatchet) build
+        # script validates its protobufs with protoc at compile time.
+        run: sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev protobuf-compiler
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -90,7 +94,25 @@ jobs:
     runs-on: ubuntu-latest
     # Hard gate since the repo-wide `cargo +nightly fmt` commit (#48).
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out xas
+        uses: actions/checkout@v4
+        with:
+          path: xous-app-signal
+
+      - name: Clone the pinned xous-core sibling (BUILDING.md §1)
+        # `cargo fmt -p` runs `cargo metadata`, which loads the full
+        # workspace manifest — including the ../repos/xous-core
+        # path-deps and the getrandom [patch]. Without the sibling the
+        # job fails before rustfmt ever runs (masked while this was a
+        # soft gate).
+        run: |
+          git clone --depth 1 -b xas-v0.2 https://github.com/tunnell/xous-core.git
+          mkdir -p repos
+          ln -s ../xous-core repos/xous-core
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: xous-app-signal
 
       - name: Install nightly rustfmt
         run: |
@@ -101,6 +123,7 @@ jobs:
         # Scoped with -p: the vendored trees ship their own (older)
         # rustfmt.toml files and must not be reformatted — their
         # delta vs upstream is tracked in vendor/*.diff.
+        working-directory: xous-app-signal
         run: >
           cargo +nightly fmt --check
           -p xous-app-signal -p xous-signal-worker -p xous-net-bridge
