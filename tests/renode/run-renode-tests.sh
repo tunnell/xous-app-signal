@@ -13,7 +13,7 @@
 #   tests/renode/run-renode-tests.sh                    # xas-smoke.robot
 #   tests/renode/run-renode-tests.sh xas-probe.robot    # one robot
 #   tests/renode/run-renode-tests.sh xas-smoke xas-probe
-#   tests/renode/run-renode-tests.sh --all              # all 7, serially,
+#   tests/renode/run-renode-tests.sh --all              # all 8, serially,
 #                                                       # with a summary
 #                                                       # table; ends by
 #                                                       # restoring the
@@ -25,6 +25,13 @@
 #   xas-pddb-probe .............. precursor,probe-pddb
 #   xas-probe ................... precursor,probe-flow
 #   xas-send-batch .............. precursor,probe-send-batch
+#   xas-echo .................... precursor,probe-echo
+#                                 + IMAGE feature net/renode-minimal:
+#                                 the kernel tree must be xous-core
+#                                 branch xas-integration-net (or any
+#                                 branch whose net service has that
+#                                 feature; the bundle fails loudly
+#                                 otherwise)
 #
 # Environment (defaults shown):
 #   RENODE=renode-test          — renode-test binary
@@ -77,6 +84,7 @@ all_robots=(
     xas-pddb-probe.robot
     xas-probe.robot
     xas-send-batch.robot
+    xas-echo.robot
 )
 
 features_for() {
@@ -87,7 +95,21 @@ features_for() {
         xas-pddb-probe.robot)  echo "precursor,probe-pddb" ;;
         xas-probe.robot)       echo "precursor,probe-flow" ;;
         xas-send-batch.robot)  echo "precursor,probe-send-batch" ;;
+        xas-echo.robot)        echo "precursor,probe-echo" ;;
         *)                     echo "" ;;
+    esac
+}
+
+# Extra IMAGE-side (xtask --feature) flags per robot: features of the
+# xous-core services baked into the bundle, on top of the fixed
+# app-image-xip invocation. xas-echo needs net/renode-minimal (static
+# IPv4 seed at boot) or smoltcp never gains an interface address and
+# every 127.0.0.1 connect dies — which requires a kernel tree whose
+# net service HAS that feature (xous-core branch xas-integration-net).
+image_features_for() {
+    case "$1" in
+        xas-echo.robot)  echo "net/renode-minimal" ;;
+        *)               echo "" ;;
     esac
 }
 
@@ -146,11 +168,13 @@ elf="$repo_root/target/riscv32imac-unknown-xous-elf/release/xas"
 image_dir="$xous_core_dir/target/riscv32imac-unknown-xous-elf/release"
 stamp="$xous_core_dir/target/xas-ci-bundle.stamp"
 
-# Build the ELF for $1 (a feature list) and bundle it into $xous_core_dir
-# — but skip the ~2 min bundle when the (features, ELF hash) pair already
-# matches what was last bundled and the image files exist.
+# Build the ELF for $1 (a feature list), then bundle it into
+# $xous_core_dir with the image-side xtask features in $2 (a
+# space-separated list, possibly empty) — but skip the ~2 min bundle
+# when the (features, image features, ELF hash) triple already matches
+# what was last bundled and the image files exist.
 ensure_image() {
-    local features="$1"
+    local features="$1" image_features="${2:-}"
     if [ "${SKIP_BUNDLE:-0}" = "1" ]; then
         echo "==> SKIP_BUNDLE=1: booting the existing xous.img as-is (expected features: $features — NOT verified)"
         return 0
@@ -159,7 +183,7 @@ ensure_image() {
     ( cd "$repo_root" && cargo build --target riscv32imac-unknown-xous-elf --release \
         -p xous-app-signal --features "$features" )
     local sig
-    sig="app-image-xip $features $(sha256sum "$elf" | awk '{print $1}')"
+    sig="app-image-xip $features [$image_features] $(sha256sum "$elf" | awk '{print $1}')"
     if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$sig" ] \
         && [ -f "$image_dir/xous.img" ] && [ -f "$image_dir/loader.bin" ]; then
         echo "==> image already bundled for [$features]; skipping re-bundle"
@@ -181,12 +205,18 @@ ensure_image() {
     # reboot loop) right after xas/usb start, short of the PDDB password
     # prompt. XIP executes services from flash-mapped addresses and is
     # the same bundle the hardware flash flow uses (BUILDING.md §3.2).
-    echo "==> bundling xous.img (XIP) into $xous_core_dir (features: $features)"
+    echo "==> bundling xous.img (XIP) into $xous_core_dir (features: $features; image features: ${image_features:-none})"
+    local extra_args=()
+    local f
+    for f in $image_features; do
+        extra_args+=(--feature "$f")
+    done
     ( cd "$xous_core_dir" && cargo xtask app-image-xip \
         "xas:$elf" \
         vault \
         transientdisk \
         --kernel-feature big-heap \
+        "${extra_args[@]}" \
         --git-describe "$git_describe" \
         --git-rev "$git_rev" )
     printf '%s' "$sig" > "$stamp"
@@ -223,7 +253,7 @@ for robot in "${robots[@]}"; do
         echo "warning: no feature mapping for $robot; using canonical [$canonical_features]" >&2
         features="$canonical_features"
     fi
-    ensure_image "$features"
+    ensure_image "$features" "$(image_features_for "$robot")"
     run_robot "$robot"
 done
 
@@ -231,7 +261,7 @@ done
 # probe bundle would otherwise linger in xous-core's target/).
 if [ "$all_mode" = "1" ] && [ "${SKIP_BUNDLE:-0}" != "1" ]; then
     echo "==> restoring canonical image bundle"
-    ensure_image "$canonical_features"
+    ensure_image "$canonical_features" ""
 fi
 
 echo

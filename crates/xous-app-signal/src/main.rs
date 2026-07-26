@@ -197,6 +197,9 @@ fn main() -> std::io::Result<()> {
     #[cfg(all(feature = "probe-send-batch", target_os = "xous"))]
     probe_send_batch();
 
+    #[cfg(feature = "probe-echo")]
+    probe_echo();
+
     // NOTE: load-bearing — there is no `probe-pddb-real` or
     // `probe-bulk-ab` auto-fire probe here. Calling
     // `presage_store_pddb::PddbBackend::connect()` immediately after
@@ -328,6 +331,233 @@ fn probe_network() {
     }
 
     log::info!("probe: network probe done");
+}
+
+/// In-image TCP echo probe — the first renode assertion where the
+/// network stack must actually WORK, not merely fail cleanly.
+///
+/// Spawns a `std::net::TcpListener` echo server on `127.0.0.1:7777`
+/// in one thread, then drives four client cases against it, one
+/// connection each:
+///
+/// 1. `msg-1`..`msg-3` — three short patterned messages, sequential write-then-read (payloads are far below
+///    the net service's per-socket 1530-byte (`NET_MTU`) rx/tx buffers, so no interleaving is needed).
+/// 2. `bulk-8k` — one 8192-byte position-derived pattern, STREAMED: a writer thread pushes while the probe
+///    thread reads the echo concurrently, sharing the socket via `impl Read/Write for &TcpStream`. 8 KiB
+///    exceeds the sum of all four in-path smoltcp socket buffers (4 x 1530 B), so a blind `write_all` before
+///    the first read would deadlock on echo back-pressure; concurrent one-socket rx/tx from two threads is
+///    also exactly the shape `xous-net-bridge::ws_pump` uses in production.
+///
+/// The client side is `std::net::TcpStream` directly, not
+/// `xous-net-bridge`: every bridge entry point is TLS-fused (no
+/// plain-TCP path until the issue #39 open/pump split), and the
+/// point of this stage is the on-target `std::net` → services/net →
+/// smoltcp path, which is byte-identical for the bridge once it
+/// opens its socket.
+///
+/// Sentinel grammar (asserted by `xas-echo.robot`):
+/// `XAS-ECHO: <name> PASS|FAIL ...` per case, then
+/// `XAS-ECHO DONE: pass=N fail=M`.
+///
+/// Kernel-image requirement: net service built with
+/// `net/renode-minimal` (xous-core branch `xas-integration-net`).
+/// smoltcp only gains its `127.0.0.1/8` interface address when an
+/// IPv4 config is applied (`WlanIpConfigUpdate` path), which never
+/// happens on the closed renode switch — the feature seeds a static
+/// config at boot through the same handler.
+#[cfg(feature = "probe-echo")]
+fn probe_echo() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Instant;
+
+    const ECHO_ADDR: &str = "127.0.0.1:7777";
+
+    log::info!("probe-echo: starting in-image TCP echo probe on {}", ECHO_ADDR);
+
+    // Deterministic case payloads. The bulk pattern is derived from the
+    // byte position so truncation, reordering, and offset errors all
+    // show up as a first-differing-offset, with no RNG dependency.
+    let bulk: Vec<u8> = (0..8192usize).map(|i| (i.wrapping_mul(31).wrapping_add(7) & 0xff) as u8).collect();
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        ("msg-1", b"xas-echo-1: the quick brown fox jumps over the lazy dog".to_vec()),
+        ("msg-2", b"xas-echo-2: 0123456789 abcdefghijklmnopqrstuvwxyz".to_vec()),
+        ("msg-3", b"xas-echo-3: ZYXWVUTSRQPONMLKJIHGFEDCBA 9876543210".to_vec()),
+        ("bulk-8k", bulk),
+    ];
+    let case_count = cases.len();
+
+    let listener = match TcpListener::bind(ECHO_ADDR) {
+        Ok(l) => l,
+        Err(e) => {
+            for (name, _) in &cases {
+                log::warn!("XAS-ECHO: {} FAIL (listener bind: {})", name, e);
+            }
+            log::info!("XAS-ECHO DONE: pass=0 fail={}", case_count);
+            return;
+        }
+    };
+
+    // Echo server: accept connections until the process exits, echoing
+    // each until EOF. The accept loop is deliberately unbounded — the
+    // warm-up below consumes a nondeterministic number of connections —
+    // so this thread parks in accept() forever once the probe is done.
+    // One leaked parked thread in a probe-only build, never joined.
+    std::thread::spawn(move || {
+        loop {
+            let (mut sock, peer) = match listener.accept() {
+                Ok(a) => a,
+                Err(e) => {
+                    log::warn!("probe-echo: server accept failed: {}", e);
+                    return;
+                }
+            };
+            log::info!("probe-echo: server accepted conn from {}", peer);
+            // NO read timeout on the server socket, and that is load-bearing:
+            // the net service's rx pump checks a blocked read's expiry
+            // BEFORE its CloseWait/Closed remote-hangup branch, so a read
+            // that carries a timeout is never woken early by the peer's
+            // FIN — it sleeps until the timer fires and only then reports
+            // EOF. With a timeout here, every client close would stall
+            // this single-threaded loop on the dead connection for the
+            // full ECHO_IO_TIMEOUT, serializing the next case behind it
+            // and starving that case past its own client-side read budget
+            // (observed on target: warm-up passes, then every real case
+            // times out). A timeout-less read IS woken promptly on
+            // CloseWait and returns Ok(0). A wedged connection is still
+            // bounded: every case's CLIENT socket carries
+            // ECHO_IO_TIMEOUT, so the case FAILs its sentinel and the
+            // robot aborts instead of hanging.
+            let _ = sock.set_write_timeout(Some(ECHO_IO_TIMEOUT));
+            let mut buf = [0u8; 1024];
+            loop {
+                match sock.read(&mut buf) {
+                    // Client closed: this connection is done.
+                    Ok(0) => {
+                        log::info!("probe-echo: server conn from {} closed (EOF)", peer);
+                        break;
+                    }
+                    Ok(n) => {
+                        if let Err(e) = sock.write_all(&buf[..n]) {
+                            log::warn!("probe-echo: server echo write failed: {}", e);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("probe-echo: server read failed: {}", e);
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Warm-up: the probe fires right after worker spawn, which can race
+    // the net service's renode-minimal static-IPv4 seed (until the seed
+    // lands, smoltcp has no 127.0.0.1/8 address and loopback connects
+    // fail fast with no route/address). Retry a throwaway connect until
+    // the stack carries one, then run the real cases.
+    let warmup_start = Instant::now();
+    let mut stack_ready = false;
+    while warmup_start.elapsed() < ECHO_WARMUP_BUDGET {
+        match run_echo_case(ECHO_ADDR, b"xas-echo-warmup") {
+            Ok(()) => {
+                stack_ready = true;
+                log::info!("probe-echo: stack ready after {:?}", warmup_start.elapsed());
+                break;
+            }
+            Err(e) => {
+                log::debug!("probe-echo: warm-up not ready ({}); retrying", e);
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+    }
+    if !stack_ready {
+        log::warn!("probe-echo: stack not ready after {:?}", warmup_start.elapsed());
+    }
+
+    let mut pass = 0usize;
+    let mut fail = 0usize;
+    for (name, payload) in &cases {
+        let start = Instant::now();
+        match run_echo_case(ECHO_ADDR, payload) {
+            Ok(()) => {
+                pass += 1;
+                log::info!(
+                    "XAS-ECHO: {} PASS ({} bytes round-trip in {:?})",
+                    name,
+                    payload.len(),
+                    start.elapsed()
+                );
+            }
+            Err(e) => {
+                fail += 1;
+                log::warn!("XAS-ECHO: {} FAIL ({})", name, e);
+            }
+        }
+    }
+
+    log::info!("XAS-ECHO DONE: pass={} fail={}", pass, fail);
+}
+
+/// How long [`probe_echo`] retries its warm-up connect before giving
+/// up on the network stack coming ready. Boot-order slack only; on a
+/// healthy renode-minimal image the first or second attempt lands.
+#[cfg(feature = "probe-echo")]
+const ECHO_WARMUP_BUDGET: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// Per-call I/O bound for [`probe_echo`]'s CLIENT sockets (and the
+/// server's echo writes): generous next to loopback latency, small
+/// next to the robot's virtual-time budget, so a wedged case FAILs
+/// its sentinel instead of eating the wall-clock cap. Deliberately
+/// NOT applied to the server's reads — see the comment at the accept
+/// loop: a timeout'd read is never woken early by a remote close, so
+/// it would stall the loop for the full bound after every case.
+#[cfg(feature = "probe-echo")]
+const ECHO_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// One [`probe_echo`] client case: connect to `addr`, stream
+/// `payload` from a writer thread while this thread reads the echo,
+/// and verify the round-trip byte-exact.
+///
+/// The socket is shared between the two threads as `&TcpStream`
+/// through an `Arc` (std implements `Read`/`Write` on the
+/// reference), avoiding `try_clone()` — same sharing model
+/// `xous-net-bridge` uses. Dropping both `Arc`s closes the socket,
+/// which is the echo server's end-of-case signal.
+#[cfg(feature = "probe-echo")]
+fn run_echo_case(addr: &str, payload: &[u8]) -> Result<(), String> {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::sync::Arc;
+
+    let addr: SocketAddr = addr.parse().map_err(|e| format!("addr parse: {}", e))?;
+    let stream = TcpStream::connect_timeout(&addr, ECHO_IO_TIMEOUT).map_err(|e| format!("connect: {}", e))?;
+    stream.set_read_timeout(Some(ECHO_IO_TIMEOUT)).map_err(|e| format!("set_read_timeout: {}", e))?;
+    stream.set_write_timeout(Some(ECHO_IO_TIMEOUT)).map_err(|e| format!("set_write_timeout: {}", e))?;
+
+    let stream = Arc::new(stream);
+    let writer_stream = Arc::clone(&stream);
+    let to_send = payload.to_vec();
+    let writer = std::thread::spawn(move || -> Result<(), String> {
+        (&*writer_stream).write_all(&to_send).map_err(|e| format!("write: {}", e))
+    });
+
+    let mut echoed = vec![0u8; payload.len()];
+    let read_res = (&*stream).read_exact(&mut echoed).map_err(|e| format!("read: {}", e));
+    let write_res = writer.join().map_err(|_| "writer thread panicked".to_string())?;
+    write_res?;
+    read_res?;
+
+    if echoed != payload {
+        let first_bad = echoed.iter().zip(payload.iter()).position(|(a, b)| a != b);
+        return Err(format!(
+            "payload mismatch ({} bytes, first differing offset {:?})",
+            payload.len(),
+            first_bad
+        ));
+    }
+    Ok(())
 }
 
 /// Poll xous-core's PDDB Mount Poller via raw `xous` IPC and log
