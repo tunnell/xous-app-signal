@@ -14,3 +14,6 @@ logs/
 report.html
 robot_output.xml
 snapshots/
+
+# Per-robot renode-test results (run-renode-tests.sh -r dirs)
+tests/renode/renode-results/
