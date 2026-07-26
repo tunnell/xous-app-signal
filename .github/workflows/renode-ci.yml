@@ -15,6 +15,11 @@
 # variants as additional artifacts (or a build matrix) and run those legs
 # with their own SKIP_BUNDLE image downloads.
 
+# ACTIVATION NOTE: workflow_dispatch and schedule triggers only register
+# from the repository's DEFAULT branch (main). main moves by fast-forward
+# at release time, so this workflow becomes remotely triggerable at the
+# next release; until then run the same suite locally:
+#   tests/renode/run-renode-tests.sh --all
 name: Renode CI
 
 # Trigger policy: manual-only plus a weekly cron. The renode-test job costs
