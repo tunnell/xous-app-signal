@@ -577,85 +577,99 @@ cargo test --features hosted -p xous-app-signal --bins
 mutation funnel, message rendering, contact-name resolution, and
 link/send/receive event dispatch. Should all pass green.
 
-### 2.7 Renode test environment gotchas
+### 2.7 Renode tests (CI-grade harness)
 
-If you're running the robot-framework tests under renode
-(`xas-smoke.robot`, `xas-probe.robot`, `xas-pddb-probe.robot`,
-`xas-send-batch.robot`, `xas-bulk-write-boot.robot`,
-`xas-selective-sync.robot`, `xas-instrument-noise.robot`), three
-pitfalls to know about:
-
-**(a) `xas-smoke.resc` resolves `$xous_core_root` via the
-`repos/xous-core` symlink.** The `.resc` file defaults
-`$xous_core_root` to `$ORIGIN/../../../repos/xous-core` — the
-workspace-level symlink BUILDING.md §1 establishes and every Cargo
-manifest uses — so with the standard layout it needs no editing and
-boots the image built from your active xous-core checkout. If your
-layout differs (no `repos/` symlink, or you want to boot an image
-from a different checkout), pass
-`-e '$xous_core_root = @<path>'` ahead of `include @<resc>` in the
-wrapper.
-
-**(b) Robot tests boot a bundled `xous.img` + `loader.bin`.**
-`run-renode-tests.sh` builds the rv32 xas ELF and re-bundles it
-into a fresh `xous.img` in the checkout the `.resc` boots (set
-`SKIP_BUNDLE=1` to reuse the existing image when the ELF hasn't
-changed). If you invoke `renode-test` directly instead of going
-through the wrapper, build the image yourself:
+The renode suite lives in `tests/renode/`: seven robots, one
+CI-grade machine definition (`xas-ci.resc`), a shared robot resource
+(`xas-ci-common.resource`), and the wrapper `run-renode-tests.sh`.
 
 ```sh
-cd ~/code/xas/xous-core
-cargo xtask app-image xas:/path/to/xas/target/release/xas \
+tests/renode/run-renode-tests.sh                   # xas-smoke.robot
+tests/renode/run-renode-tests.sh xas-probe.robot   # one robot
+tests/renode/run-renode-tests.sh --all             # all seven, serially,
+                                                   # with a summary table
+```
+
+For each robot the wrapper builds the rv32 xas ELF with the feature
+set that robot expects, re-bundles `loader.bin`/`xous.img` into
+`$XOUS_CORE_DIR` **only when the (features, ELF) pair changed**, and
+runs `renode-test` under a hard wall-clock cap. Feature map:
+
+| robot | xas ELF features |
+|---|---|
+| `xas-smoke`, `xas-bulk-write-boot`, `xas-selective-sync`, `xas-instrument-noise` | `pddb-real,precursor` (canonical) |
+| `xas-pddb-probe` | `precursor,probe-pddb` |
+| `xas-probe` | `precursor,probe-flow` |
+| `xas-send-batch` | `precursor,probe-send-batch` |
+
+`XAS_FEATURES` overrides the map for single-robot runs (ignored under
+`--all`). After `--all`, the wrapper re-bundles the canonical image so
+the xous-core tree never ends on a probe variant.
+
+**The machine (`xas-ci.resc`)** follows upstream xous-core's
+`emulation/tests/pddb-ci.resc` CI pattern, not the interactive
+`emulation/betrusted.resc`: headless SoC + EC pair (the EC is
+mandatory — without it the first COM transaction null-derefs and PDDB
+mount spin-waits), no gdb servers / socket terminals / analyzers (no
+fixed listen ports), `emulation SetSeed 0x0` for determinism, a
+**per-run, per-robot 0xFF-filled 128 MiB flash scratch file** (the
+flash model writes through into its backing file; a shared or
+zero-filled backing file leaks state across runs and stalls PDDB
+boot), and file-backed UART logs under
+`target/xas-ci/<robot>-{console,kernel}.log` — the robots grep the
+console log for their end-of-test assertions, and the files are the
+first stop for triage.
+
+**Time bounds.** `Wait For Line On Uart` timeouts are virtual-time
+seconds (host-speed independent); each robot also carries a
+wall-clock `Test Timeout` of 10 minutes, and the wrapper wraps
+`renode-test` in `timeout(1)` (`ROBOT_TIMEOUT_SECS`, default 900 s) —
+a stalled machine cannot hang a run indefinitely. `PANIC in PID` is a
+registered failing UART string, so a service death fails the pending
+wait immediately.
+
+**Environment.** `XOUS_CORE_DIR` — the xous-core checkout to bundle
+into and boot (default: the `repos/xous-core` symlink from §1; must
+register xas in `apps/manifest.json`). `RENODE_CI_MODE` — exported,
+defaults to `YES`. `SKIP_BUNDLE=1` — boot the existing `xous.img`
+as-is (only safe when it already matches the robot's features).
+`RUSTUP_TOOLCHAIN` — honored if set; hosts whose stable rustc has a
+stale rv32 sysroot need a pinned toolchain for all rv32 builds.
+
+**Bundling by hand** (what the wrapper does, if you want to run
+`renode-test` directly):
+
+```sh
+cd <xous-core>
+cargo xtask app-image-xip \
+    xas:<xas>/target/riscv32imac-unknown-xous-elf/release/xas \
+    vault transientdisk --kernel-feature big-heap \
     --git-describe v0.9.21-0-g0000000
+XOUS_CORE_DIR=<xous-core> renode-test tests/renode/<robot>.robot
 ```
 
-`--git-describe` is **mandatory on forks**. The xtask runs
-`git describe --tags` to embed a version string into the image
-header, and a fork branch generally has no reachable tag — the
-xtask aborts (or emits a kernel whose embedded version is the
-empty string and trips the bootloader's sanity check). The
-exact value doesn't matter so long as it parses; the literal
-`v0.9.21-0-g0000000` above matches upstream's format and is
-the value the hardware harness pins against.
+Two load-bearing details:
 
-**(c) Match the xas feature set to the robot you're running.**
-The wrapper builds `--features pddb-real,precursor` by default —
-right for `xas-smoke.robot` and the three boot-gate robots
-(`xas-bulk-write-boot.robot`, `xas-selective-sync.robot`,
-`xas-instrument-noise.robot`), wrong for the three probe robots,
-which assert UART lines that only exist when their probe feature
-is compiled in. Override via `XAS_FEATURES`:
+- `app-image-xip`, **not** `app-image`: the all-in-RAM image
+  (~12.9 MB `xous.img`) exceeds the Precursor's 16 MiB RAM once every
+  service unpacks — under Renode the kernel OOM-panics ("Couldn't
+  allocate new page: OutOfMemory" → KERNEL FAILURE → reboot loop)
+  shortly after xas starts, before PDDB reaches the password prompt.
+  XIP executes services from flash-mapped addresses and is the same
+  bundle the hardware flash flow uses (§3.2).
+- `--git-describe` is **mandatory on forks**: the xtask runs
+  `git describe --tags` to embed a version string, and a fork branch
+  generally has no reachable tag. Any v-prefixed semver parses;
+  `v0.9.21-0-g0000000` is the value the harness pins against.
 
-```sh
-XAS_FEATURES=precursor,probe-flow \
-    tests/renode/run-renode-tests.sh xas-probe.robot
-XAS_FEATURES=precursor,probe-pddb \
-    tests/renode/run-renode-tests.sh xas-pddb-probe.robot
-XAS_FEATURES=precursor,probe-send-batch \
-    tests/renode/run-renode-tests.sh xas-send-batch.robot
-```
-
-(The former `probe-pddb-real` / `probe-bulk-ab` features and the
-`xas-pddb-real-probe.robot` companion no longer exist — removed
-2026-05-14 because auto-firing PDDB traffic right after worker
-spawn raced xous-names server registration and crashed hardware
-with a `ServerNotFound` cascade; see the load-bearing NOTE in
-`crates/xous-app-signal/src/main.rs`. Bulk-write benchmarking
-moved to the user-invoked shellchat `pddb bulk_probe` command.)
-
-The boot-gate robots additionally want the *kernel image* built
-with `--feature pddb/autobasis`:
-
-```sh
-cargo xtask app-image xas:... \
-    --feature pddb/autobasis \
-    --git-describe v0.9.21-0-g0000000
-```
-
-Without `pddb/autobasis` the first-boot path waits for a
-user-typed password to unlock the system basis; renode does
-not inject keystrokes on that screen, so the test hangs until
-the outer timeout fires.
+The three boot-gate robots (`xas-bulk-write-boot`,
+`xas-selective-sync`, `xas-instrument-noise`) pass on the fresh 0xFF
+flash without any keyboard injection: `Requesting login password`
+prints *before* the first-boot REQFMT format prompt, so no
+`pddb/autobasis` kernel feature is needed. (The former
+`probe-pddb-real`/`probe-bulk-ab` features and
+`xas-pddb-real-probe.robot` were removed 2026-05-14; bulk-write
+benchmarking moved to the user-invoked shellchat `pddb bulk_probe`.)
 
 ---
 
