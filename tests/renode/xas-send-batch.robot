@@ -1,72 +1,62 @@
 *** Comments ***
-Phase 2 — `BufferingBackend` + `BatchGuard` smoke under Renode.
+`BufferingBackend` + `BatchGuard` smoke under Renode.
 
-Boots the standard xas-smoke image with xas built under the
-`probe-send-batch` feature. The probe drives a synthetic
-"send-shaped" sequence of writes through `BufferingBackend`
-wrapping a `MockBackend`, then a commit, then an abort path. It
-logs UART lines that this Robot test asserts on.
+Boots the standard machine with xas built under
+`--features precursor,probe-send-batch`. The probe drives a synthetic
+"send-shaped" sequence of writes through `BufferingBackend` wrapping a
+`MockBackend`, then a commit, then an abort path, logging UART lines
+this robot asserts on.
 
-The probe uses `MockBackend` rather than the real PDDB because
-the gen1 PDDB can't auto-mount in Renode (no rootkeys + no
-password modal injection). The wrapper semantics are independent
-of inner backend; this probe validates that the abstraction
-compiles for rv32 and runs under the real xous async runtime.
-The host-side `cargo test -p presage-store-pddb` covers the same
-abstraction in 15 unit tests.
+The probe uses `MockBackend` rather than the real PDDB because the gen1
+PDDB can't auto-mount in Renode (no rootkeys + no password modal
+injection). The wrapper semantics are independent of the inner backend;
+this probe validates that the abstraction compiles for rv32 and runs
+under the real xous async runtime. The host-side
+`cargo test -p presage-store-pddb` covers the same abstraction in unit
+tests.
 
-Build / run sequence (mirrors xas-pddb-probe.robot):
+Run via:    tests/renode/run-renode-tests.sh xas-send-batch.robot
+(the wrapper builds the probe-send-batch ELF variant and re-bundles the
+image automatically; a canonical-image run would fail the banner wait.)
 
-    cd <xas repo root>
-    cargo build --target=riscv32imac-unknown-xous-elf --release \
-                -p xous-app-signal --features precursor,probe-send-batch
-    cp target/riscv32imac-unknown-xous-elf/release/xas \
-                                             dist/xas-rv32/xas
-    cd xous-core
-    cargo xtask app-image \
-        xas:<xas repo root>/target/riscv32imac-unknown-xous-elf/release/xas \
-        --git-describe v0.9.21-0-g0000000
-    cd <xas repo root>
-    renode-test tests/renode/xas-send-batch.robot
 
 *** Settings ***
-Suite Setup     Setup
-Suite Teardown  Teardown
-Test Setup      Reset Emulation
-Test Teardown   Test Teardown
-Resource        ${RENODEKEYWORDS}
+Suite Setup                   Setup
+Suite Teardown                Teardown
+Test Teardown                 Test Teardown
+Test Timeout                  10 minutes
+Resource                      ${RENODEKEYWORDS}
+Resource                      xas-ci-common.resource
+
 
 *** Variables ***
-${SCRIPT_DIR}=  ${CURDIR}
-${UART_TIMEOUT}=  240
+${UART_TIMEOUT}               240
+${CREATE_SNAPSHOT_ON_FAIL}    False
 
-*** Keywords ***
-Create Xas Machine
-    Execute Command  $script_dir = '${SCRIPT_DIR}'
-    Execute Command  include @${SCRIPT_DIR}/xas-smoke.resc
 
 *** Test Cases ***
 Should Buffer Writes Commit And Abort
-    Create Xas Machine
-    Create Terminal Tester    sysbus.console    timeout=${UART_TIMEOUT}    machine=SoC
-    Start Emulation
+    Create Xas Ci Machine     xas-send-batch
     # Baseline xas boot.
-    Wait For Line On Uart    xas: starting
-    Wait For Line On Uart    xas: worker started
+    Wait For Line On Uart     xas: starting
+    Wait For Line On Uart     xas: worker started
     # Probe banner — confirms the feature flag took effect.
-    Wait For Line On Uart    probe-send-batch: starting
-    Wait For Line On Uart    probe-send-batch: backend constructed
+    Wait For Line On Uart     probe-send-batch: starting
+    Wait For Line On Uart     probe-send-batch: backend constructed
     # batch begin
-    Wait For Line On Uart    probe-send-batch: batch begin OK
+    Wait For Line On Uart     probe-send-batch: batch begin OK
     # three writes buffered, with count=3
-    Wait For Line On Uart    probe-send-batch: 3 writes buffered
+    Wait For Line On Uart     probe-send-batch: 3 writes buffered
     # intra-batch read-through visible
-    Wait For Line On Uart    probe-send-batch: intra-batch read-through OK
+    Wait For Line On Uart     probe-send-batch: intra-batch read-through OK
     # commit OK with replay count
-    Wait For Line On Uart    probe-send-batch: commit OK
+    Wait For Line On Uart     probe-send-batch: commit OK
     # post-commit reads land
-    Wait For Line On Uart    probe-send-batch: post-commit reads match
+    Wait For Line On Uart     probe-send-batch: post-commit reads match
     # abort path works
-    Wait For Line On Uart    probe-send-batch: abort path OK
+    Wait For Line On Uart     probe-send-batch: abort path OK
     # final done line
-    Wait For Line On Uart    probe-send-batch: probe done
+    Wait For Line On Uart     probe-send-batch: probe done
+    Console Log Should Be Clean And Contain
+    ...                       probe-send-batch: starting
+    ...                       probe-send-batch: probe done
