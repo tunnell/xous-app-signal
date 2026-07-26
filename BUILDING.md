@@ -619,10 +619,10 @@ in-image `std::net` TCP echo over the smoltcp loopback, byte-exact,
 `XAS-ECHO DONE: pass=4 fail=0`), and the only one with an image-side
 feature: `net/renode-minimal` seeds a static IPv4 config at boot,
 without which smoltcp never gains its `127.0.0.1/8` address (no DHCP
-bind ever fires on the closed renode switch). That feature only
-exists on xous-core branch `xas-integration-net` — point
-`XOUS_CORE_DIR` there for this robot; the bundle fails loudly on a
-tree without it.
+bind ever fires on the closed renode switch). The feature is carried
+on the canonical `xas-integration` branch (folded 2026-07-26), so the
+standard `XOUS_CORE_DIR` works; the bundle fails loudly on a tree
+without it.
 
 **The machine (`xas-ci.resc`)** follows upstream xous-core's
 `emulation/tests/pddb-ci.resc` CI pattern, not the interactive
