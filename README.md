@@ -152,13 +152,19 @@ it before running any flash command.
 
 ## Upstream patches
 
-xas tracks three upstream fixes. Status as of 2026-07-25: **#1 and
+xas tracks three upstream fixes. Status as of 2026-07-26: **#1 and
 #3 below are merged upstream**; #2 was **closed unmerged** by its
-author on 2026-07-18, so its fix stays on our fork. The
-pinned `xas-v0.2` branch of [`tunnell/xous-core`](https://github.com/tunnell/xous-core)
-and the rev-pinned fork of `libsignal-service-rs`
-([docs/FORKS.md](docs/FORKS.md)) carry whatever has
-not yet reached a release xas builds against.
+author on 2026-07-18, so its fix stays on our fork. The frozen
+`xas-v0.2` tag of [`tunnell/xous-core`](https://github.com/tunnell/xous-core)
+and the three rev-pinned crate forks (`presage`,
+`libsignal-service-rs`, `curve25519-dalek` —
+[docs/FORKS.md](docs/FORKS.md)) carry whatever has not yet
+reached a release xas builds against. Day-to-day kernel
+integration happens on the fork's `xas-integration` branch
+(upstream `dev` plus a small cherry-pick set: the manifest
+registration, the DNS CNAME fix, the net reapers, and a few
+hosted-test conveniences); releases freeze it into `xas-vN`
+tags.
 
 1. **`betrusted-io/xous-core` net-service encoding fix** —
    [betrusted-io/xous-core#877](https://github.com/betrusted-io/xous-core/pull/877),
@@ -171,14 +177,15 @@ not yet reached a release xas builds against.
    reads and writes. The fix mirrors the code at byte 1 too.
    Any `betrusted-io/xous-core` checkout at or after `2005a801c`
    carries it. `BUILDING.md` still instructs you to clone the
-   pinned `xas-v0.2` branch of `tunnell/xous-core`, which carried
+   frozen `xas-v0.2` tag of `tunnell/xous-core`, which carried
    the identical commit pre-merge — the pin remains for the other
    deltas it holds (CNAME-chain DNS fix, `services/net` reaper fix
    from tunnell/xous-core#26 — filed upstream as
    [betrusted-io/xous-core#880](https://github.com/betrusted-io/xous-core/pull/880),
    closed unmerged pending the upstream Renode-CI net refactor —
    a hosted-mode PDDB tweak, and the
-   `apps/manifest.json` registration for xas).
+   `apps/manifest.json` registration for xas). The same deltas
+   ride the floating `xas-integration` branch for current work.
 2. **`whisperfish/libsignal-service-rs` keepalive tolerance** —
    [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431)
    (closed unmerged 2026-07-18).
@@ -203,14 +210,19 @@ not yet reached a release xas builds against.
    release the toolchain pin uses, the byte-1 mirror from #1
    becomes belt-and-suspenders rather than load-bearing.
 
-With #1 and #3 merged and #2 closed, no upstream merge is
-pending. The keepalive tolerance remains a fork delta, visible
-in the compare URL in [docs/FORKS.md](docs/FORKS.md).
-BUILDING.md keeps pointing at the pinned `xas-v0.2` fork branch
-until a future xas release re-pins against an upstream
-`betrusted-io/xous-core` that includes `2005a801c` and a
-resolution for the reaper fix (#880, closed unmerged pending
-the upstream Renode-CI net refactor).
+With #1 and #3 merged and #2 closed, none of the three patches
+above is pending upstream. (Separately, a batch of maintainer
+PRs is open at `betrusted-io/xous-core` — the Renode net-CI
+suite [#918](https://github.com/betrusted-io/xous-core/pull/918)
+and eight pddb `std::fs` fixes #910–#917 — which came out of
+xas testing but stand on their own.) The keepalive tolerance
+and the presage PNI-cipher fix remain fork deltas, visible in
+the compare URLs in [docs/FORKS.md](docs/FORKS.md).
+BUILDING.md keeps pointing at the frozen `xas-v0.2` tag until
+the next release freezes an `xas-integration` snapshot as
+`xas-v0.3`, which will shrink the kernel-fork delta to the
+manifest registration plus whatever upstream has not yet
+merged.
 
 ---
 
