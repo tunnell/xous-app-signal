@@ -582,6 +582,9 @@ link/send/receive event dispatch. Should all pass green.
 The renode suite lives in `tests/renode/`: seven robots, one
 CI-grade machine definition (`xas-ci.resc`), a shared robot resource
 (`xas-ci-common.resource`), and the wrapper `run-renode-tests.sh`.
+CI: `.github/workflows/renode-ci.yml` runs the four canonical-image
+robots (workflow_dispatch + weekly cron; image and robot-log
+artifacts on the run page) — the three probe robots stay local-only.
 
 ```sh
 tests/renode/run-renode-tests.sh                   # xas-smoke.robot
