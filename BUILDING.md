@@ -579,7 +579,7 @@ link/send/receive event dispatch. Should all pass green.
 
 ### 2.7 Renode tests (CI-grade harness)
 
-The renode suite lives in `tests/renode/`: seven robots, one
+The renode suite lives in `tests/renode/`: eight robots, one
 CI-grade machine definition (`xas-ci.resc`), a shared robot resource
 (`xas-ci-common.resource`), and the wrapper `run-renode-tests.sh`.
 CI: `.github/workflows/renode-ci.yml` runs the four canonical-image
@@ -592,25 +592,37 @@ artifacts on the run page) — the three probe robots stay local-only.
 ```sh
 tests/renode/run-renode-tests.sh                   # xas-smoke.robot
 tests/renode/run-renode-tests.sh xas-probe.robot   # one robot
-tests/renode/run-renode-tests.sh --all             # all seven, serially,
+tests/renode/run-renode-tests.sh --all             # all eight, serially,
                                                    # with a summary table
 ```
 
 For each robot the wrapper builds the rv32 xas ELF with the feature
 set that robot expects, re-bundles `loader.bin`/`xous.img` into
-`$XOUS_CORE_DIR` **only when the (features, ELF) pair changed**, and
-runs `renode-test` under a hard wall-clock cap. Feature map:
+`$XOUS_CORE_DIR` **only when the (features, image features, ELF)
+triple changed**, and runs `renode-test` under a hard wall-clock cap.
+Feature map:
 
-| robot | xas ELF features |
-|---|---|
-| `xas-smoke`, `xas-bulk-write-boot`, `xas-selective-sync`, `xas-instrument-noise` | `pddb-real,precursor` (canonical) |
-| `xas-pddb-probe` | `precursor,probe-pddb` |
-| `xas-probe` | `precursor,probe-flow` |
-| `xas-send-batch` | `precursor,probe-send-batch` |
+| robot | xas ELF features | image (xtask) features |
+|---|---|---|
+| `xas-smoke`, `xas-bulk-write-boot`, `xas-selective-sync`, `xas-instrument-noise` | `pddb-real,precursor` (canonical) | — |
+| `xas-pddb-probe` | `precursor,probe-pddb` | — |
+| `xas-probe` | `precursor,probe-flow` | — |
+| `xas-send-batch` | `precursor,probe-send-batch` | — |
+| `xas-echo` | `precursor,probe-echo` | `net/renode-minimal` |
 
 `XAS_FEATURES` overrides the map for single-robot runs (ignored under
 `--all`). After `--all`, the wrapper re-bundles the canonical image so
 the xous-core tree never ends on a probe variant.
+
+`xas-echo` is the first robot where the network stack must WORK (an
+in-image `std::net` TCP echo over the smoltcp loopback, byte-exact,
+`XAS-ECHO DONE: pass=4 fail=0`), and the only one with an image-side
+feature: `net/renode-minimal` seeds a static IPv4 config at boot,
+without which smoltcp never gains its `127.0.0.1/8` address (no DHCP
+bind ever fires on the closed renode switch). That feature only
+exists on xous-core branch `xas-integration-net` — point
+`XOUS_CORE_DIR` there for this robot; the bundle fails loudly on a
+tree without it.
 
 **The machine (`xas-ci.resc`)** follows upstream xous-core's
 `emulation/tests/pddb-ci.resc` CI pattern, not the interactive

@@ -44,6 +44,20 @@ probe-pddb = []
 # auto-fire after worker spawn.
 pddb-real = ["presage-store-pddb/pddb-backend"]
 
+# In-image TCP echo probe: after the worker spawns, main() starts a
+# `std::net::TcpListener` echo server on 127.0.0.1:7777 in one
+# thread and drives four client cases against it (three patterned
+# messages + one streamed 8 KiB payload), verifying byte-exact
+# echoes through the REAL on-target stack: libstd -> services/net ->
+# smoltcp loopback. Logs the `XAS-ECHO:` sentinel grammar asserted
+# by `xas-echo.robot`. The bundled kernel image must have its net
+# service built with `net/renode-minimal` (xous-core branch
+# `xas-integration-net`): smoltcp only gains its 127.0.0.1/8
+# interface address when an IPv4 config is applied, and on the
+# closed renode COM/WF200 setup no DHCP bind ever fires — the
+# feature seeds a static config at boot through the same handler.
+probe-echo = []
+
 # Probe that exercises `BufferingBackend` + `BatchGuard` against a
 # `MockBackend` (no real PDDB required). Drives a synthetic
 # "send-shaped" sequence — multiple writes through Store traits
