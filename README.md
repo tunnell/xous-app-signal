@@ -152,77 +152,41 @@ it before running any flash command.
 
 ## Upstream patches
 
-xas tracks three upstream fixes. Status as of 2026-07-26: **#1 and
-#3 below are merged upstream**; #2 was **closed unmerged** by its
-author on 2026-07-18, so its fix stays on our fork. The frozen
-`xas-v0.2` tag of [`tunnell/xous-core`](https://github.com/tunnell/xous-core)
-and the three rev-pinned crate forks (`presage`,
-`libsignal-service-rs`, `curve25519-dalek` —
-[docs/FORKS.md](docs/FORKS.md)) carry whatever has not yet
-reached a release xas builds against. Day-to-day kernel
-integration happens on the fork's `xas-integration` branch
-(upstream `dev` plus a small cherry-pick set: the manifest
-registration, the DNS CNAME fix, the net reapers, and a few
-hosted-test conveniences); releases freeze it into `xas-vN`
-tags.
+**Nothing xas needs is waiting on an upstream merge.** The two
+encoding bugs that originally forced a kernel fork are both fixed
+upstream: the net-service error-encoding mismatch
+([betrusted-io/xous-core#877](https://github.com/betrusted-io/xous-core/pull/877),
+merged 2026-06-02 as `2005a801c`) and its std-side twin
+([rust-lang/rust#156414](https://github.com/rust-lang/rust/pull/156414),
+merged; the kernel-side mirror covers the gap until it reaches a
+stable toolchain). The keepalive-tolerance PR
+([whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431))
+was closed unmerged by its author in 2026-07; its fix is a
+deliberate fork delta now, not a pending patch.
 
-1. **`betrusted-io/xous-core` net-service encoding fix** —
-   [betrusted-io/xous-core#877](https://github.com/betrusted-io/xous-core/pull/877),
-   **merged upstream 2026-06-02** (commit `2005a801c`).
-   The kernel writes `NetError` codes at byte 4 of the response
-   buffer; the Rust stdlib's Xous backend reads from byte 1 in
-   the recv path. The mismatch made `ErrorKind::TimedOut`
-   unreachable from `TcpStream::recv` — fatal for any
-   long-lived WS that uses `set_read_timeout` to interleave
-   reads and writes. The fix mirrors the code at byte 1 too.
-   Any `betrusted-io/xous-core` checkout at or after `2005a801c`
-   carries it. `BUILDING.md` still instructs you to clone the
-   frozen `xas-v0.2` tag of `tunnell/xous-core`, which carried
-   the identical commit pre-merge — the pin remains for the other
-   deltas it holds (CNAME-chain DNS fix, `services/net` reaper fix
-   from tunnell/xous-core#26 — filed upstream as
-   [betrusted-io/xous-core#880](https://github.com/betrusted-io/xous-core/pull/880),
-   closed unmerged pending the upstream Renode-CI net refactor —
-   a hosted-mode PDDB tweak, and the
-   `apps/manifest.json` registration for xas). The same deltas
-   ride the floating `xas-integration` branch for current work.
-2. **`whisperfish/libsignal-service-rs` keepalive tolerance** —
-   [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431)
-   (closed unmerged 2026-07-18).
-   Upstream closes the WS the moment any keepalive is
-   outstanding. Under any non-zero scheduling jitter (e.g.
-   rv32) this races and closes healthy connections. The PR
-   proposed an opt-in `with_max_outstanding_keepalives(...)`
-   constructor so callers like xas could tolerate the race
-   without changing default behavior for other consumers. The
-   patch lives on the rev-pinned
-   [`tunnell/libsignal-service-rs`](https://github.com/tunnell/libsignal-service-rs)
-   fork branch `xous-782c0d6` ([docs/FORKS.md](docs/FORKS.md)) as
-   a constant `MAX_OUTSTANDING_KEEPALIVES = 3` (semantically
-   equivalent for our use); with the PR closed, the fork
-   constant is the long-term shape — no upstream re-alignment is
-   pending.
-3. **`rust-lang/rust` Xous std-side recv encoding** —
-   [rust-lang/rust#156414](https://github.com/rust-lang/rust/pull/156414),
-   **merged**. The long-arc fix that makes #1 unnecessary at the
-   std level — change the recv decode to read byte 4 (matching
-   the send decode). Once the fix propagates to the stable Rust
-   release the toolchain pin uses, the byte-1 mirror from #1
-   becomes belt-and-suspenders rather than load-bearing.
+What xas deliberately carries that upstream doesn't have — pins
+and compare URLs in [docs/FORKS.md](docs/FORKS.md):
 
-With #1 and #3 merged and #2 closed, none of the three patches
-above is pending upstream. (Separately, a batch of maintainer
-PRs is open at `betrusted-io/xous-core` — the Renode net-CI
-suite [#918](https://github.com/betrusted-io/xous-core/pull/918)
-and eight pddb `std::fs` fixes #910–#917 — which came out of
-xas testing but stand on their own.) The keepalive tolerance
-and the presage PNI-cipher fix remain fork deltas, visible in
-the compare URLs in [docs/FORKS.md](docs/FORKS.md).
-BUILDING.md keeps pointing at the frozen `xas-v0.2` tag until
-the next release freezes an `xas-integration` snapshot as
-`xas-v0.3`, which will shrink the kernel-fork delta to the
-manifest registration plus whatever upstream has not yet
-merged.
+- **Kernel fork** (`tunnell/xous-core`, branch `xas-integration` =
+  upstream `dev` + a small cherry-pick set; releases freeze it
+  into `xas-vN` tags — v0.2 builds use the frozen `xas-v0.2`
+  tag): the `apps/manifest.json` xas registration, the DNS
+  CNAME-chain fix, the quiet-socket reaper fixes (filed once as
+  [#880](https://github.com/betrusted-io/xous-core/pull/880),
+  closed pending the upstream Renode-CI net refactor), and a few
+  hosted-test conveniences.
+- **Crate forks**: keepalive tolerance + a sync transport layer
+  (`libsignal-service-rs`); tokio removal + a PNI-cipher fix
+  (`presage`); the lizard module port from signalapp's tree
+  (`curve25519-dalek`).
+
+Separately, a batch of maintainer PRs is open at
+`betrusted-io/xous-core` — the Renode net-CI suite
+[#918](https://github.com/betrusted-io/xous-core/pull/918) and
+eight pddb `std::fs` fixes #910–#917 — which came out of xas
+testing but stand on their own.
+
+---
 
 ---
 
