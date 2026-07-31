@@ -1689,7 +1689,7 @@ dependencies = [
 [[package]]
 name = "libsignal-service"
 version = "0.1.0"
-source = "git+https://github.com/tunnell/libsignal-service-rs?rev=30d43d4a428fed372c9a7c2dc39e7173829aaa20#30d43d4a428fed372c9a7c2dc39e7173829aaa20"
+source = "git+https://github.com/tunnell/libsignal-service-rs?rev=96bcdf8eb69bd25d3f9770295535222540b6f491#96bcdf8eb69bd25d3f9770295535222540b6f491"
 dependencies = [
  "aes",
  "aes-gcm",
