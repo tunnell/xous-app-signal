@@ -13,12 +13,8 @@ Two paths are supported, **independently**:
    USB cable (a Raspberry Pi with the betrusted debug HAT is
    strongly recommended for reliable flashing + UART logging).
 
-Both paths share the same source tree. You only need to set up
-the parts you intend to use.
-
-This document is meant to be followed end-to-end with no prior
-context. If a step doesn't work as written, the document is
-wrong — please open an issue.
+Both paths share the same source tree. If a step doesn't work as
+written, the document is wrong — please open an issue.
 
 ---
 
@@ -27,29 +23,40 @@ wrong — please open an issue.
 ### Required for both paths
 
 - **Rust toolchain ≥ 1.95**, installed via [rustup](https://rustup.rs).
-  The exact version is pinned by the workspace's `rust-toolchain.toml`;
-  rustup will install it automatically on first `cargo` invocation.
+  `rust-toolchain.toml` says `channel = "stable"`, not a fixed
+  version — a `rustup update` moves you to whatever stable is that
+  day, and the Xous std bundle must match that rustc exactly
+  (§1.5).
 - **Git** ≥ 2.30.
 - **A working C compiler and pkg-config** (for some transitive
   build deps). On Debian/Ubuntu: `apt install build-essential
   pkg-config libssl-dev`; Arch: `pacman -S base-devel pkgconf openssl`.
-- **Python 3.8+** (used by the Xous flash tool, even on hosted
-  builds — it's also part of the `xtask app-image-xip` pipeline).
+- **Python 3.8+** (flash tool and the `xtask app-image-xip`
+  pipeline). `tools/usb_update.py` needs `pyusb`, `progressbar2`,
+  `pycryptodome`; on distros with PEP 668 pip use `pipx`, a venv, or
+  the distro packages.
 - **~10 GB free disk space** for build artifacts.
 
 ### Required for hardware path only
 
-- The **Xous Rust target sysroot** for `riscv32imac-unknown-xous-elf`.
-  See section 1.5 for what this is, why it's required, and how to
-  install it. The summary: `riscv32imac-unknown-xous-elf` is a Rust
-  tier-3 target — the compiler knows the target name but the std
-  library binaries are not shipped via rustup. You need to install
-  them once before you can cross-compile xas. **`rustup target add
-  riscv32imac-unknown-xous-elf` is NOT enough by itself** — see
-  section 1.5 for the actual install path.
+- The **Xous std sysroot** for `riscv32imac-unknown-xous-elf`. It is
+  a tier-3 target, so `rustup target add` does not supply it —
+  install with `cargo xtask install-toolkit` (§1.5).
 - A **Precursor PVT2** (the RISC-V hardware device).
-- A **USB-C cable** that supports data (not power-only) — to
-  connect Precursor to your build host (or to a Raspberry Pi).
+- A **USB-C cable** that supports data (not power-only).
+- **USB access to `1209:5bf0`.** Rule (any of
+  `/etc/udev/rules.d/99-precursor.rules`):
+  ```
+  SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="5bf0", TAG+="uaccess"
+  SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="3613", TAG+="uaccess"
+  ```
+  then `udevadm control --reload && udevadm trigger` (a reload alone
+  misses an already-plugged device). `TAG+="uaccess"` works where
+  `GROUP="plugdev"` does not — Arch and Fedora have no `plugdev`.
+  **Containers:** the rule belongs on the host, and the container
+  needs the bus mounted (`--device`, or `-v /dev/bus/usb:/dev/bus/usb`
+  for podman/distrobox); flashing from a toolbox otherwise fails with
+  permission errors that look like a missing rule.
 - **Optional but strongly recommended:** a **Raspberry Pi 4B**
   with the [betrusted debug HAT](https://www.crowdsupply.com/sutajio-kosagi/precursor)
   for reliable flashing and continuous UART log capture. The Pi
@@ -112,18 +119,9 @@ you intend to use**:
    cargo xtask install-toolkit
    ```
 
-   That bundle ships precompiled `libstd-*.rlib` for the
-   `riscv32imac-unknown-xous-elf` target, which both satisfies
-   the hard error and is a strict prerequisite for §3 (the
-   hardware build). Hosted-only readers may be tempted to skip
-   it; you can't, because the toolchain file fires before any
-   feature flags are evaluated. See §1.5 for full detail.
-
-If you skip these and start with §2.2, the symptom is a cryptic
-rustup error before a single crate compiles. The smoke-test in
-§2.5 disguises the same problem as `ERROR: Xous never booted` —
-inspect `/tmp/xas-hosted-test.*/xous.log` and you'll see the
-rustup error there.
+   That bundle ships precompiled `libstd-*.rlib` for the target.
+   Required on the hosted path too: `rust-toolchain.toml` is read
+   before feature flags. Symptoms of skipping it are in §4.
 
 ---
 
@@ -211,11 +209,16 @@ Verify the layout:
     └── xtask/
 ```
 
-The patched Signal-stack dependencies (presage,
-libsignal-service-rs, curve25519-dalek) are not in-tree: they are
-GitHub forks consumed at pinned revs via the workspace `[patch]`
-entries, fetched by cargo on first build. `docs/FORKS.md` has the
-pin matrix and compare URLs.
+**Do not clone presage, libsignal-service-rs, or curve25519-dalek.**
+They are fork branches consumed at pinned revs through the workspace
+`[patch]` table and fetched by cargo on first build; `docs/FORKS.md`
+has the matrix. In particular curve25519-dalek is pinned to
+`tunnell/curve25519-dalek@xous-signal-4.1.3` (4.1.2 -> 4.1.3 to match
+zkgroup, plus the `lizard` port) — the version mismatch you hit
+following sigchat-era instructions cannot occur here, and hand-cloning
+a dep or leaving a stale `vendor/` directory around will reintroduce
+it. If a previous session left either behind: delete it,
+`git checkout Cargo.lock`, `cargo fetch --locked`.
 
 `repos/xous-core` must point at the same checkout you cloned as
 `~/code/xas/xous-core`. Verify with `ls repos/xous-core/services/gam/Cargo.toml`
@@ -234,7 +237,7 @@ upstream PR content," this is the map:
 | Upstream PR | Where it lives in your build | How |
 |---|---|---|
 | [betrusted-io/xous-core#877](https://github.com/betrusted-io/xous-core/pull/877) (kernel byte-1 mirror) | `xous-core/services/net/src/std_glue.rs::respond_with_error` on the pinned `xas-integration` branch | **Merged upstream 2026-06-02** as commit `2005a801c` — any `betrusted-io/xous-core` checkout at or after that commit carries it. The pinned fork branch carried the identical commit pre-merge; the pin remains required for the deltas that are *not* upstream: the CNAME-chain DNS fix (`43dcb4a59`) required for Signal connectivity, the `services/net` reaper fix (tunnell/xous-core#26; upstream [#880](https://github.com/betrusted-io/xous-core/pull/880) closed 2026-07-17 unmerged — the maintainer wants net fixes to follow the Renode-CI refactor, so the fork carries it), a small PDDB hosted-mode test convenience (`c22cfc678`), and the `apps/manifest.json` xas registration. |
-| [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431) (keepalive tolerance) | `src/websocket/mod.rs` on the `tunnell/libsignal-service-rs` fork branch `xous-782c0d6`, rev `3e17acde37` (see `docs/FORKS.md`) | The fork uses a local `MAX_OUTSTANDING_KEEPALIVES = 3` constant. PR #431 proposed the same tolerance as an opt-in `with_max_outstanding_keepalives(...)` constructor (default = 1, preserves upstream behavior); it was **closed unmerged by its author on 2026-07-18**, so the fork constant is the long-term shape rather than a stopgap awaiting re-alignment. No action needed — cargo fetches the fork at the rev pinned in `Cargo.lock`, and the §5 lock check verifies it. |
+| [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431) (keepalive tolerance) | `src/websocket/mod.rs` on the `tunnell/libsignal-service-rs` fork branch `xous-782c0d6`, rev `96bcdf8e` (see `docs/FORKS.md`) | The fork uses a local `MAX_OUTSTANDING_KEEPALIVES = 3` constant. PR #431 proposed the same tolerance as an opt-in `with_max_outstanding_keepalives(...)` constructor (default = 1, preserves upstream behavior); it was **closed unmerged by its author on 2026-07-18**, so the fork constant is the long-term shape rather than a stopgap awaiting re-alignment. No action needed — cargo fetches the fork at the rev pinned in `Cargo.lock`, and the §5 lock check verifies it. |
 | [rust-lang/rust#156414](https://github.com/rust-lang/rust/pull/156414) (std recv byte-4 decode) | **Not in your build (yet).** | PR #156414 fixes the bug at its actual source (the std-side recv decode reads byte 4 instead of byte 1). It **merged 2026-06-04** (milestone 1.98.0) but has not reached a stable Rust release yet, so the toolchain this workspace builds with still has the byte-1 bug — and it doesn't matter, because PR #877's kernel-side mirror writes the code at byte 1 too. Once a stable release carrying the fix reaches the toolchain pin, the kernel-side mirror becomes belt-and-suspenders rather than load-bearing. No action needed for the current build. |
 
 ---
@@ -358,7 +361,7 @@ at <https://github.com/tunnell/xous-app-signal/issues> — the
 goal is for option A to "just work" via `cargo xtask
 install-toolkit` and the manual fallback to be unnecessary.
 
-### Why this isn't easier
+### Background
 
 Three things conspire to make this awkward:
 
@@ -773,9 +776,8 @@ cargo xtask app-image-xip \
 Notes on the flags:
 
 - `xas:..` is the path to the rv32 binary built in 3.1. (Earlier
-  doc revisions said `dist/xas-rv32/xas`; that path doesn't
-  exist — cargo writes directly to `target/<triple>/release/xas`,
-  and `tests/precursor/build-and-bundle.sh` reads it from there.)
+  cargo writes to `target/<triple>/release/xas`, which is where
+  `tests/precursor/build-and-bundle.sh` reads it from.)
   `vault` and `transientdisk` are bundled as co-resident apps
   (xas's
   launcher navigation lives inside vault's launcher conventions).
@@ -825,13 +827,17 @@ ssh pi@<pi-ip> 'cd ~/xous-flash && python3 usb_update.py -k xous.img --bounce'
 ```
 
 The `--bounce` flag automatically reboots the Precursor into
-running mode after the flash completes. **Do not omit it** unless
-you intend to re-flash before booting.
+running mode after the flash completes. Keep passing it — though as
+of `usb_update.py` 2024-12 the flag is parsed and never read, and the
+device resets after any completed run regardless.
 
-The Pi rig also captures the Precursor's primary UART continuously
-(via `screen -dmS uart cat /dev/ttyAMA0 >> uart-log`). Keep this
-running across flashes — kernel boot logs go straight to that file
-and are essential for debugging.
+Keep a UART capture running across flashes; boot logs go straight to
+it. Recipe, rig setup, and the scripts that wrap all of this
+(`build-and-bundle.sh`, `flash-via-pi.sh`, `watch-uart.sh`,
+`read_gitrev.py`) are in
+[`tests/precursor/README.md`](tests/precursor/README.md) — read its
+**Brick prevention** section before your first flash: `-k`
+(kernel-only) is recoverable over USB, `-l`/`--soc` can require JTAG.
 
 #### Option B: Direct flash from build host
 
@@ -944,6 +950,7 @@ cargo --version      # should be 1.95.0 or newer
 
 # Confirm the Signal-stack forks resolve to the pinned revs from
 # docs/FORKS.md (cargo verifies the checkouts against these):
+grep -A2 'name = "curve25519-dalek"' Cargo.lock   # expect: 4.1.3, source = git+...tunnell/curve25519-dalek?rev=0cac8fc8...
 grep -A2 'name = "libsignal-service"' Cargo.lock   # expect: source = git+...tunnell/libsignal-service-rs?rev=96bcdf8e...
 grep -A2 'name = "presage"' Cargo.lock             # expect: source = git+...tunnell/presage?rev=7b63a451...
 
