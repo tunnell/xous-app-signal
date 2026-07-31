@@ -231,6 +231,11 @@ struct App {
     /// the cap evicts them. SecretBox wrapping of the `body` field is
     /// tracked in issue #37, item 3.
     store: MessageStore,
+    /// Low-level I/O client used solely to pulse the vibe motor on
+    /// inbound messages — a physical cue that works regardless of
+    /// which app holds GAM focus. Hosted mode routes to llio's
+    /// emulated backend (no-op).
+    llio: llio::Llio,
     /// Index of the focused row when [`Screen::Home`] is active.
     home_focus: usize,
     /// Active compose buffer when [`Screen::Thread`] is on top.
@@ -457,8 +462,22 @@ impl App {
                     LinkedKind::Success => "Link succeeded",
                     LinkedKind::Failure => "Link failed",
                 };
-                write!(tv.text, "{}\n\n{}\n\nPress Enter to continue.", title, self.last_status)
-                    .map_err(|e| format!("write Linked: {}", e))?
+                let first_use_note = match kind {
+                    // The device keeps provisioning keys in the background
+                    // after linking; on real flash that takes minutes and
+                    // the first send queues behind it. Receiving settles
+                    // first, so steer the user there.
+                    LinkedKind::Success => {
+                        "\n\nNote: first receive/send can take\nseveral minutes while key\nprovisioning finishes. Try\nreceiving first; later sends\nare fast."
+                    }
+                    LinkedKind::Failure => "",
+                };
+                write!(
+                    tv.text,
+                    "{}\n\n{}{}\n\nPress Enter to continue.",
+                    title, self.last_status, first_use_note
+                )
+                .map_err(|e| format!("write Linked: {}", e))?
             }
             Screen::Home => self.write_home(&mut tv.text)?,
             Screen::Thread { uuid } => self.write_thread(&mut tv.text, uuid)?,
@@ -1078,6 +1097,7 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
         selected: MenuItem::Link,
         linked: false,
         store: MessageStore::new(INBOX_CAPACITY),
+        llio: llio::Llio::new(&xns),
         home_focus: 0,
         compose_buffer: String::new(),
         last_status: String::new(),
@@ -1517,6 +1537,9 @@ fn handle_worker_event(
                 Uuid::nil()
             });
             app.store.push_incoming(uuid, author_label, body, timestamp);
+            // Physical new-message cue; ignore errors — a missed
+            // vibe must never affect message handling.
+            app.llio.vibe(llio::VibePattern::Double).ok();
         }
         Event::ReceiveStarted => {
             log::info!("xas/gam_app: receive loop established");

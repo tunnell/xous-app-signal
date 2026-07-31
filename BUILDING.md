@@ -897,11 +897,18 @@ When the Precursor boots into Xous:
    currently reports it as an undecodable-response error rather
    than "device limit reached", so prune stale `xas` entries
    before each linking session.
-6. **Test send/receive**: send a message from another Signal
-   account to your linked phone. xas should show it in seconds.
-   Send a reply — first send takes 1–4 minutes due to a known
-   Signal-server WebSocket-rotation issue (see
-   the transport-refactor roadmap item).
+6. **Test send/receive — receive first, then send.** Right after
+   linking, the device spends a while on background provisioning
+   (prekey generation + upload on slow flash), so the first
+   operations are much slower than steady state. Receiving is the
+   cheaper path: have another account message your number and
+   expect it within seconds-to-a-couple-minutes. Then reply from
+   the device — the FIRST send can take several minutes (prekey
+   provisioning + a known Signal-server WebSocket-rotation issue;
+   see the transport-refactor roadmap item). Subsequent sends are
+   much faster. Note: messages sent to your account BEFORE the
+   link completed can never appear on the device (Signal encrypts
+   per-device at send time) — always test with fresh messages.
 
 ---
 
@@ -913,7 +920,7 @@ When the Precursor boots into Xous:
 | `error: rustup could not choose a version of cargo to run, because one wasn't specified explicitly` (running anything from `xous-core/`) | `xous-core/` carries no `rust-toolchain.toml` and rustup has no default | `rustup default stable` (one-time), or prefix the command with `rustup run stable …` |
 | `tests/hosted/test_link_qr.sh` reports `ERROR: Xous never booted within Ns` despite a long timeout | Often a misleading symptom of one of the two rustup pitfalls above — `cargo xtask run` exits before booting | `cat /tmp/xas-hosted-test.*/xous.log` and look for the rustup error before raising `BOOT_TIMEOUT` |
 | `lsusb \| grep 1209` shows nothing | Precursor not in loader mode | Hold left-side button while plugging in USB; release after 2 seconds |
-| `lsusb \| grep 1209` shows `1209:3613` not `1209:5bf0` | Precursor in running mode, not loader | Hold left-side button + paperclip-reset |
+| `lsusb \| grep 1209` shows `1209:3613` not `1209:5bf0` | Precursor in running mode, not loader | Easiest: main menu → "Lock device (reboot)" — reboots into the loader (verified 2026-07-31). Hardware fallback: hold left-side button + paperclip-reset |
 | `failed to read .../repos/xous-core/services/trng/Cargo.toml` (cargo build, very early) | `repos/xous-core` symlink missing or in the wrong place | See section 1 — symlink lives at `<workspace-parent>/repos/xous-core`, *not* inside `xous-app-signal/`. Run `ln -s ../xous-core repos/xous-core` from the workspace parent. |
 | `error[E0583]: file not found for module 'apps'` in `services/gam/src/lib.rs` | `gam/src/apps.rs` not bootstrapped | See section 2.1 — write `apps.rs` by hand (with `APP_NAME_XAS`) before the standalone hosted build. |
 | `usb_update.py` permission denied (Linux host) | udev rule missing | Write `/etc/udev/rules.d/99-precursor.rules` with `SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="5bf0", MODE="0666", GROUP="plugdev"` plus an identical line for idProduct `3613`, then `udevadm control --reload`. (A `tools/49-precursor.rules` referenced by earlier revisions does not exist in xous-core.) Sudo works as a last resort (not recommended) |
@@ -937,7 +944,7 @@ cargo --version      # should be 1.95.0 or newer
 
 # Confirm the Signal-stack forks resolve to the pinned revs from
 # docs/FORKS.md (cargo verifies the checkouts against these):
-grep -A2 'name = "libsignal-service"' Cargo.lock   # expect: source = git+...tunnell/libsignal-service-rs?rev=3e17acde...
+grep -A2 'name = "libsignal-service"' Cargo.lock   # expect: source = git+...tunnell/libsignal-service-rs?rev=30d43d4a...
 grep -A2 'name = "presage"' Cargo.lock             # expect: source = git+...tunnell/presage?rev=7b63a451...
 
 # Confirm the fork checkout cargo fetched carries the
@@ -945,7 +952,7 @@ grep -A2 'name = "presage"' Cargo.lock             # expect: source = git+...tun
 # whisperfish/libsignal-service-rs#431). The ~/.cargo path below
 # exists only after a first build has fetched the forks:
 grep -F 'MAX_OUTSTANDING_KEEPALIVES: usize = 3' \
-    ~/.cargo/git/checkouts/libsignal-service-rs-*/3e17acd/src/websocket/mod.rs   # expect: 1 hit
+    ~/.cargo/git/checkouts/libsignal-service-rs-*/30d43d4/src/websocket/mod.rs   # expect: 1 hit
 
 # In xous-core:
 git branch --show-current   # 'xas-integration' for dev builds

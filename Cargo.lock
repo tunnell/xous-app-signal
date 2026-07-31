@@ -1689,7 +1689,7 @@ dependencies = [
 [[package]]
 name = "libsignal-service"
 version = "0.1.0"
-source = "git+https://github.com/tunnell/libsignal-service-rs?rev=3e17acde37fb93af0a6e75c3e0a1d587b5da706e#3e17acde37fb93af0a6e75c3e0a1d587b5da706e"
+source = "git+https://github.com/tunnell/libsignal-service-rs?rev=30d43d4a428fed372c9a7c2dc39e7173829aaa20#30d43d4a428fed372c9a7c2dc39e7173829aaa20"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -4194,6 +4194,7 @@ dependencies = [
  "gam",
  "getrandom 0.3.4",
  "graphics-server",
+ "llio",
  "locales",
  "log",
  "modals",

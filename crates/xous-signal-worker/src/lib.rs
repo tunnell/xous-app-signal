@@ -610,6 +610,25 @@ async fn handle_link_device(
 
     log::info!("worker/link: begin (device_name={:?})", device_name);
 
+    // A fresh link means a fresh store. presage's own link path only
+    // clears the registration dict; protocol dicts (sessions,
+    // identities, pre-keys) from a previous registration would
+    // otherwise survive — cryptographically stale, and on hardware
+    // they hold megabytes of orphaned pre-key records whose max id
+    // silently seeds the next watermark (observed 2026-07-31: ~350
+    // orphaned kyber records after the prekey storm, and a PDDB
+    // "must allocate more freespace" prompt). Store::clear wipes
+    // registration + contents + both identities' protocol dicts.
+    {
+        use presage::store::Store as _;
+        let mut wipe_store = store.clone();
+        if let Err(e) = wipe_store.clear().await {
+            log::warn!("worker/link: pre-link store wipe failed (continuing): {:?}", e);
+        } else {
+            log::info!("worker/link: pre-link store wipe complete");
+        }
+    }
+
     let (url_tx, url_rx) = oneshot::channel::<url::Url>();
     let event_tx_for_url = event_tx.clone();
 
