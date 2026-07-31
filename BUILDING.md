@@ -944,7 +944,7 @@ cargo --version      # should be 1.95.0 or newer
 
 # Confirm the Signal-stack forks resolve to the pinned revs from
 # docs/FORKS.md (cargo verifies the checkouts against these):
-grep -A2 'name = "libsignal-service"' Cargo.lock   # expect: source = git+...tunnell/libsignal-service-rs?rev=30d43d4a...
+grep -A2 'name = "libsignal-service"' Cargo.lock   # expect: source = git+...tunnell/libsignal-service-rs?rev=96bcdf8e...
 grep -A2 'name = "presage"' Cargo.lock             # expect: source = git+...tunnell/presage?rev=7b63a451...
 
 # Confirm the fork checkout cargo fetched carries the
@@ -952,7 +952,7 @@ grep -A2 'name = "presage"' Cargo.lock             # expect: source = git+...tun
 # whisperfish/libsignal-service-rs#431). The ~/.cargo path below
 # exists only after a first build has fetched the forks:
 grep -F 'MAX_OUTSTANDING_KEEPALIVES: usize = 3' \
-    ~/.cargo/git/checkouts/libsignal-service-rs-*/30d43d4/src/websocket/mod.rs   # expect: 1 hit
+    ~/.cargo/git/checkouts/libsignal-service-rs-*/96bcdf8/src/websocket/mod.rs   # expect: 1 hit
 
 # In xous-core:
 git branch --show-current   # 'xas-integration' for dev builds

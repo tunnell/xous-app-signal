@@ -126,6 +126,10 @@ enum Screen {
     /// `Event::LinkUrl`. The QR-code modal opens on top of this
     /// screen when the URL arrives.
     Linking,
+    /// Wipe in progress. Exits only on `Event::LoggedOut`, which the
+    /// worker emits whether or not the clear succeeded. Deliberately
+    /// keyless: a half-done wipe is worse than waiting.
+    Wiping,
     /// Terminal link banner. Auto-transitions to [`Self::Home`] on
     /// `Success` after the user presses Enter; Enter on `Failure`
     /// returns to the pre-link Menu.
@@ -182,6 +186,9 @@ enum MenuItem {
     Link,
     About,
     Help,
+    /// Pre-link escape hatch for a stale store. Same `Cmd::Logout`
+    /// wipe as Settings -> Logout post-link.
+    WipeSettings,
 }
 
 /// Items shown on `Screen::Settings`. Reachable via F4 (or Esc) from
@@ -320,15 +327,22 @@ impl App {
         self.selected = MenuItem::Link;
     }
 
-    fn menu_items(&self) -> [Option<MenuItem>; 3] {
+    fn menu_items(&self) -> [Option<MenuItem>; 4] {
         if self.linked {
             // Post-link Menu is reachable from Home (via the Menu key)
             // for the few utility actions that don't have a dedicated
-            // F-key. Settings (F4) is the main post-link surface.
-            [Some(MenuItem::About), Some(MenuItem::Help), None]
+            // F-key. Settings (F4) is the main post-link surface, and
+            // carries Logout — the post-link name for a store wipe.
+            [Some(MenuItem::About), Some(MenuItem::Help), None, None]
         } else {
-            // Pre-link Menu IS the landing screen.
-            [Some(MenuItem::Link), Some(MenuItem::About), Some(MenuItem::Help)]
+            // Pre-link Menu IS the landing screen. The typed-'yes'
+            // modal, not the cursor position, guards the wipe.
+            [
+                Some(MenuItem::Link),
+                Some(MenuItem::About),
+                Some(MenuItem::Help),
+                Some(MenuItem::WipeSettings),
+            ]
         }
     }
 
@@ -457,16 +471,19 @@ impl App {
                  (Please wait.)"
             )
             .map_err(|e| format!("write Linking: {}", e))?,
+            Screen::Wiping => write!(
+                tv.text,
+                "Wiping stored Signal data...\n\nThis can take a minute.\nDo not power off the device.",
+            )
+            .map_err(|e| format!("write Wiping: {}", e))?,
             Screen::Linked { kind } => {
                 let title = match kind {
                     LinkedKind::Success => "Link succeeded",
                     LinkedKind::Failure => "Link failed",
                 };
                 let first_use_note = match kind {
-                    // The device keeps provisioning keys in the background
-                    // after linking; on real flash that takes minutes and
-                    // the first send queues behind it. Receiving settles
-                    // first, so steer the user there.
+                    // Key provisioning continues in the background; the
+                    // first send queues behind it. Receive settles first.
                     LinkedKind::Success => {
                         "\n\nNote: first receive/send can take\nseveral minutes while key\nprovisioning finishes. Try\nreceiving first; later sends\nare fast."
                     }
@@ -502,6 +519,7 @@ impl App {
                     MenuItem::Link => "Link device",
                     MenuItem::About => "About",
                     MenuItem::Help => "Help",
+                    MenuItem::WipeSettings => "Wipe settings",
                 };
                 write!(out, "{} {}\n", mark, label).map_err(|e| format!("item: {}", e))?;
             }
@@ -878,6 +896,9 @@ fn looks_like_signal_username(s: &str) -> bool {
     rest.chars().all(|c| c.is_ascii_digit())
 }
 
+/// Pre-link "Wipe settings" — see [`drive_wipe_settings`]; this is
+/// the post-link entry point to the same `Cmd::Logout` wipe.
+///
 /// Settings → Logout. Confirms with the user, then sends
 /// `Cmd::Logout` and lets the forwarder + [`handle_worker_event`]
 /// pick up the resulting `Event::LoggedOut` (or, on partial
@@ -892,6 +913,51 @@ fn looks_like_signal_username(s: &str) -> bool {
 /// here are limited to "Modals init failed" or "Cmd channel
 /// closed" — neither of which leaks state — but the worker-side
 /// wipe surface is not yet enforced as all-or-nothing.
+/// Pre-link "Wipe settings": `Cmd::Logout` from the main menu, for a
+/// store left stale by an earlier session. PDDB deletes dictionaries
+/// page by page, so this runs for minutes on a large store; the modal
+/// says so and the app parks on [`Screen::Wiping`].
+///
+/// # Security
+///
+/// As `Cmd::Logout`: not atomic across dictionaries, and the PDDB does
+/// not zero freed pages. Logical wipe, not secure erase.
+fn drive_wipe_settings(app: &mut App, cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::XousNames) {
+    let modals = match modals::Modals::new(modals_xns) {
+        Ok(m) => m,
+        Err(e) => {
+            log::warn!("xas/gam_app: drive_wipe_settings - Modals init err: {:?}", e);
+            return;
+        }
+    };
+    let confirm = modals
+        .alert_builder(
+            "Wipe settings?\n\nErases link state, keys,\ncontacts and profiles.\nStored message history\nis NOT erased.\n\nTakes about a minute.\nDo not power off.\n\nYou will need to scan\nthe QR code again.",
+        )
+        .field(Some("type 'yes' to confirm".to_string()), None)
+        .build();
+    let confirmed = match confirm {
+        Ok(payloads) => payloads.first().as_str().trim().eq_ignore_ascii_case("yes"),
+        Err(_) => false,
+    };
+    if !confirmed {
+        log::info!("xas/gam_app: Wipe settings cancelled");
+        return;
+    }
+    log::info!("xas/gam_app: Wipe settings confirmed; sending Cmd::Logout");
+    // Draw before the worker starts: a grinding PDDB starves the rest
+    // of the device, and a frame that never lands reads as a freeze.
+    // render() touches GAM only.
+    app.screen = Screen::Wiping;
+    app.render().ok();
+    if let Err(e) = cmd_tx.send_blocking(Cmd::Logout) {
+        log::warn!("xas/gam_app: Cmd::Logout (wipe) send err: {:?}", e);
+        app.screen = Screen::Menu;
+        app.render().ok();
+        let _ = modals.show_notification("Wipe failed:\nworker not reachable.\nThe app may need a restart.", None);
+    }
+}
+
 fn drive_logout(cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::XousNames) {
     let modals = match modals::Modals::new(modals_xns) {
         Ok(m) => m,
@@ -1200,6 +1266,7 @@ fn handle_keys(
                 },
                 MenuItem::About => app.screen = Screen::About,
                 MenuItem::Help => app.screen = Screen::Help,
+                MenuItem::WipeSettings => drive_wipe_settings(app, cmd_tx, modals_xns),
             },
             // Esc on the post-link Menu returns to Home (the landing).
             // Pre-link, Menu IS the landing — Esc is a no-op.
@@ -1537,8 +1604,7 @@ fn handle_worker_event(
                 Uuid::nil()
             });
             app.store.push_incoming(uuid, author_label, body, timestamp);
-            // Physical new-message cue; ignore errors — a missed
-            // vibe must never affect message handling.
+            // Physical cue; a missed vibe must not affect delivery.
             app.llio.vibe(llio::VibePattern::Double).ok();
         }
         Event::ReceiveStarted => {
