@@ -881,6 +881,15 @@ When the Precursor boots into Xous:
    from the Signal app on your phone (Settings → Linked Devices →
    Link a Device). Linking takes 1–4 minutes after you scan; do
    not power-cycle.
+
+   **Watch your linked-device count.** Signal accounts allow at
+   most 5 linked devices, and every test link consumes a slot
+   until you remove it on the phone (Settings → Linked Devices).
+   On a full account the link fails *after* the QR scan with
+   HTTP 409 from `PUT /v1/devices/link` — and the client
+   currently reports it as an undecodable-response error rather
+   than "device limit reached", so prune stale `xas` entries
+   before each linking session.
 6. **Test send/receive**: send a message from another Signal
    account to your linked phone. xas should show it in seconds.
    Send a reply — first send takes 1–4 minutes due to a known
@@ -903,6 +912,7 @@ When the Precursor boots into Xous:
 | `usb_update.py` permission denied (Linux host) | udev rule missing | Write `/etc/udev/rules.d/99-precursor.rules` with `SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="5bf0", MODE="0666", GROUP="plugdev"` plus an identical line for idProduct `3613`, then `udevadm control --reload`. (A `tools/49-precursor.rules` referenced by earlier revisions does not exist in xous-core.) Sudo works as a last resort (not recommended) |
 | Hosted xas shows "OOM during link" | Default heap cap too low | Run with `RUST_LOG=info` to see allocator messages; rebuild with `--features pddb-real,hosted` (the dist build is otherwise too lean) |
 | Link fails with `invalid peer certificate: NotValidYet` (Wi-Fi and `net ping` are fine) | Device clock unset — fresh devices ship with no RTC/timezone offsets | §3.4 step 3: Preferences → Set Timezone / Set Time, then retry the link |
+| Link fails **after** the QR scan: `HTTP 409` on `PUT /v1/devices/link` (may surface as "response body could not be deserialized") | Signal linked-device limit reached (max 5); stale test links hold slots | Phone → Settings → Linked Devices → remove old entries (each `xas` test link counts), then retry — a fresh QR is generated per attempt |
 | Hardware link succeeds but no messages flow | Wi-Fi connected to 5 GHz, or DNS broken | Re-run the wlan recipe; verify `net ping chat.signal.org` works before opening xas |
 | Send fails with "WebSocket closing" within 30s | Older xous-core without the encoding fix | Confirm you cloned the `xas-integration` branch of `tunnell/xous-core` (or the `xas-v0.2` tag for released v0.2). Relevant fixes: [#877](https://github.com/betrusted-io/xous-core/pull/877) (encoding fix — merged upstream 2026-06-02, so recent `betrusted-io/xous-core` also carries it, but only the fork adds the DNS + reaper + manifest deltas) and [tunnell/xous-core#26](https://github.com/tunnell/xous-core/pull/26) (services/net reaper fix shipped with v0.2). |
 | Flash completes but device boots into the old image | Loader didn't validate the new signature | Re-flash; if it persists, check `tools/usb_update.py` log for verification errors |
