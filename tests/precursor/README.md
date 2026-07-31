@@ -72,8 +72,12 @@ multi-hour user-assisted operation. The rules:
   [`../../BUILDING.md`](../../BUILDING.md) for toolchain setup)
 - A xous-core checkout adjacent to this repo (default
   `../xous-core`; override via `XOUS_CORE_DIR`)
-- A Precursor PVT2 in the loader window (hold power 5s during
-  boot until the loader window appears)
+- A Precursor PVT2 in the loader window. On a running device:
+  main menu → **"Lock device (reboot)"** — it reboots straight into
+  the locked/loader state (1209:5bf0), no buttons needed (verified
+  2026-07-31). If the device can't boot: hold the left-side button
+  while plugging in USB, or left-side button + paperclip reset
+  (BUILDING.md §4)
 
 **For the Pi rig path (recommended):**
 - A Raspberry Pi 4B with the betrusted debug HAT, wired to your
