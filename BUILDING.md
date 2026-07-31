@@ -863,6 +863,15 @@ When the Precursor boots into Xous:
    `wlan save` is what actually joins: `setssid`/`setpass` pause the
    connection manager while you type. `wlan known` lists networks
    already saved in the PDDB (skip the credential lines for those).
+
+   **Then set the clock — required before any Signal operation.**
+   On a fresh device the RTC/timezone offsets are unset (the UART
+   shows repeating `llio: Time offsets are not initialized`
+   warnings), and every TLS connection — linking included — fails
+   with `invalid peer certificate: NotValidYet` until the clock is
+   sane. Main menu → Preferences → **Set Timezone** (accept the
+   network-time sync if offered), then **Set Time** manually if
+   needed. Verified the hard way on hardware 2026-07-31.
    **Use a 2.4 GHz network only** — Precursor's WF200 radio is
    single-band 802.11 b/g/n. 5 GHz networks won't appear in
    `ssid scan`. Phone hotspots default to 5 GHz now; force
