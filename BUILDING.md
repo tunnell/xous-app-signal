@@ -864,24 +864,24 @@ When the Precursor boots into Xous:
    connection manager while you type. `wlan known` lists networks
    already saved in the PDDB (skip the credential lines for those).
 
-   **Then set the clock — required before any Signal operation.**
-   On a fresh device the RTC/timezone offsets are unset (the UART
-   shows repeating `llio: Time offsets are not initialized`
-   warnings), and every TLS connection — linking included — fails
-   with `invalid peer certificate: NotValidYet` until the clock is
-   sane. Main menu → Preferences → **Set Timezone** (accept the
-   network-time sync if offered), then **Set Time** manually if
-   needed. Verified the hard way on hardware 2026-07-31.
    **Use a 2.4 GHz network only** — Precursor's WF200 radio is
    single-band 802.11 b/g/n. 5 GHz networks won't appear in
    `ssid scan`. Phone hotspots default to 5 GHz now; force
    2.4 GHz mode (or "compatibility mode") in the hotspot settings.
-3. **Open xas**: from the launcher, navigate to Apps → xas.
-4. **Link**: pick "Link device". A QR code appears. Scan it
+3. **Set the clock** — required before any Signal operation. On a
+   fresh device the RTC/timezone offsets are unset (the UART shows
+   repeating `llio: Time offsets are not initialized` warnings),
+   and every TLS connection — linking included — fails with
+   `invalid peer certificate: NotValidYet` until the clock is
+   sane. Main menu → Preferences → **Set Timezone** (accept the
+   network-time sync if offered), then **Set Time** manually if
+   needed. Verified the hard way on hardware 2026-07-31.
+4. **Open xas**: from the launcher, navigate to Apps → xas.
+5. **Link**: pick "Link device". A QR code appears. Scan it
    from the Signal app on your phone (Settings → Linked Devices →
    Link a Device). Linking takes 1–4 minutes after you scan; do
    not power-cycle.
-5. **Test send/receive**: send a message from another Signal
+6. **Test send/receive**: send a message from another Signal
    account to your linked phone. xas should show it in seconds.
    Send a reply — first send takes 1–4 minutes due to a known
    Signal-server WebSocket-rotation issue (see
@@ -902,6 +902,7 @@ When the Precursor boots into Xous:
 | `error[E0583]: file not found for module 'apps'` in `services/gam/src/lib.rs` | `gam/src/apps.rs` not bootstrapped | See section 2.1 — write `apps.rs` by hand (with `APP_NAME_XAS`) before the standalone hosted build. |
 | `usb_update.py` permission denied (Linux host) | udev rule missing | Write `/etc/udev/rules.d/99-precursor.rules` with `SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="5bf0", MODE="0666", GROUP="plugdev"` plus an identical line for idProduct `3613`, then `udevadm control --reload`. (A `tools/49-precursor.rules` referenced by earlier revisions does not exist in xous-core.) Sudo works as a last resort (not recommended) |
 | Hosted xas shows "OOM during link" | Default heap cap too low | Run with `RUST_LOG=info` to see allocator messages; rebuild with `--features pddb-real,hosted` (the dist build is otherwise too lean) |
+| Link fails with `invalid peer certificate: NotValidYet` (Wi-Fi and `net ping` are fine) | Device clock unset — fresh devices ship with no RTC/timezone offsets | §3.4 step 3: Preferences → Set Timezone / Set Time, then retry the link |
 | Hardware link succeeds but no messages flow | Wi-Fi connected to 5 GHz, or DNS broken | Re-run the wlan recipe; verify `net ping chat.signal.org` works before opening xas |
 | Send fails with "WebSocket closing" within 30s | Older xous-core without the encoding fix | Confirm you cloned the `xas-integration` branch of `tunnell/xous-core` (or the `xas-v0.2` tag for released v0.2). Relevant fixes: [#877](https://github.com/betrusted-io/xous-core/pull/877) (encoding fix — merged upstream 2026-06-02, so recent `betrusted-io/xous-core` also carries it, but only the fork adds the DNS + reaper + manifest deltas) and [tunnell/xous-core#26](https://github.com/tunnell/xous-core/pull/26) (services/net reaper fix shipped with v0.2). |
 | Flash completes but device boots into the old image | Loader didn't validate the new signature | Re-flash; if it persists, check `tools/usb_update.py` log for verification errors |
