@@ -3,7 +3,7 @@
 This is the **hardware test path**: build a kernel image, flash
 it to a Precursor PVT2 over USB (optionally via a Raspberry Pi
 rig), and watch UART for what the device does. It's the slowest
-of the four testing approaches in [`../README.md`](../README.md)
+of the testing approaches in [`../README.md`](../README.md)
 (~30 min per cycle) but the only one that exercises the rv32 net
 stack, the WF200 Wi-Fi chip, the FPGA gateware, real PDDB
 encryption, and real RF timing — i.e., everything that doesn't
@@ -19,6 +19,8 @@ tests/precursor/
 ├── build-and-bundle.sh  ← rebuild xas + bundle a kernel image
 ├── flash-via-pi.sh      ← scp the image to a Pi and run usb_update.py
 ├── flash-direct.sh      ← flash directly from your build host (no Pi)
+├── read_gitrev.py       ← read the ACTIVE SoC gateware version over
+│                          USB (pure read; for --git-describe pins)
 └── watch-uart.sh        ← tail the captured UART log on the Pi
 ```
 
@@ -199,8 +201,11 @@ step requires a 25-minute flash:
    The script tails `~/uart-logs/precursor-uart.log` on the Pi.
    Set `FOLLOW=0` for a one-shot last-200-lines snapshot.
 
-6. **On the device:** unlock PDDB → join Wi-Fi (`wlan setup` in
-   shellchat if needed) → open xas → exercise the feature you're
+6. **On the device:** unlock PDDB → join Wi-Fi (shellchat:
+   `wlan off` → `wlan on` → `ssid scan`; first time on a network
+   also `wlan setssid <ssid>` → `wlan setpass <pass>` → `wlan save`;
+   then `wlan status` until Connected; 2.4 GHz networks only — see
+   BUILDING.md §3.4) → open xas → exercise the feature you're
    testing.
 
 7. **Analyze the UART log.** If reproducing a bug, diff against
@@ -272,6 +277,32 @@ your test design around what UART can show.
 - **Pi heat:** the Pi 4B under sustained load can throttle on
   long sessions — `ssh "$PI_HOST" 'vcgencmd measure_temp'` to
   check.
+
+- **iSerial can be empty in loader mode.** BUILDING.md §3.2's
+  `lsusb -v | grep iSerial` trick returns nothing on some PVT2
+  units. `python3 tests/precursor/read_gitrev.py` (run on the host
+  that has the USB connection) reads the active gateware version
+  over USB without touching flash — use it to pick the
+  `GIT_DESCRIBE`/`GIT_REV` pins.
+
+- **Fresh devices can self-update gateware on first boot.** If the
+  device's root keys are uninitialized AND a valid newer gateware
+  image is staged (e.g. by `precursorupdater`), the status service
+  applies the SoC update automatically on boot
+  (`try_nokey_soc_update`) — a gateware write triggered by merely
+  booting the kernel you just flashed. Probe the staging area
+  before flashing a factory-fresh device if that would surprise
+  you.
+
+- **`--bounce` is currently a no-op flag** in `usb_update.py`: the
+  parser accepts it but nothing reads it — the device resets after
+  every completed invocation regardless. Keep passing it (all
+  recipes here do) in case the tool later gates the reset on it.
+
+- **UART capture logs contain binary junk** (stray NULs/garbage
+  bytes from the reset transient), so plain `grep` may decide the
+  log is a binary file and print nothing (or just "binary file
+  matches"). Use `grep -a` when filtering captured UART logs.
 
 - **Stale screen session:** if a script crashes and leaves a
   broken `uart` screen session, kill it manually:

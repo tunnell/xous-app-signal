@@ -18,22 +18,26 @@ releases create new `xas-vX.Y+1` branches — they don't reuse old ones.
 ## Procedure for cutting `vX.Y`
 
 1. **Decide what's in the release.** The xous-core changes needed by xas
-   for this release should already be on the floating `tunnell/xous-core@xas`
-   integration branch (or tracked in open PRs against it).
+   for this release should already be on the floating
+   `tunnell/xous-core@xas-integration` branch (or tracked in open
+   PRs against it).
 
-2. **Create the pinned xous-core branch.**
+2. **Create the pinned xous-core tag.**
 
    ```sh
    cd path/to/xous-core
-   git fetch origin xas
-   git checkout -b xas-vX.Y origin/xas
-   # If any in-flight PRs against xous-core need to be in this release,
-   # cherry-pick their commits here:
-   #   git cherry-pick <sha>...
+   git fetch origin xas-integration
+   # If any in-flight PRs against xous-core need to be in this
+   # release, cherry-pick them onto a temporary branch first and
+   # tag that instead.
+   git tag -a xas-vX.Y origin/xas-integration -m "xas vX.Y kernel-side pin"
    git push origin xas-vX.Y
    ```
 
-   This branch is now frozen — do not push to it again.
+   Tags are immutable pins — never move or delete a published
+   `xas-vX.Y` tag. (Before the 2026-07 branch cleanup releases
+   pinned via frozen *branches*; the v0.2 pin survives as the
+   lightweight `xas-v0.2` tag at the deleted branch's head.)
 
 3. **Bump xas's version.** Semver: patch for doc/bug fixes, minor for
    user-visible features, major reserved for "we consider this
@@ -42,9 +46,9 @@ releases create new `xas-vX.Y+1` branches — they don't reuse old ones.
    ```sh
    cd path/to/xous-app-signal
    # Edit Cargo.toml: bump [workspace.package] version to "X.Y.0"
-   # Edit BUILDING.md §1: change `git clone -b xas-vX.{Y-1}` ->
-   #                              `git clone -b xas-vX.Y`
-   # Edit BUILDING.md §3.1: same change in the "Branch selection" note.
+   # Edit BUILDING.md §1 and the §3-intro "Branch selection" note if
+   # the release-pin tag they mention needs bumping (dev builds keep
+   # pointing at the xas-integration branch).
    cargo metadata --format-version 1 >/dev/null   # regen Cargo.lock
    git add Cargo.toml Cargo.lock BUILDING.md
    git commit -m "release: bump workspace version to X.Y.0"
@@ -122,17 +126,18 @@ releases create new `xas-vX.Y+1` branches — they don't reuse old ones.
    Verify with `gh release view vX.Y --repo tunnell/xous-app-signal` —
    should show the "Latest" badge and the notes rendered.
 
-10. **Don't delete `xas-vX.Y` on xous-core.** Past release branches stay
-    frozen and accessible forever — anyone re-building an old xas version
+10. **Don't delete `xas-vX.Y` tags on xous-core.** Past release pins
+    stay accessible forever — anyone re-building an old xas version
     from source needs them.
 
-## Why this branch model
+## Why this pin model
 
-Decoupling the release pin from a floating xas-integration branch means:
+Decoupling the release pin (a tag) from the floating
+xas-integration branch means:
 
 - Reproducible builds: `xas vX.Y` always builds against the same kernel.
 - No coordination dance: in-flight xous-core PRs can land on
-  `tunnell/xous-core@dev` (and eventually upstream `betrusted-io/xous-core@dev`)
+  `tunnell/xous-core@xas-integration` (and eventually upstream `betrusted-io/xous-core@dev`)
   on their own timeline. They get rolled into xas releases when the next
   xas release decides to pin them in.
 - Clean fallback: if a maintainer reports a bug on `xas vX.Y`, that
