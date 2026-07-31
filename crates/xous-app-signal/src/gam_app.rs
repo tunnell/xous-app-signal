@@ -914,9 +914,14 @@ fn looks_like_signal_username(s: &str) -> bool {
 /// closed" — neither of which leaks state — but the worker-side
 /// wipe surface is not yet enforced as all-or-nothing.
 /// Pre-link "Wipe settings": `Cmd::Logout` from the main menu, for a
-/// store left stale by an earlier session. PDDB deletes dictionaries
-/// page by page, so this runs for minutes on a large store; the modal
-/// says so and the app parks on [`Screen::Wiping`].
+/// store left stale by an earlier session.
+///
+/// PDDB frees a page at a time and, with `mbbb`, rewrites the page
+/// table around every entry — roughly 25 flash sector operations per
+/// 17 KiB record. A store holding a few hundred such records grinds
+/// for ten minutes or more, most of it below `log::info`, so both the
+/// UART and the screen look idle. Hence [`Screen::Wiping`] and a modal
+/// that promises minutes, not a minute.
 ///
 /// # Security
 ///
@@ -932,7 +937,7 @@ fn drive_wipe_settings(app: &mut App, cmd_tx: &Sender<Cmd>, modals_xns: &xous_na
     };
     let confirm = modals
         .alert_builder(
-            "Wipe settings?\n\nErases link state, keys,\ncontacts and profiles.\nStored message history\nis NOT erased.\n\nTakes about a minute.\nDo not power off.\n\nYou will need to scan\nthe QR code again.",
+            "Wipe settings?\n\nErases link state, keys,\ncontacts and profiles.\nStored message history\nis NOT erased.\n\nRuns for minutes and\nthe device stays busy.\nDo not power off.\n\nYou will need to scan\nthe QR code again.",
         )
         .field(Some("type 'yes' to confirm".to_string()), None)
         .build();
