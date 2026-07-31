@@ -79,21 +79,14 @@ releases create new `xas-vX.Y+1` branches — they don't reuse old ones.
    git push origin vX.Y
    ```
 
-8. **Sync `main` to `dev`.** `main` tracks the latest released commit;
-   `dev` is active development. After tagging, fast-forward `main` to
-   the tagged commit:
+8. **Move `main` to the release.** `main` carries merge commits from
+   past releases, so it is not a fast-forward of `dev` — open a PR
+   from `dev` to `main` and merge it:
 
    ```sh
-   cd path/to/xous-app-signal
-   git checkout main
-   git pull --ff-only
-   git merge --ff-only vX.Y
-   git push origin main
+   gh pr create --base main --head dev --title "release: xas vX.Y"
+   gh pr merge --merge
    ```
-
-   This must be a fast-forward. If it isn't, something landed on `main`
-   that isn't on `dev` — stop and investigate before forcing.
-
 9. **Create the GitHub Release.** The git tag alone is not enough; GitHub
    surfaces releases as a separate first-class concept on the Releases
    tab. Without an explicit Release entry, the tag exists but doesn't
