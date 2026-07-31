@@ -897,11 +897,18 @@ When the Precursor boots into Xous:
    currently reports it as an undecodable-response error rather
    than "device limit reached", so prune stale `xas` entries
    before each linking session.
-6. **Test send/receive**: send a message from another Signal
-   account to your linked phone. xas should show it in seconds.
-   Send a reply — first send takes 1–4 minutes due to a known
-   Signal-server WebSocket-rotation issue (see
-   the transport-refactor roadmap item).
+6. **Test send/receive — receive first, then send.** Right after
+   linking, the device spends a while on background provisioning
+   (prekey generation + upload on slow flash), so the first
+   operations are much slower than steady state. Receiving is the
+   cheaper path: have another account message your number and
+   expect it within seconds-to-a-couple-minutes. Then reply from
+   the device — the FIRST send can take several minutes (prekey
+   provisioning + a known Signal-server WebSocket-rotation issue;
+   see the transport-refactor roadmap item). Subsequent sends are
+   much faster. Note: messages sent to your account BEFORE the
+   link completed can never appear on the device (Signal encrypts
+   per-device at send time) — always test with fresh messages.
 
 ---
 
