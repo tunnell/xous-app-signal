@@ -954,6 +954,7 @@ dependencies = [
  "qrcode",
  "rkyv 0.8.16",
  "sha2",
+ "subtle",
  "trng",
  "tts-frontend",
  "utralib",
@@ -1688,7 +1689,7 @@ dependencies = [
 [[package]]
 name = "libsignal-service"
 version = "0.1.0"
-source = "git+https://github.com/tunnell/libsignal-service-rs?rev=86b9da7cde4d5a43ea2349ff9cc251da8d0e5c9e#86b9da7cde4d5a43ea2349ff9cc251da8d0e5c9e"
+source = "git+https://github.com/tunnell/libsignal-service-rs?rev=3e17acde37fb93af0a6e75c3e0a1d587b5da706e#3e17acde37fb93af0a6e75c3e0a1d587b5da706e"
 dependencies = [
  "aes",
  "aes-gcm",

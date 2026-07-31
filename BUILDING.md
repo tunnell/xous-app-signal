@@ -234,7 +234,7 @@ upstream PR content," this is the map:
 | Upstream PR | Where it lives in your build | How |
 |---|---|---|
 | [betrusted-io/xous-core#877](https://github.com/betrusted-io/xous-core/pull/877) (kernel byte-1 mirror) | `xous-core/services/net/src/std_glue.rs::respond_with_error` on the pinned `xas-integration` branch | **Merged upstream 2026-06-02** as commit `2005a801c` — any `betrusted-io/xous-core` checkout at or after that commit carries it. The pinned fork branch carried the identical commit pre-merge; the pin remains required for the deltas that are *not* upstream: the CNAME-chain DNS fix (`43dcb4a59`) required for Signal connectivity, the `services/net` reaper fix (tunnell/xous-core#26; upstream [#880](https://github.com/betrusted-io/xous-core/pull/880) closed 2026-07-17 unmerged — the maintainer wants net fixes to follow the Renode-CI refactor, so the fork carries it), a small PDDB hosted-mode test convenience (`c22cfc678`), and the `apps/manifest.json` xas registration. |
-| [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431) (keepalive tolerance) | `src/websocket/mod.rs` on the `tunnell/libsignal-service-rs` fork branch `xous-782c0d6`, rev `86b9da7cde` (see `docs/FORKS.md`) | The fork uses a local `MAX_OUTSTANDING_KEEPALIVES = 3` constant. PR #431 proposed the same tolerance as an opt-in `with_max_outstanding_keepalives(...)` constructor (default = 1, preserves upstream behavior); it was **closed unmerged by its author on 2026-07-18**, so the fork constant is the long-term shape rather than a stopgap awaiting re-alignment. No action needed — cargo fetches the fork at the rev pinned in `Cargo.lock`, and the §5 lock check verifies it. |
+| [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431) (keepalive tolerance) | `src/websocket/mod.rs` on the `tunnell/libsignal-service-rs` fork branch `xous-782c0d6`, rev `3e17acde37` (see `docs/FORKS.md`) | The fork uses a local `MAX_OUTSTANDING_KEEPALIVES = 3` constant. PR #431 proposed the same tolerance as an opt-in `with_max_outstanding_keepalives(...)` constructor (default = 1, preserves upstream behavior); it was **closed unmerged by its author on 2026-07-18**, so the fork constant is the long-term shape rather than a stopgap awaiting re-alignment. No action needed — cargo fetches the fork at the rev pinned in `Cargo.lock`, and the §5 lock check verifies it. |
 | [rust-lang/rust#156414](https://github.com/rust-lang/rust/pull/156414) (std recv byte-4 decode) | **Not in your build (yet).** | PR #156414 fixes the bug at its actual source (the std-side recv decode reads byte 4 instead of byte 1). It **merged 2026-06-04** (milestone 1.98.0) but has not reached a stable Rust release yet, so the toolchain this workspace builds with still has the byte-1 bug — and it doesn't matter, because PR #877's kernel-side mirror writes the code at byte 1 too. Once a stable release carrying the fix reaches the toolchain pin, the kernel-side mirror becomes belt-and-suspenders rather than load-bearing. No action needed for the current build. |
 
 ---
@@ -514,6 +514,13 @@ and `xas/gam_app: link URL = sgnl://linkdevice?...`.
 The script still needs an X server (it greps for the "Precursor"
 window with `xdotool` and injects keystrokes via `libX11.so.6`),
 but a real display is not required — `xvfb-run` works.
+
+**Wayland desktops:** launch any hosted run you intend to drive
+programmatically with `WAYLAND_DISPLAY=` (empty) so minifb falls
+back to its X11 backend under XWayland. With a native Wayland
+window, X11 window search and `XSendEvent` injection silently find
+nothing (hit live 2026-07-31); a human at the real keyboard is
+unaffected. `xvfb-run` paths are pure X11 and immune.
 
 This step depends on `xdotool` and `xvfb` (Debian/Ubuntu:
 `apt install xdotool xvfb`; Arch: `pacman -S xdotool
@@ -930,7 +937,7 @@ cargo --version      # should be 1.95.0 or newer
 
 # Confirm the Signal-stack forks resolve to the pinned revs from
 # docs/FORKS.md (cargo verifies the checkouts against these):
-grep -A2 'name = "libsignal-service"' Cargo.lock   # expect: source = git+...tunnell/libsignal-service-rs?rev=86b9da7c...
+grep -A2 'name = "libsignal-service"' Cargo.lock   # expect: source = git+...tunnell/libsignal-service-rs?rev=3e17acde...
 grep -A2 'name = "presage"' Cargo.lock             # expect: source = git+...tunnell/presage?rev=7b63a451...
 
 # Confirm the fork checkout cargo fetched carries the
@@ -938,7 +945,7 @@ grep -A2 'name = "presage"' Cargo.lock             # expect: source = git+...tun
 # whisperfish/libsignal-service-rs#431). The ~/.cargo path below
 # exists only after a first build has fetched the forks:
 grep -F 'MAX_OUTSTANDING_KEEPALIVES: usize = 3' \
-    ~/.cargo/git/checkouts/libsignal-service-rs-*/86b9da7/src/websocket/mod.rs   # expect: 1 hit
+    ~/.cargo/git/checkouts/libsignal-service-rs-*/3e17acd/src/websocket/mod.rs   # expect: 1 hit
 
 # In xous-core:
 git branch --show-current   # 'xas-integration' for dev builds
