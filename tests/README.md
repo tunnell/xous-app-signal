@@ -75,7 +75,8 @@ Has historically not caught the bugs that bit us in production
 (those were all timing-, scheduling-, or net-encoding-related).
 **Not actively used in this project's day-to-day workflow.**
 
-**Run:** see [`tests/renode/`](renode/). Reach for it only when
+**Run:** `tests/renode/run-renode-tests.sh` — documented in
+BUILDING.md §2.7. Reach for it only when
 you have a bug that repros on rv32 but not in hosted, and you
 don't have a Precursor handy.
 

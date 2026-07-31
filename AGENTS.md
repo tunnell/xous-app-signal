@@ -59,19 +59,23 @@ Two things in or beside this tree are not for casual editing:
   maintainer approval. File an issue with the rationale and wait.
 
 - **`xous-core@xas-vX.Y` is a frozen pin.** Each xas release
-  (starting with v0.2) tags a companion `xas-vX.Y` branch on the
+  (starting with v0.2) publishes an `xas-vX.Y` TAG on the
   kernel-side fork carrying the exact kernel state that release
-  was built against. Never push to a frozen `xas-vX.Y` branch.
-  Hardware builds against released xas must use the matching pin.
-  v0.1 predates the convention and does not have an
-  `xas-v0.1` branch — the pin model applies forward from v0.2.
+  was built against (v0.2's pin began life as a frozen branch;
+  the 2026-07 branch cleanup replaced it with the `xas-v0.2` tag
+  at the same commit). Never move or delete a published
+  `xas-vX.Y` tag. Hardware builds against released xas must use
+  the matching pin. v0.1 predates the convention — the pin model
+  applies forward from v0.2.
 
 Active kernel-side development happens on
-`tunnell/xous-core@xas`, which carries `apps/manifest.json`'s xas
-registration and the `apps/xas/` subtree — neither is on
-`betrusted-io/xous-core@dev`. Hardware bundles built off `dev`
-boot without Signal in the launcher (see trap 3 below and
-[BUILDING.md] §2.1).
+`tunnell/xous-core@xas-integration`, which carries
+`apps/manifest.json`'s xas registration (absent from
+`betrusted-io/xous-core@dev`). The xas app itself builds
+out-of-tree and is injected via the `xas:` CrateSpec — there is
+no `apps/xas/` subtree on `xas-integration`. Hardware bundles
+built off upstream `dev` boot without Signal in the launcher
+(see trap 3 below and [BUILDING.md] §2.1).
 
 ## Commit + PR hygiene
 
@@ -114,8 +118,10 @@ boot without Signal in the launcher (see trap 3 below and
 
 Four traps have caused real bricked builds or release misses. Read before any flash cycle or release cut:
 
-1. `XOUS_TARGET` default differs between `build-and-bundle.sh`
-   (cargo triple) and `flash-via-pi.sh` (legacy SoC alias).
+1. `XOUS_TARGET` defaults once differed between the precursor
+   scripts (cargo triple vs a legacy SoC alias); all of them now
+   default to `riscv32imac-unknown-xous-elf`. Override only if
+   your cargo target dir actually differs.
 2. `PI_HOST` requires a `pi@` user prefix; bare IP falls through
    to a password prompt.
 3. Hardware builds need the `xas`-family kernel branch, not `dev`.
