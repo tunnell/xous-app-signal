@@ -94,7 +94,7 @@ rev = "5f86cb10bebd521a45fb3abb06995200aeda2948"
 #
 #   crate                repo                                 branch            rev
 #   presage              github.com/tunnell/presage           xous-600c4ed      7b63a45
-#   libsignal-service    github.com/tunnell/libsignal-service-rs  xous-782c0d6  3e17acd
+#   libsignal-service    github.com/tunnell/libsignal-service-rs  xous-782c0d6  30d43d4
 #   curve25519-dalek(+derive)  github.com/tunnell/curve25519-dalek  xous-signal-4.1.3  0cac8fc
 #   getrandom            github.com/betrusted-io/xous-core (imports/getrandom)  n/a  2005a80
 #
@@ -151,7 +151,7 @@ curve25519-dalek-derive = { git = "https://github.com/tunnell/curve25519-dalek",
 # no rv32 target) — every consumer must set `default-features = false`
 # (xous-net-bridge and the presage fork both do).
 [patch."https://github.com/whisperfish/libsignal-service-rs"]
-libsignal-service = { git = "https://github.com/tunnell/libsignal-service-rs", rev = "3e17acde37fb93af0a6e75c3e0a1d587b5da706e" }
+libsignal-service = { git = "https://github.com/tunnell/libsignal-service-rs", rev = "30d43d4a428fed372c9a7c2dc39e7173829aaa20" }
 
 # presage: tunnell fork of whisperfish/presage (branch xous-600c4ed =
 # upstream 600c4ed + 3 commits). This is where the tokio-removal
