@@ -38,9 +38,7 @@
 //! ~100 × ~70 B keeps the encoded bundle well under one PDDB chunk.
 
 use async_trait::async_trait;
-use presage::libsignal_service::protocol::{
-    PreKeyId, PreKeyRecord, PreKeyStore, SignalProtocolError,
-};
+use presage::libsignal_service::protocol::{PreKeyId, PreKeyRecord, PreKeyStore, SignalProtocolError};
 
 use super::{
     PREKEY_BUNDLE_KEY, PddbProtocolStore, backend_get_json_protocol, backend_put_json_protocol,
@@ -59,18 +57,9 @@ fn load_bundle(store: &PddbProtocolStore) -> Result<Vec<(u32, Vec<u8>)>, SignalP
     .unwrap_or_default())
 }
 
-fn save_bundle(
-    store: &PddbProtocolStore,
-    bundle: &[(u32, Vec<u8>)],
-) -> Result<(), SignalProtocolError> {
+fn save_bundle(store: &PddbProtocolStore, bundle: &[(u32, Vec<u8>)]) -> Result<(), SignalProtocolError> {
     let dict = dict_prekey_bundle(store.identity);
-    backend_put_json_protocol(
-        &*store.store.backend,
-        &dict,
-        PREKEY_BUNDLE_KEY,
-        bundle,
-        "encode prekey bundle",
-    )
+    backend_put_json_protocol(&*store.store.backend, &dict, PREKEY_BUNDLE_KEY, bundle, "encode prekey bundle")
 }
 
 #[async_trait(?Send)]
@@ -109,8 +98,6 @@ impl PreKeyStore for PddbProtocolStore {
     }
 }
 
-pub(super) fn max_pre_key_id(
-    store: &PddbProtocolStore,
-) -> Result<Option<u32>, SignalProtocolError> {
+pub(super) fn max_pre_key_id(store: &PddbProtocolStore) -> Result<Option<u32>, SignalProtocolError> {
     Ok(load_bundle(store)?.iter().map(|(id, _)| *id).max())
 }

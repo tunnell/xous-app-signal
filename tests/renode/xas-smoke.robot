@@ -1,59 +1,55 @@
 *** Comments ***
 xas boot-smoke test (Robot Framework + Renode).
 
-Boots a Xous image containing the xas Signal client app (bundled
-into xous-core via the `xas` entry in apps/manifest.json) and
-asserts that the two log lines emitted at the top of xas's main()
-appear on the UART console. Like every other Xous PID, xas starts
-at boot — no user interaction required to reach the asserted lines.
+Boots the CI-grade xas-ci.resc machine (headless SoC + EC pair, per-run
+0xFF flash scratch file) with the xas Signal client bundled into the
+image via apps/manifest.json, and asserts the two log lines emitted at
+the top of xas's main(). Like every other Xous PID, xas starts at boot —
+no user interaction is needed to reach the asserted lines.
 
-Run via:    renode-test tests/renode/xas-smoke.robot
-            (or `cargo xtask renode-test` from the workspace root,
-             or ./tests/renode/run-renode-tests.sh which also
-             rebuilds the dist artifact first)
+Run via:    tests/renode/run-renode-tests.sh                # this robot
+            tests/renode/run-renode-tests.sh --all          # whole suite
+The wrapper builds the right ELF variant (canonical pddb-real,precursor
+for this robot), re-bundles the image only when needed, and exports
+XOUS_CORE_DIR for the machine definition. To run renode-test by hand,
+bundle first (BUILDING.md §2.7) and export XOUS_CORE_DIR.
 
-Prerequisites:
-  - Renode 1.16+ on PATH.
-  - A Xous image with xas bundled. Build via:
-        cd ~/precursor-signal/repos/xous-core
-        cargo xtask app-image \
-            xas:~/precursor-signal/xous-app-signal/dist/xas-rv32/xas \
-            --git-describe v0.9.21-0-g0000000
-    The `--git-describe` is needed because the fork has no
-    reachable tags; xous-sign-image otherwise fails on
-    `git describe`. Any v-prefixed semver works.
-  - The `xas-smoke.resc` script's `$xous_core_root` variable
-    points at the local xous-core checkout.
+Timeout model (all robots in this suite):
+- Wait For Line On Uart timeouts are VIRTUAL-time seconds (host-speed
+  independent).
+- Test Timeout is WALL-clock: a stalled machine can never burn more than
+  10 real minutes.
+- 'PANIC in PID' is a registered failing UART string (fail-fast on any
+  service death instead of burning the timeout).
+
 
 *** Settings ***
-Suite Setup     Setup
-Suite Teardown  Teardown
-Test Setup      Reset Emulation
-Test Teardown   Test Teardown
-Resource        ${RENODEKEYWORDS}
+Suite Setup                   Setup
+Suite Teardown                Teardown
+Test Teardown                 Test Teardown
+Test Timeout                  10 minutes
+Resource                      ${RENODEKEYWORDS}
+Resource                      xas-ci-common.resource
+
 
 *** Variables ***
-${SCRIPT_DIR}=  ${CURDIR}
-# Xous boot in Renode goes through kernel init, all services
-# (graphics, gam, pddb, etc.), and then app PIDs. Several seconds
-# per stage. Generous timeout to accommodate slow CI hardware.
-${UART_TIMEOUT}=  120
+${UART_TIMEOUT}               120
+# A failed run's emulation snapshot (2 machines + 128 MiB file-backed
+# flash) is huge and useless for triage; the console/kernel logs under
+# target/xas-ci/ suffice. Overrides the renode-keywords default.
+${CREATE_SNAPSHOT_ON_FAIL}    False
 
-*** Keywords ***
-Create Xas Machine
-    Execute Command  $script_dir = '${SCRIPT_DIR}'
-    Execute Command  include @${SCRIPT_DIR}/xas-smoke.resc
 
 *** Test Cases ***
 Should Boot And Run Xas
-    Create Xas Machine
-    # betrusted.resc creates two UART-shaped peripherals on the SoC
-    # machine: `sysbus.uart` (kernel-only output: panics, process
-    # termination notices) and `sysbus.console` (xous-log-server's
-    # destination: every log::info! call from every app). Our
-    # asserted lines come from log::info! in xas's main(), so the
-    # tester targets `sysbus.console`.
-    Create Terminal Tester    sysbus.console    timeout=${UART_TIMEOUT}    machine=SoC
-    Start Emulation
-    Wait For Line On Uart    xas: starting
-    Wait For Line On Uart    xas: worker started
+    Create Xas Ci Machine     xas-smoke
+    # xas-ci.resc creates two UART-shaped peripherals on the SoC machine:
+    # `sysbus.uart` (kernel-only output) and `sysbus.console` (the
+    # xous-log-server destination: every log::info! from every app). The
+    # asserted lines come from log::info! in xas's main(), so the tester
+    # targets `sysbus.console` (wired up by Create Xas Ci Machine).
+    Wait For Line On Uart     xas: starting
+    Wait For Line On Uart     xas: worker started
+    Console Log Should Be Clean And Contain
+    ...                       xas: starting
+    ...                       xas: worker started

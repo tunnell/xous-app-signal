@@ -59,27 +59,20 @@
 //!
 //! Batch semantics:
 //!
-//! - During a batch, `put(dict, key, value)` records the value in
-//!   an in-memory `HashMap` keyed on `(dict, key)`. **No
-//!   inner-backend write fires.**
-//! - During a batch, `delete(dict, key)` records a tombstone in
-//!   the same map.
-//! - During a batch, `get(dict, key)` consults the buffer first
-//!   (read-through): a buffered put returns the buffered bytes; a
-//!   buffered tombstone returns `Ok(None)`; otherwise falls through
-//!   to the inner backend.
-//! - `list_keys(dict)` overlays the buffer on top of inner keys:
-//!   inner ∪ buffered-puts ∖ buffered-deletes. Costs an inner
-//!   `list_keys` call plus a buffer scan.
-//! - `delete_dict(dict)` clears the buffer entries for `dict` and
-//!   forwards to the inner backend. (Rare during send; included for
-//!   completeness.)
-//! - `commit_internal` (via [`BatchGuard::commit`]) drains the
-//!   buffer, replays puts through `inner.put_batch` (one IPC for
-//!   PddbBackend), replays deletes individually, clears the flag,
-//!   and returns the number of replayed operations.
-//! - `BatchGuard::Drop` without an explicit `commit()` is an abort:
-//!   the buffer is cleared, the flag is reset, no replay fires.
+//! - During a batch, `put(dict, key, value)` records the value in an in-memory `HashMap` keyed on `(dict,
+//!   key)`. **No inner-backend write fires.**
+//! - During a batch, `delete(dict, key)` records a tombstone in the same map.
+//! - During a batch, `get(dict, key)` consults the buffer first (read-through): a buffered put returns the
+//!   buffered bytes; a buffered tombstone returns `Ok(None)`; otherwise falls through to the inner backend.
+//! - `list_keys(dict)` overlays the buffer on top of inner keys: inner ∪ buffered-puts ∖ buffered-deletes.
+//!   Costs an inner `list_keys` call plus a buffer scan.
+//! - `delete_dict(dict)` clears the buffer entries for `dict` and forwards to the inner backend. (Rare during
+//!   send; included for completeness.)
+//! - `commit_internal` (via [`BatchGuard::commit`]) drains the buffer, replays puts through `inner.put_batch`
+//!   (one IPC for PddbBackend), replays deletes individually, clears the flag, and returns the number of
+//!   replayed operations.
+//! - `BatchGuard::Drop` without an explicit `commit()` is an abort: the buffer is cleared, the flag is reset,
+//!   no replay fires.
 //!
 //! Concurrency: only one batch can be in flight at a time per
 //! BufferingBackend instance. `begin_batch` returns
@@ -143,24 +136,16 @@ impl BufferingBackend {
     /// the inner backend until [`begin_batch`](Self::begin_batch) is
     /// called.
     pub fn new(inner: Arc<dyn KvBackend>) -> Self {
-        Self {
-            inner,
-            batching: AtomicBool::new(false),
-            buffer: Mutex::new(HashMap::new()),
-        }
+        Self { inner, batching: AtomicBool::new(false), buffer: Mutex::new(HashMap::new()) }
     }
 
     /// Return `true` while a batch is in flight. Acquire-ordered
     /// load on the `batching` flag.
-    pub fn is_batching(&self) -> bool {
-        self.batching.load(Ordering::Acquire)
-    }
+    pub fn is_batching(&self) -> bool { self.batching.load(Ordering::Acquire) }
 
     /// Number of buffered entries (puts + deletes). Test/diagnostic.
     /// Returns 0 if the buffer mutex is poisoned.
-    pub fn buffered_len(&self) -> usize {
-        self.buffer.lock().map(|b| b.len()).unwrap_or(0)
-    }
+    pub fn buffered_len(&self) -> usize { self.buffer.lock().map(|b| b.len()).unwrap_or(0) }
 
     /// Open a batch scope.
     ///
@@ -198,13 +183,11 @@ impl BufferingBackend {
     /// The buffer is drained via `mem::take` before any inner write
     /// fires, so the failure modes split into:
     ///
-    /// - `put_batch` fails on the buffered puts (e.g. PDDB's
-    ///   `MAX_PDDB_WRITE_BATCH_LEN` ceiling exceeded). The code
-    ///   falls back to per-entry `inner.put` for each buffered put.
-    ///   The original batch error is logged but not surfaced; only a
-    ///   per-entry put failure becomes the returned error.
-    /// - One of the deletes fails. The first delete error becomes
-    ///   the returned error; subsequent deletes are still attempted.
+    /// - `put_batch` fails on the buffered puts (e.g. PDDB's `MAX_PDDB_WRITE_BATCH_LEN` ceiling exceeded).
+    ///   The code falls back to per-entry `inner.put` for each buffered put. The original batch error is
+    ///   logged but not surfaced; only a per-entry put failure becomes the returned error.
+    /// - One of the deletes fails. The first delete error becomes the returned error; subsequent deletes are
+    ///   still attempted.
     ///
     /// Either way, the batch flag is cleared on exit so a new batch
     /// can be opened. On partial-failure return the inner backend
@@ -214,8 +197,7 @@ impl BufferingBackend {
         // Take ownership of the buffer contents so other operations
         // (which check the flag) see an empty buffer immediately.
         let entries = {
-            let mut guard =
-                self.buffer.lock().map_err(|_| Error::backend("buffer mutex poisoned"))?;
+            let mut guard = self.buffer.lock().map_err(|_| Error::backend("buffer mutex poisoned"))?;
             std::mem::take(&mut *guard)
         };
         let total_count = entries.len();
@@ -254,16 +236,15 @@ impl BufferingBackend {
         // surfaced; if any per-entry put also fails, that error
         // becomes `first_err`.
         if !puts.is_empty() {
-            let put_views: Vec<(&str, &str, &[u8])> = puts
-                .iter()
-                .map(|(d, k, v)| (d.as_str(), k.as_str(), v.as_slice()))
-                .collect();
+            let put_views: Vec<(&str, &str, &[u8])> =
+                puts.iter().map(|(d, k, v)| (d.as_str(), k.as_str(), v.as_slice())).collect();
             if let Err(batch_err) = self.inner.put_batch(&put_views) {
                 put_batch_fell_back = true;
                 tracing::warn!(
                     "perf/store: BufferingBackend::commit put_batch failed ({}), \
                      falling back to per-entry inner.put for {} entries",
-                    batch_err, puts.len()
+                    batch_err,
+                    puts.len()
                 );
                 for (dict, key, value) in &puts {
                     if let Err(e) = self.inner.put(dict, key, value) {
@@ -291,7 +272,10 @@ impl BufferingBackend {
         self.batching.store(false, Ordering::Release);
         tracing::info!(
             "perf/store: BufferingBackend::commit n_entries={} (puts={}, deletes={}) put_batch_fell_back={} ms={}",
-            total_count, _perf_puts, _perf_deletes, put_batch_fell_back,
+            total_count,
+            _perf_puts,
+            _perf_deletes,
+            put_batch_fell_back,
             _perf_start.elapsed().as_millis()
         );
         match first_err {
@@ -312,10 +296,7 @@ impl BufferingBackend {
             guard.clear();
         }
         self.batching.store(false, Ordering::Release);
-        tracing::info!(
-            "perf/store: BufferingBackend::abort discarded={} (no replay)",
-            _perf_buffered_count
-        );
+        tracing::info!("perf/store: BufferingBackend::abort discarded={} (no replay)", _perf_buffered_count);
     }
 }
 
@@ -338,12 +319,8 @@ impl KvBackend for BufferingBackend {
 
     fn put(&self, dict: &str, key: &str, value: &[u8]) -> Result<(), Error> {
         if self.is_batching() {
-            let mut buf =
-                self.buffer.lock().map_err(|_| Error::backend("buffer mutex poisoned"))?;
-            buf.insert(
-                (dict.to_string(), key.to_string()),
-                BufferEntry::Put(value.to_vec()),
-            );
+            let mut buf = self.buffer.lock().map_err(|_| Error::backend("buffer mutex poisoned"))?;
+            buf.insert((dict.to_string(), key.to_string()), BufferEntry::Put(value.to_vec()));
             Ok(())
         } else {
             self.inner.put(dict, key, value)
@@ -352,8 +329,7 @@ impl KvBackend for BufferingBackend {
 
     fn delete(&self, dict: &str, key: &str) -> Result<(), Error> {
         if self.is_batching() {
-            let mut buf =
-                self.buffer.lock().map_err(|_| Error::backend("buffer mutex poisoned"))?;
+            let mut buf = self.buffer.lock().map_err(|_| Error::backend("buffer mutex poisoned"))?;
             buf.insert((dict.to_string(), key.to_string()), BufferEntry::Delete);
             Ok(())
         } else {
@@ -380,10 +356,7 @@ impl KvBackend for BufferingBackend {
         }
         // Build the buffer-overlay view: inner ∪ buffered-puts ∖
         // buffered-deletes, scoped to this dict.
-        let buf = self
-            .buffer
-            .lock()
-            .map_err(|_| Error::backend("buffer mutex poisoned"))?;
+        let buf = self.buffer.lock().map_err(|_| Error::backend("buffer mutex poisoned"))?;
         let mut keys: std::collections::BTreeSet<String> = inner_keys.into_iter().collect();
         for ((d, k), entry) in buf.iter() {
             if d != dict {
@@ -441,9 +414,7 @@ impl<'a> BatchGuard<'a> {
     }
 
     /// Number of buffered entries pending commit. Test/diagnostic.
-    pub fn buffered_len(&self) -> usize {
-        self.backend.buffered_len()
-    }
+    pub fn buffered_len(&self) -> usize { self.backend.buffered_len() }
 }
 
 impl<'a> Drop for BatchGuard<'a> {
@@ -459,9 +430,7 @@ mod tests {
     use super::*;
     use crate::MockBackend;
 
-    fn make() -> Arc<BufferingBackend> {
-        Arc::new(BufferingBackend::new(Arc::new(MockBackend::new())))
-    }
+    fn make() -> Arc<BufferingBackend> { Arc::new(BufferingBackend::new(Arc::new(MockBackend::new()))) }
 
     #[test]
     fn passthrough_when_not_batching() {
@@ -607,36 +576,29 @@ mod tests {
                 fail_batch: Default::default(),
             })
         }
-        fn puts(&self) -> usize {
-            self.puts.load(std::sync::atomic::Ordering::Acquire)
-        }
-        fn batches(&self) -> usize {
-            self.batches.load(std::sync::atomic::Ordering::Acquire)
-        }
-        fn batch_total(&self) -> usize {
-            self.batch_total_entries
-                .load(std::sync::atomic::Ordering::Acquire)
-        }
+
+        fn puts(&self) -> usize { self.puts.load(std::sync::atomic::Ordering::Acquire) }
+
+        fn batches(&self) -> usize { self.batches.load(std::sync::atomic::Ordering::Acquire) }
+
+        fn batch_total(&self) -> usize { self.batch_total_entries.load(std::sync::atomic::Ordering::Acquire) }
+
         fn set_fail_batch(&self, fail: bool) {
-            self.fail_batch
-                .store(fail, std::sync::atomic::Ordering::Release);
+            self.fail_batch.store(fail, std::sync::atomic::Ordering::Release);
         }
     }
 
     impl KvBackend for CountingBackend {
-        fn get(&self, dict: &str, key: &str) -> Result<Option<Vec<u8>>, Error> {
-            self.inner.get(dict, key)
-        }
+        fn get(&self, dict: &str, key: &str) -> Result<Option<Vec<u8>>, Error> { self.inner.get(dict, key) }
+
         fn put(&self, dict: &str, key: &str, value: &[u8]) -> Result<(), Error> {
-            self.puts
-                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            self.puts.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
             self.inner.put(dict, key, value)
         }
+
         fn put_batch(&self, entries: &[(&str, &str, &[u8])]) -> Result<(), Error> {
-            self.batches
-                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-            self.batch_total_entries
-                .fetch_add(entries.len(), std::sync::atomic::Ordering::AcqRel);
+            self.batches.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            self.batch_total_entries.fetch_add(entries.len(), std::sync::atomic::Ordering::AcqRel);
             if self.fail_batch.load(std::sync::atomic::Ordering::Acquire) {
                 // Mimic the PDDB IPC "batch exceeds MAX_PDDB_WRITE_BATCH_LEN; split"
                 // path: return without writing anything so the
@@ -651,15 +613,12 @@ mod tests {
             }
             Ok(())
         }
-        fn delete(&self, dict: &str, key: &str) -> Result<(), Error> {
-            self.inner.delete(dict, key)
-        }
-        fn delete_dict(&self, dict: &str) -> Result<(), Error> {
-            self.inner.delete_dict(dict)
-        }
-        fn list_keys(&self, dict: &str) -> Result<Vec<String>, Error> {
-            self.inner.list_keys(dict)
-        }
+
+        fn delete(&self, dict: &str, key: &str) -> Result<(), Error> { self.inner.delete(dict, key) }
+
+        fn delete_dict(&self, dict: &str) -> Result<(), Error> { self.inner.delete_dict(dict) }
+
+        fn list_keys(&self, dict: &str) -> Result<Vec<String>, Error> { self.inner.list_keys(dict) }
     }
 
     /// On commit, multiple buffered puts should be flushed via a

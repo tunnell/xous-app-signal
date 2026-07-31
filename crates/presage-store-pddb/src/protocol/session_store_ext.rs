@@ -17,16 +17,13 @@
 //! the corresponding session bytes are gone from the cache and the
 //! PDDB. Note however:
 //!
-//! - PDDB's underlying basis storage may still hold ciphertext in
-//!   pages that have been freed but not yet overwritten. PDDB's free
-//!   list reuses pages, but there is no zero-on-free guarantee.
-//! - The `delete_session` "drop just this device_id" path reads,
-//!   modifies, and writes the bundle back; the old bundle value
-//!   remains in whatever PDDB page the previous write occupied until
-//!   subsequent writes overwrite it.
-//! - The transient `bundle` `HashMap<u32, Vec<u8>>` and the
-//!   `serialize_session_bundle` output `Vec<u8>` do not zero on
-//!   drop.
+//! - PDDB's underlying basis storage may still hold ciphertext in pages that have been freed but not yet
+//!   overwritten. PDDB's free list reuses pages, but there is no zero-on-free guarantee.
+//! - The `delete_session` "drop just this device_id" path reads, modifies, and writes the bundle back; the
+//!   old bundle value remains in whatever PDDB page the previous write occupied until subsequent writes
+//!   overwrite it.
+//! - The transient `bundle` `HashMap<u32, Vec<u8>>` and the `serialize_session_bundle` output `Vec<u8>` do
+//!   not zero on drop.
 //!
 //! Treat `delete_session` as "best-effort durable forget", not as a
 //! cryptographic wipe. For a stronger wipe primitive see
@@ -34,9 +31,7 @@
 
 use async_trait::async_trait;
 use presage::libsignal_service::prelude::SessionStoreExt;
-use presage::libsignal_service::protocol::{
-    DeviceId, ProtocolAddress, ServiceId, SignalProtocolError,
-};
+use presage::libsignal_service::protocol::{DeviceId, ProtocolAddress, ServiceId, SignalProtocolError};
 use presage::libsignal_service::push_service::DEFAULT_DEVICE_ID;
 
 use super::session_store::{
@@ -46,10 +41,7 @@ use super::{PddbProtocolStore, dict_session, protocol_backend_err};
 
 #[async_trait(?Send)]
 impl SessionStoreExt for PddbProtocolStore {
-    async fn get_sub_device_sessions(
-        &self,
-        name: &ServiceId,
-    ) -> Result<Vec<DeviceId>, SignalProtocolError> {
+    async fn get_sub_device_sessions(&self, name: &ServiceId) -> Result<Vec<DeviceId>, SignalProtocolError> {
         let uuid = name.raw_uuid().to_string();
         let main: u32 = u32::from(*DEFAULT_DEVICE_ID);
 
@@ -59,9 +51,11 @@ impl SessionStoreExt for PddbProtocolStore {
         let mut device_ids: Vec<u32> = Vec::new();
 
         {
-            let cache = self.store.session_cache.lock().map_err(|_| {
-                SignalProtocolError::InvalidState("session cache", "poisoned".into())
-            })?;
+            let cache = self
+                .store
+                .session_cache
+                .lock()
+                .map_err(|_| SignalProtocolError::InvalidState("session cache", "poisoned".into()))?;
             for ((id_kind, addr, dev), _) in cache.iter() {
                 if *id_kind == self.identity && addr == &uuid && *dev != main {
                     device_ids.push(*dev);
@@ -70,9 +64,7 @@ impl SessionStoreExt for PddbProtocolStore {
         }
 
         let dict = dict_session(self.identity);
-        if let Some(bundle) =
-            backend_get_session_bundle_protocol(&*self.store.backend, &dict, &uuid)?
-        {
+        if let Some(bundle) = backend_get_session_bundle_protocol(&*self.store.backend, &dict, &uuid)? {
             for dev in bundle.keys() {
                 if *dev != main {
                     device_ids.push(*dev);
@@ -82,24 +74,25 @@ impl SessionStoreExt for PddbProtocolStore {
 
         device_ids.sort_unstable();
         device_ids.dedup();
-        Ok(device_ids
-            .into_iter()
-            .filter_map(|d| DeviceId::try_from(d).ok())
-            .collect())
+        Ok(device_ids.into_iter().filter_map(|d| DeviceId::try_from(d).ok()).collect())
     }
 
     async fn delete_session(&self, address: &ProtocolAddress) -> Result<(), SignalProtocolError> {
         let key = session_key(self.identity, address);
         {
-            let mut cache = self.store.session_cache.lock().map_err(|_| {
-                SignalProtocolError::InvalidState("session cache", "poisoned".into())
-            })?;
+            let mut cache = self
+                .store
+                .session_cache
+                .lock()
+                .map_err(|_| SignalProtocolError::InvalidState("session cache", "poisoned".into()))?;
             cache.remove(&key);
         }
         {
-            let mut dirty = self.store.session_dirty.lock().map_err(|_| {
-                SignalProtocolError::InvalidState("session dirty", "poisoned".into())
-            })?;
+            let mut dirty = self
+                .store
+                .session_dirty
+                .lock()
+                .map_err(|_| SignalProtocolError::InvalidState("session dirty", "poisoned".into()))?;
             dirty.remove(&key);
         }
 
@@ -107,8 +100,7 @@ impl SessionStoreExt for PddbProtocolStore {
         // bundle becomes empty, delete the whole key so a future
         // `list_keys` doesn't return a stale empty entry.
         let dict = dict_session(self.identity);
-        let Some(mut bundle) =
-            backend_get_session_bundle_protocol(&*self.store.backend, &dict, &key.1)?
+        let Some(mut bundle) = backend_get_session_bundle_protocol(&*self.store.backend, &dict, &key.1)?
         else {
             return Ok(());
         };
@@ -116,17 +108,9 @@ impl SessionStoreExt for PddbProtocolStore {
             return Ok(());
         }
         if bundle.is_empty() {
-            self.store
-                .backend
-                .delete(&dict, &key.1)
-                .map_err(protocol_backend_err)?;
+            self.store.backend.delete(&dict, &key.1).map_err(protocol_backend_err)?;
         } else {
-            backend_put_session_bundle_protocol(
-                &*self.store.backend,
-                &dict,
-                &key.1,
-                &bundle,
-            )?;
+            backend_put_session_bundle_protocol(&*self.store.backend, &dict, &key.1, &bundle)?;
         }
         Ok(())
     }
@@ -142,12 +126,16 @@ impl SessionStoreExt for PddbProtocolStore {
         let mut affected: HashSet<u32> = HashSet::new();
 
         {
-            let mut cache = self.store.session_cache.lock().map_err(|_| {
-                SignalProtocolError::InvalidState("session cache", "poisoned".into())
-            })?;
-            let mut dirty = self.store.session_dirty.lock().map_err(|_| {
-                SignalProtocolError::InvalidState("session dirty", "poisoned".into())
-            })?;
+            let mut cache = self
+                .store
+                .session_cache
+                .lock()
+                .map_err(|_| SignalProtocolError::InvalidState("session cache", "poisoned".into()))?;
+            let mut dirty = self
+                .store
+                .session_dirty
+                .lock()
+                .map_err(|_| SignalProtocolError::InvalidState("session dirty", "poisoned".into()))?;
             cache.retain(|(id_kind, addr, dev), _| {
                 let drop = *id_kind == self.identity && addr == &uuid;
                 if drop {
@@ -158,9 +146,7 @@ impl SessionStoreExt for PddbProtocolStore {
             });
         }
 
-        if let Some(bundle) =
-            backend_get_session_bundle_protocol(&*self.store.backend, &dict, &uuid)?
-        {
+        if let Some(bundle) = backend_get_session_bundle_protocol(&*self.store.backend, &dict, &uuid)? {
             for dev in bundle.keys() {
                 affected.insert(*dev);
             }

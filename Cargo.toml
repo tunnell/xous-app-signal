@@ -4,28 +4,20 @@ members = [
     "crates/presage-store-pddb",
     "crates/xous-net-bridge",
     "crates/xous-pddb-ipc",
-    "crates/xous-modals-ipc",
     "crates/xous-signal-worker",
     "crates/xous-app-signal",
-    "vendor/libsignal-service-rs",
-]
-exclude = [
-    # Vendored as a whole workspace; we consume specific crates from it.
-    # Other vendored copies we don't want to recompile on every cargo cmd.
-    "vendor/curve25519-dalek",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 license = "AGPL-3.0-only OR Apache-2.0"
 authors = ["tunnell"]
 publish = false
 
-# Smol-rs async primitives, pinned to the HEAD revs verified at
-# ~/precursor-signal/repos/<crate>/git log --oneline -1.
-# Replaces Tokio. ~21 kLoC vendored audit surface vs. Tokio's >100 kLoC.
+# Smol-rs async primitives, pinned to specific upstream revs.
+# Replaces Tokio. ~21 kLoC audit surface vs. Tokio's >100 kLoC.
 [workspace.dependencies]
 async-task = { git = "https://github.com/smol-rs/async-task", rev = "f98b30b" }
 async-executor = { git = "https://github.com/smol-rs/async-executor", rev = "543403e" }
@@ -62,8 +54,12 @@ strip = "symbols"
 #
 # Only the git-based patches are mirrored here. xous-core's path-based patches
 # (`aes` -> services/aes, `getrandom` -> imports/getrandom) reference paths
-# that only exist inside the xous-core tree; they're TODO when we either
-# (a) merge this workspace into xous-core, or (b) vendor those forks here.
+# that only exist inside the xous-core tree; getrandom is patched below via
+# the repos/xous-core sibling path. The durable fix is a git-rev pin on
+# betrusted-io/xous-core (the pattern betrusted-io/sigchat and
+# dabao-base-app use). Merging xas into xous-core is not on the table:
+# the maintainer moved chat apps out of tree (betrusted-io/sigchat
+# precedent, xous-core commit d8542dab7), so xas stays out-of-tree.
 #
 # We do NOT mirror xous-core's curve25519-dalek patch. It conflicts with
 # libsignal's `signalapp/curve25519-dalek` pin.
@@ -87,10 +83,28 @@ futures-timer = { git = "https://github.com/async-rs/futures-timer", rev = "07db
 git = "https://github.com/betrusted-io/ring-xous"
 rev = "5f86cb10bebd521a45fb3abb06995200aeda2948"
 
-# curve25519-dalek: vendored `betrusted-io/curve25519-dalek` fork +
-# version bump 4.1.2 → 4.1.3 + lizard module port. Carries the driver
-# for Precursor's curve25519 IP-core HW accelerator at
-# vendor/curve25519-dalek/curve25519-dalek/src/backend/serial/u32e/.
+# --- Fork model -------------------------------------------------------
+#
+# The Signal-stack forks (formerly directory-vendored under vendor/)
+# live as GitHub forks, each a rebase-managed branch = upstream pin +
+# a small stack of reviewable commits. xas consumes them ONLY via the
+# rev-pinned [patch] entries below; member crates keep declaring the
+# canonical upstream URLs. Full pin matrix, compare URLs, and the
+# maintenance cadence are in docs/FORKS.md.
+#
+#   crate                repo                                 branch            rev
+#   presage              github.com/tunnell/presage           xous-600c4ed      7b63a45
+#   libsignal-service    github.com/tunnell/libsignal-service-rs  xous-782c0d6  96bcdf8
+#   curve25519-dalek(+derive)  github.com/tunnell/curve25519-dalek  xous-signal-4.1.3  0cac8fc
+#   getrandom            github.com/betrusted-io/xous-core (imports/getrandom)  n/a  2005a80
+#
+# The presage and libsignal-service revs are COUPLED (the forked
+# `ws()` returns `(ws, task)`); bump them as a pair — see docs/FORKS.md.
+
+# curve25519-dalek: tunnell fork of betrusted-io/curve25519-dalek
+# (branch xous-signal-4.1.3 = betrusted-io main 16e087ab9 + 4.1.2→4.1.3
+# version bump + lizard module port). Carries the driver for Precursor's
+# curve25519 IP-core HW accelerator (src/backend/serial/u32e/).
 #
 # **Precursor-only.** The IP core is on Precursor only (per bunnie); the
 # Bao1x tape-out has a different PKE engine and would need a separate
@@ -103,54 +117,59 @@ rev = "5f86cb10bebd521a45fb3abb06995200aeda2948"
 # hosted Linux the same code falls back to the portable Rust backend, so
 # tests/CI run unaffected.
 #
-# Our delta over the upstream betrusted-io fork:
+# Fork delta over betrusted-io main:
 #   - bump version 4.1.2 → 4.1.3 in curve25519-dalek/Cargo.toml so the
 #     [patch.crates-io] redirect matches what libsignal's zkgroup
 #     declares (curve25519-dalek = "4.1.3")
-#   - port the src/lizard/ module (~6 files) from
-#     signalapp/curve25519-dalek (signal-curve25519-4.1.3 tag) — adds
-#     4 RistrettoPoint methods used by zkgroup. Additive vs upstream;
-#     no API conflicts.
-#   - one `pub mod lizard;` line in src/lib.rs.
-# That's the entire delta — easy to keep current with the betrusted-io
-# fork and easy to audit.
+#   - port the src/lizard/ module from signalapp/curve25519-dalek
+#     (signal-curve25519-4.1.3 tag) — adds 4 RistrettoPoint methods
+#     used by zkgroup. Additive; needs the crate's `digest` feature,
+#     which zkgroup/libsignal already enable.
 [patch.crates-io.curve25519-dalek]
-path = "vendor/curve25519-dalek/curve25519-dalek"
+git = "https://github.com/tunnell/curve25519-dalek"
+rev = "0cac8fc8239e73ea740ff720c7f93b486618b77d"
 
 [patch.crates-io.curve25519-dalek-derive]
-path = "vendor/curve25519-dalek/curve25519-dalek-derive"
+git = "https://github.com/tunnell/curve25519-dalek"
+rev = "0cac8fc8239e73ea740ff720c7f93b486618b77d"
 
 # libsignal's Cargo.toml also imports curve25519-dalek directly via the
 # git URL `https://github.com/signalapp/curve25519-dalek` (aliased as
 # `curve25519-dalek-signal`). [patch.crates-io] doesn't redirect git
-# sources, so we additionally patch the git URL here. Both pointers now
-# resolve to the same vendored crate, eliminating the duplicate-types
-# error from two RistrettoPoint definitions.
+# sources, so we additionally patch the git URL here. Both pointers
+# MUST stay on the same fork rev — if they diverge, two RistrettoPoint
+# definitions reappear and the build fails with duplicate-types errors.
 [patch."https://github.com/signalapp/curve25519-dalek"]
-curve25519-dalek = { path = "vendor/curve25519-dalek/curve25519-dalek" }
-curve25519-dalek-derive = { path = "vendor/curve25519-dalek/curve25519-dalek-derive" }
+curve25519-dalek = { git = "https://github.com/tunnell/curve25519-dalek", rev = "0cac8fc8239e73ea740ff720c7f93b486618b77d" }
+curve25519-dalek-derive = { git = "https://github.com/tunnell/curve25519-dalek", rev = "0cac8fc8239e73ea740ff720c7f93b486618b77d" }
 
-# Redirect presage's git dep on libsignal-service-rs to our
-# vendored, forked copy at vendor/libsignal-service-rs/. This is where the
-# transport patches live.
+# libsignal-service: tunnell fork of whisperfish/libsignal-service-rs
+# (branch xous-782c0d6 = upstream 782c0d6 + 4 commits: transport trait,
+# ws()->(ws, task) + keepalive tolerance, last_close_code accessor,
+# manifest). This is where the transport patches live. NOTE: the fork
+# keeps upstream's `default = ["cdsi"]` (CDSI pulls boring-sys/BoringSSL,
+# no rv32 target) — every consumer must set `default-features = false`
+# (xous-net-bridge and the presage fork both do).
 [patch."https://github.com/whisperfish/libsignal-service-rs"]
-libsignal-service = { path = "vendor/libsignal-service-rs" }
+libsignal-service = { git = "https://github.com/tunnell/libsignal-service-rs", rev = "96bcdf8eb69bd25d3f9770295535222540b6f491" }
 
-# Redirect presage to our vendored, forked copy at vendor/presage/.
-# This is where the tokio-removal patches live.
+# presage: tunnell fork of whisperfish/presage (branch xous-600c4ed =
+# upstream 600c4ed + 3 commits). This is where the tokio-removal
+# patches live (presage::runtime LocalExecutor module, spawn_detached,
+# ws-task adaptation, PNI cipher fix).
 [patch."https://github.com/whisperfish/presage"]
-presage = { path = "vendor/presage/presage" }
+presage = { git = "https://github.com/tunnell/presage", rev = "7b63a451f4089011830302538c854d6860f74ecc" }
 
 # Cross-compiling rustls/ring for rv32 pulls in `getrandom`, whose
 # upstream crate doesn't recognize Xous as a target. xous-core has a
-# forked `getrandom` at `imports/getrandom` that calls Xous's TRNG. We
-# point at it via an absolute path on this dev box; this is brittle
-# (only works on machines where xous-core is at this path). Long-term
-# resolution: either merge our workspace into xous-core's tree, or
-# fork the getrandom patch into a separate publishable repo. See
-# the getrandom 0.3/0.4 audit roadmap item.
+# forked `getrandom` at `imports/getrandom` that calls Xous's TRNG.
+# Pinned as a git dep on betrusted-io/xous-core at a fixed rev (the
+# pattern betrusted-io/sigchat and dabao-base-app use) — replaces the
+# old layout-brittle `../repos/xous-core` sibling-path patch. See the
+# getrandom 0.3/0.4 audit roadmap item.
 [patch.crates-io.getrandom]
-path = "../repos/xous-core/imports/getrandom"
+git = "https://github.com/betrusted-io/xous-core"
+rev = "2005a801c917753175d3826446ce1352c119e020"
 
 # TODO: wire up the `aes` patch (also path-based,
 # `xous-core/services/aes`) the same way once `aes` shows up

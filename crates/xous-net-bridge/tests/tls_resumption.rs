@@ -1,5 +1,5 @@
-//! Integration test for PLAN.md Stage 0: TLS session resumption via shared
-//! `Arc<ClientConfig>`.
+//! Integration test for TLS session resumption via shared
+//! `Arc<ClientConfig>` ("Stage 0" of issue #1).
 //!
 //! The test stands up a rustls 1.3 server in a worker thread, mints a fresh
 //! self-signed certificate via `rcgen`, drives two HTTPS-style handshakes
@@ -25,24 +25,19 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use rustls::client::{
-    ClientSessionStore, Resumption, Tls12ClientSessionValue, Tls13ClientSessionValue,
-};
+use rustls::client::{ClientSessionStore, Resumption, Tls12ClientSessionValue, Tls13ClientSessionValue};
 use rustls::pki_types::{PrivatePkcs8KeyDer, ServerName};
 use rustls::server::ServerConnection;
 use rustls::{ClientConfig, NamedGroup, RootCertStore, ServerConfig};
-
-use xous_net_bridge::{tls_connect_with_config, RustlsStream};
+use xous_net_bridge::{RustlsStream, tls_connect_with_config};
 
 /// Counts the three load-bearing operations on the rustls client session
 /// cache. After two handshakes against the same Arc<ClientConfig>:
 ///
-/// * a working shared cache produces `inserts >= 1` (server issues a ticket
-///   on the first handshake; client stores it) and `takes >= 1` (client
-///   looks up the stored ticket on the second handshake);
-/// * a broken per-call ClientConfig produces `inserts >= 1` from the first
-///   handshake but `takes == 0` because the second handshake's
-///   ClientConfig never sees the first one's cache.
+/// * a working shared cache produces `inserts >= 1` (server issues a ticket on the first handshake; client
+///   stores it) and `takes >= 1` (client looks up the stored ticket on the second handshake);
+/// * a broken per-call ClientConfig produces `inserts >= 1` from the first handshake but `takes == 0` because
+///   the second handshake's ClientConfig never sees the first one's cache.
 struct CountingStore {
     tls13: Mutex<Vec<(ServerName<'static>, Tls13ClientSessionValue)>>,
     inserts_tls13: AtomicUsize,
@@ -70,31 +65,21 @@ impl CountingStore {
 
 impl ClientSessionStore for CountingStore {
     fn set_kx_hint(&self, _server_name: ServerName<'static>, _group: NamedGroup) {}
-    fn kx_hint(&self, _server_name: &ServerName<'_>) -> Option<NamedGroup> {
-        None
-    }
-    fn set_tls12_session(
-        &self,
-        _server_name: ServerName<'static>,
-        _value: Tls12ClientSessionValue,
-    ) {
-    }
-    fn tls12_session(&self, _server_name: &ServerName<'_>) -> Option<Tls12ClientSessionValue> {
-        None
-    }
+
+    fn kx_hint(&self, _server_name: &ServerName<'_>) -> Option<NamedGroup> { None }
+
+    fn set_tls12_session(&self, _server_name: ServerName<'static>, _value: Tls12ClientSessionValue) {}
+
+    fn tls12_session(&self, _server_name: &ServerName<'_>) -> Option<Tls12ClientSessionValue> { None }
+
     fn remove_tls12_session(&self, _server_name: &ServerName<'static>) {}
-    fn insert_tls13_ticket(
-        &self,
-        server_name: ServerName<'static>,
-        value: Tls13ClientSessionValue,
-    ) {
+
+    fn insert_tls13_ticket(&self, server_name: ServerName<'static>, value: Tls13ClientSessionValue) {
         self.inserts_tls13.fetch_add(1, Ordering::SeqCst);
         self.tls13.lock().unwrap().push((server_name, value));
     }
-    fn take_tls13_ticket(
-        &self,
-        server_name: &ServerName<'static>,
-    ) -> Option<Tls13ClientSessionValue> {
+
+    fn take_tls13_ticket(&self, server_name: &ServerName<'static>) -> Option<Tls13ClientSessionValue> {
         let mut tls13 = self.tls13.lock().unwrap();
         let pos = tls13.iter().position(|(n, _)| n == server_name)?;
         let v = tls13.remove(pos).1;
@@ -103,7 +88,12 @@ impl ClientSessionStore for CountingStore {
     }
 }
 
-fn mint_self_signed() -> (rcgen::Certificate, rustls::pki_types::CertificateDer<'static>, PrivatePkcs8KeyDer<'static>, RootCertStore) {
+fn mint_self_signed() -> (
+    rcgen::Certificate,
+    rustls::pki_types::CertificateDer<'static>,
+    PrivatePkcs8KeyDer<'static>,
+    RootCertStore,
+) {
     let key_pair = rcgen::KeyPair::generate().expect("keypair");
     let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
         .expect("cert params")
@@ -113,19 +103,12 @@ fn mint_self_signed() -> (rcgen::Certificate, rustls::pki_types::CertificateDer<
     let key_der = PrivatePkcs8KeyDer::from(key_pair.serialize_der());
 
     let mut roots = RootCertStore::empty();
-    roots
-        .add(cert_der.clone())
-        .expect("add self-signed cert as root");
+    roots.add(cert_der.clone()).expect("add self-signed cert as root");
     (cert, cert_der, key_der, roots)
 }
 
-fn build_test_client_config(
-    roots: RootCertStore,
-    counting: Arc<CountingStore>,
-) -> Arc<ClientConfig> {
-    let mut config = ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+fn build_test_client_config(roots: RootCertStore, counting: Arc<CountingStore>) -> Arc<ClientConfig> {
+    let mut config = ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
     // No ALPN — the test server doesn't speak HTTP, just raw TLS.
     config.resumption = Resumption::store(counting);
     Arc::new(config)
@@ -219,10 +202,7 @@ fn shared_arc_clientconfig_enables_session_resumption() {
 
     let inserts = counting.inserts_tls13.load(Ordering::SeqCst);
     let takes = counting.takes_tls13.load(Ordering::SeqCst);
-    assert!(
-        inserts >= 1,
-        "expected first handshake to populate cache (inserts={inserts}, takes={takes})",
-    );
+    assert!(inserts >= 1, "expected first handshake to populate cache (inserts={inserts}, takes={takes})",);
     assert!(
         takes >= 1,
         "expected second handshake to consume a ticket from cache (inserts={inserts}, takes={takes}). \

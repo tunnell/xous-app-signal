@@ -138,8 +138,8 @@ if [ -z "$WIN_HEX" ]; then
 fi
 echo "==> Precursor window=$WIN_HEX"
 
-# Step 4: drive the link flow via XSendEvent. Reuses the proven
-# pattern from agent_notes/drive_to_signal.py.
+# Step 4: drive the link flow via XSendEvent (drive_link.py calls
+# libX11 directly via ctypes).
 echo "==> driving keystrokes to xas"
 python3 "$(dirname "$0")/drive_link.py" "$WIN_HEX" >"$DRIVE_LOG" 2>&1
 DRIVE_EC=$?
@@ -149,6 +149,30 @@ if [ $DRIVE_EC -ne 0 ]; then
     cat "$DRIVE_LOG" >&2
     exit 1
 fi
+
+# Step 4b: accept the device-name modal. drive_link.py hands off
+# after selecting Link (see its trailing comment): a blind Enter
+# races the modal render and can land on the still-active Menu, so
+# retry-Enter every 3s until the worker logs
+# `Cmd::LinkDevice received` — the marker that gam_app forwarded
+# the accepted device name. Mirrors the loop in
+# test_xas_round_trip.py.
+echo "==> retry-Enter until 'Cmd::LinkDevice received'"
+ACCEPT_DEADLINE=$((SECONDS + 60))
+ACCEPTED=0
+while [ $SECONDS -lt $ACCEPT_DEADLINE ]; do
+    if grep -q "worker: Cmd::LinkDevice received" "$KERNEL_LOG" 2>/dev/null; then
+        ACCEPTED=1
+        break
+    fi
+    python3 "$(dirname "$0")/drive_link.py" "$WIN_HEX" --press-enter >>"$DRIVE_LOG" 2>&1 || true
+    sleep 3
+done
+if [ $ACCEPTED -ne 1 ]; then
+    echo "ERROR: device-name modal never accepted ('Cmd::LinkDevice received' not in log)" >&2
+    exit 4
+fi
+echo "    device-name modal accepted"
 
 # Step 5: poll the kernel log for the URL emission. PASS as soon
 # as both worker and gam_app log it; FAIL on timeout.

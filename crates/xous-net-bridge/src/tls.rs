@@ -53,8 +53,7 @@
 //! arithmetic on supported platforms; rv32imac is not among them. On
 //! Precursor we have:
 //!
-//! - No hardware AES instructions (rustls falls back to ChaCha20 or a
-//!   software AES).
+//! - No hardware AES instructions (rustls falls back to ChaCha20 or a software AES).
 //! - No constant-time multiplier in the rv32imac base ISA.
 //! - No published audit of rustls/ring on rv32-xous.
 //!
@@ -148,10 +147,7 @@ pub struct CountingResumptionStore {
 
 impl CountingResumptionStore {
     fn new(size: usize) -> Self {
-        Self {
-            inner: ClientSessionMemoryCache::new(size),
-            take_some_count: AtomicUsize::new(0),
-        }
+        Self { inner: ClientSessionMemoryCache::new(size), take_some_count: AtomicUsize::new(0) }
     }
 
     /// Monotonic count of `take_tls13_ticket(...) -> Some(...)` calls
@@ -160,9 +156,7 @@ impl CountingResumptionStore {
     /// Intended for tests and the diagnostic snapshot in
     /// [`tls_connect_with_config`]; not part of any production
     /// decision-making.
-    pub fn take_some_count(&self) -> usize {
-        self.take_some_count.load(Ordering::Acquire)
-    }
+    pub fn take_some_count(&self) -> usize { self.take_some_count.load(Ordering::Acquire) }
 }
 
 impl fmt::Debug for CountingResumptionStore {
@@ -182,33 +176,26 @@ impl ClientSessionStore for CountingResumptionStore {
     fn set_kx_hint(&self, server_name: ServerName<'static>, group: NamedGroup) {
         self.inner.set_kx_hint(server_name, group)
     }
-    fn kx_hint(&self, server_name: &ServerName<'_>) -> Option<NamedGroup> {
-        self.inner.kx_hint(server_name)
-    }
-    fn set_tls12_session(
-        &self,
-        server_name: ServerName<'static>,
-        value: Tls12ClientSessionValue,
-    ) {
+
+    fn kx_hint(&self, server_name: &ServerName<'_>) -> Option<NamedGroup> { self.inner.kx_hint(server_name) }
+
+    fn set_tls12_session(&self, server_name: ServerName<'static>, value: Tls12ClientSessionValue) {
         self.inner.set_tls12_session(server_name, value)
     }
+
     fn tls12_session(&self, server_name: &ServerName<'_>) -> Option<Tls12ClientSessionValue> {
         self.inner.tls12_session(server_name)
     }
+
     fn remove_tls12_session(&self, server_name: &ServerName<'static>) {
         self.inner.remove_tls12_session(server_name)
     }
-    fn insert_tls13_ticket(
-        &self,
-        server_name: ServerName<'static>,
-        value: Tls13ClientSessionValue,
-    ) {
+
+    fn insert_tls13_ticket(&self, server_name: ServerName<'static>, value: Tls13ClientSessionValue) {
         self.inner.insert_tls13_ticket(server_name, value)
     }
-    fn take_tls13_ticket(
-        &self,
-        server_name: &ServerName<'static>,
-    ) -> Option<Tls13ClientSessionValue> {
+
+    fn take_tls13_ticket(&self, server_name: &ServerName<'static>) -> Option<Tls13ClientSessionValue> {
         let v = self.inner.take_tls13_ticket(server_name);
         if v.is_some() {
             self.take_some_count.fetch_add(1, Ordering::AcqRel);
@@ -238,9 +225,7 @@ static ACTIVE_COUNTER: OnceLock<Arc<CountingResumptionStore>> = OnceLock::new();
 /// Test-only entry point. Production code never reads this directly —
 /// [`tls_connect_with_config`] snapshots internally.
 #[doc(hidden)]
-pub fn active_counter_for_tests() -> Option<Arc<CountingResumptionStore>> {
-    ACTIVE_COUNTER.get().cloned()
-}
+pub fn active_counter_for_tests() -> Option<Arc<CountingResumptionStore>> { ACTIVE_COUNTER.get().cloned() }
 
 /// Build a [`ClientConfig`] suitable for sharing across many
 /// [`tls_connect_with_config`] calls.
@@ -292,9 +277,7 @@ pub fn active_counter_for_tests() -> Option<Arc<CountingResumptionStore>> {
 /// `was_resumed` diagnostic to observe activity across the whole
 /// process.
 pub fn build_tls_config(roots: RootCertStore, alpn: &[&[u8]]) -> Arc<ClientConfig> {
-    let mut config = ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+    let mut config = ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();
     if !alpn.is_empty() {
         config.alpn_protocols = alpn.iter().map(|p| p.to_vec()).collect();
     }
@@ -302,9 +285,7 @@ pub fn build_tls_config(roots: RootCertStore, alpn: &[&[u8]]) -> Arc<ClientConfi
     // `Resumption::in_memory_sessions(8)`; the wrapper only adds a
     // fetch_add on the take-some path so `tls_connect_with_config` can
     // emit `was_resumed=true|false` directly rather than inferring it.
-    let counter = ACTIVE_COUNTER
-        .get_or_init(|| Arc::new(CountingResumptionStore::new(8)))
-        .clone();
+    let counter = ACTIVE_COUNTER.get_or_init(|| Arc::new(CountingResumptionStore::new(8))).clone();
     config.resumption = Resumption::store(counter);
     Arc::new(config)
 }
@@ -318,11 +299,7 @@ pub fn build_tls_config(roots: RootCertStore, alpn: &[&[u8]]) -> Arc<ClientConfi
 /// established with this root store and pointed at chat.signal.org
 /// would accept a certificate from any public CA, defeating the
 /// project's MITM-resistance assumptions.
-pub fn webpki_roots() -> RootCertStore {
-    RootCertStore {
-        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-    }
-}
+pub fn webpki_roots() -> RootCertStore { RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() } }
 
 /// Signal's production root CA, pinned.
 ///
@@ -403,15 +380,12 @@ fn parse_pem_roots(pem: &[u8]) -> io::Result<RootCertStore> {
 ///
 /// The underlying [`TcpStream`] is configured with:
 ///
-/// - `set_read_timeout(5s)` — the WebSocket pump in
-///   [`crate::ws_pump`] holds a mutex across the blocking
-///   `WebSocket::read()` in its reader thread; without a short
-///   timeout the writer thread could never inject keepalives.
-/// - `set_write_timeout(30s)` — bounds the writer's TCP retransmit
-///   budget so a server-initiated `Close` mid-write does not block the
-///   thread for ~89 s on hardware. Acts as defense-in-depth alongside
-///   the `services/net` socket-reaper fix that addresses the root
-///   cause kernel-side.
+/// - `set_read_timeout(5s)` — the WebSocket pump in [`crate::ws_pump`] holds a mutex across the blocking
+///   `WebSocket::read()` in its reader thread; without a short timeout the writer thread could never inject
+///   keepalives.
+/// - `set_write_timeout(30s)` — bounds the writer's TCP retransmit budget so a server-initiated `Close`
+///   mid-write does not block the thread for ~89 s on hardware. Acts as defense-in-depth alongside the
+///   `services/net` socket-reaper fix that addresses the root cause kernel-side.
 ///
 /// # Logging
 ///
@@ -444,15 +418,11 @@ fn parse_pem_roots(pem: &[u8]) -> io::Result<RootCertStore> {
 /// for the endpoint (see [`build_tls_config`]). Mismatching them is
 /// the most likely way to silently degrade the security posture of
 /// this transport.
-pub fn tls_connect_with_config(
-    host: &str,
-    port: u16,
-    config: Arc<ClientConfig>,
-) -> io::Result<RustlsStream> {
+pub fn tls_connect_with_config(host: &str, port: u16, config: Arc<ClientConfig>) -> io::Result<RustlsStream> {
     let t_start = std::time::Instant::now();
     tracing::info!("perf/net: tls_connect entry host={} port={}", host, port);
-    let server_name = ServerName::try_from(host.to_string())
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let server_name =
+        ServerName::try_from(host.to_string()).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
     let _perf_sn_ms = t_start.elapsed().as_millis() as u64;
     let conn = ClientConnection::new(config, server_name).map_err(io::Error::other)?;
     let _perf_conn_ms = t_start.elapsed().as_millis() as u64;
@@ -465,8 +435,12 @@ pub fn tls_connect_with_config(
     // the additive resumption diagnostic.
     tracing::info!(
         "perf/net: tls_connect exit host={} port={} server_name_ms={} client_conn_ms={} tcp_ms={} setup_total_ms={}",
-        host, port, _perf_sn_ms, _perf_conn_ms - _perf_sn_ms,
-        setup_ms - _perf_conn_ms, setup_ms
+        host,
+        port,
+        _perf_sn_ms,
+        _perf_conn_ms - _perf_sn_ms,
+        setup_ms - _perf_conn_ms,
+        setup_ms
     );
 
     // Short TCP read timeout. WebSocket users (`ws_pump::reader_loop`)
@@ -510,17 +484,17 @@ pub fn tls_connect_with_config(
     if let Err(e) = stream.conn.complete_io(&mut stream.sock) {
         tracing::info!(
             "perf/net: tls_handshake_error host={} port={} setup_total_ms={} handshake_ms={} err={}",
-            host, port, setup_ms, hs_start.elapsed().as_millis() as u64, e
+            host,
+            port,
+            setup_ms,
+            hs_start.elapsed().as_millis() as u64,
+            e
         );
         return Err(e);
     }
     let handshake_ms = hs_start.elapsed().as_millis() as u64;
 
-    let proto = stream
-        .conn
-        .protocol_version()
-        .map(|v| format!("{:?}", v))
-        .unwrap_or_else(|| "?".to_string());
+    let proto = stream.conn.protocol_version().map(|v| format!("{:?}", v)).unwrap_or_else(|| "?".to_string());
     let cipher = stream
         .conn
         .negotiated_cipher_suite()
@@ -541,7 +515,12 @@ pub fn tls_connect_with_config(
     };
     tracing::info!(
         "perf/net: tls_handshake host={} port={} handshake_ms={} was_resumed={} proto={} cipher={}",
-        host, port, handshake_ms, was_resumed, proto, cipher
+        host,
+        port,
+        handshake_ms,
+        was_resumed,
+        proto,
+        cipher
     );
 
     Ok(stream)
@@ -560,19 +539,15 @@ pub fn tls_connect_with_config(
 /// [`tls_connect_with_config`] explicitly; constructing the
 /// `Arc<ClientConfig>` once and reusing it is what allows TLS 1.3
 /// resumption across reconnects.
-pub fn tls_connect(
-    host: &str,
-    port: u16,
-    roots: RootCertStore,
-    alpn: &[&[u8]],
-) -> io::Result<RustlsStream> {
+pub fn tls_connect(host: &str, port: u16, roots: RootCertStore, alpn: &[&[u8]]) -> io::Result<RustlsStream> {
     tls_connect_with_config(host, port, build_tls_config(roots, alpn))
 }
 
 #[cfg(test)]
 mod counting_store_tests {
-    use super::*;
     use rustls::pki_types::ServerName;
+
+    use super::*;
 
     /// `take_some_count` increments only when `take_tls13_ticket` returns
     /// `Some` — not on `take_tls13_ticket` calls that miss, and not on

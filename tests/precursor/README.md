@@ -3,7 +3,7 @@
 This is the **hardware test path**: build a kernel image, flash
 it to a Precursor PVT2 over USB (optionally via a Raspberry Pi
 rig), and watch UART for what the device does. It's the slowest
-of the four testing approaches in [`../README.md`](../README.md)
+of the testing approaches in [`../README.md`](../README.md)
 (~30 min per cycle) but the only one that exercises the rv32 net
 stack, the WF200 Wi-Fi chip, the FPGA gateware, real PDDB
 encryption, and real RF timing — i.e., everything that doesn't
@@ -19,6 +19,8 @@ tests/precursor/
 ├── build-and-bundle.sh  ← rebuild xas + bundle a kernel image
 ├── flash-via-pi.sh      ← scp the image to a Pi and run usb_update.py
 ├── flash-direct.sh      ← flash directly from your build host (no Pi)
+├── read_gitrev.py       ← read the ACTIVE SoC gateware version over
+│                          USB (pure read; for --git-describe pins)
 └── watch-uart.sh        ← tail the captured UART log on the Pi
 ```
 
@@ -70,8 +72,12 @@ multi-hour user-assisted operation. The rules:
   [`../../BUILDING.md`](../../BUILDING.md) for toolchain setup)
 - A xous-core checkout adjacent to this repo (default
   `../xous-core`; override via `XOUS_CORE_DIR`)
-- A Precursor PVT2 in the loader window (hold power 5s during
-  boot until the loader window appears)
+- A Precursor PVT2 in the loader window. On a running device:
+  main menu → **"Lock device (reboot)"** — it reboots straight into
+  the locked/loader state (1209:5bf0), no buttons needed (verified
+  2026-07-31). If the device can't boot: hold the left-side button
+  while plugging in USB, or left-side button + paperclip reset
+  (BUILDING.md §4)
 
 **For the Pi rig path (recommended):**
 - A Raspberry Pi 4B with the betrusted debug HAT, wired to your
@@ -115,6 +121,31 @@ ssh "$PI_HOST" 'screen -dmS uart -L -Logfile ~/uart-logs/precursor-uart.log /dev
 `/dev/serial0` instead — check `dmesg | grep tty` if the log
 stays empty.)
 
+### Persistent UART capture across Pi reboots
+
+The `screen` session above dies on every Pi reboot, and the next
+`watch-uart.sh` run finds a stale (or missing) log. To make the
+capture survive reboots, install a systemd unit on the Pi:
+
+```ini
+# /etc/systemd/system/precursor-uart.service
+[Unit]
+Description=Persistent UART capture for Precursor on /dev/ttyAMA0
+After=network.target
+[Service]
+Type=forking
+User=pi
+ExecStart=/usr/bin/screen -dmS uart -L \
+    -Logfile %h/uart-logs/precursor-uart.log /dev/ttyAMA0 115200
+Restart=on-failure
+[Install]
+WantedBy=multi-user.target
+```
+
+Then `sudo systemctl enable --now precursor-uart.service`. After
+that, the manual `screen -dmS uart ...` step above is only needed
+on rigs without the unit.
+
 Confirm everything:
 
 ```sh
@@ -146,7 +177,7 @@ step requires a 25-minute flash:
    ```sh
    bash tests/precursor/build-and-bundle.sh
    ```
-   Output: `<xous-core>/target/precursor-c809403e/release/xous.img`.
+   Output: `<xous-core>/target/riscv32imac-unknown-xous-elf/release/xous.img`.
    Override `XOUS_CORE_DIR` / `XOUS_TARGET` if your layout
    differs.
 
@@ -174,8 +205,11 @@ step requires a 25-minute flash:
    The script tails `~/uart-logs/precursor-uart.log` on the Pi.
    Set `FOLLOW=0` for a one-shot last-200-lines snapshot.
 
-6. **On the device:** unlock PDDB → join Wi-Fi (`wlan setup` in
-   shellchat if needed) → open xas → exercise the feature you're
+6. **On the device:** unlock PDDB → join Wi-Fi (shellchat:
+   `wlan off` → `wlan on` → `ssid scan`; first time on a network
+   also `wlan setssid <ssid>` → `wlan setpass <pass>` → `wlan save`;
+   then `wlan status` until Connected; 2.4 GHz networks only — see
+   BUILDING.md §3.4) → open xas → exercise the feature you're
    testing.
 
 7. **Analyze the UART log.** If reproducing a bug, diff against
@@ -248,6 +282,40 @@ your test design around what UART can show.
   long sessions — `ssh "$PI_HOST" 'vcgencmd measure_temp'` to
   check.
 
+- **iSerial can be empty in loader mode.** BUILDING.md §3.2's
+  `lsusb -v | grep iSerial` trick returns nothing on some PVT2
+  units. `python3 tests/precursor/read_gitrev.py` (run on the host
+  that has the USB connection) reads the active gateware version
+  over USB without touching flash — use it to pick the
+  `GIT_DESCRIBE`/`GIT_REV` pins.
+
+- **Fresh devices can self-update gateware on first boot.** If the
+  device's root keys are uninitialized AND a valid newer gateware
+  image is staged (e.g. by `precursorupdater`), the status service
+  applies the SoC update automatically on boot
+  (`try_nokey_soc_update`) — a gateware write triggered by merely
+  booting the kernel you just flashed. Probe the staging area
+  before flashing a factory-fresh device if that would surprise
+  you.
+
+- **`--bounce` is currently a no-op flag** in `usb_update.py`: the
+  parser accepts it but nothing reads it — the device resets after
+  every completed invocation regardless. Keep passing it (all
+  recipes here do) in case the tool later gates the reset on it.
+
+- **UART capture logs contain binary junk** (stray NULs/garbage
+  bytes from the reset transient), so plain `grep` may decide the
+  log is a binary file and print nothing (or just "binary file
+  matches"). Use `grep -a` when filtering captured UART logs.
+
+- **A long PDDB delete looks exactly like a hang.** `delete_dict`
+  overwrites every freed page and rewrites page-table entries through
+  the `mbbb` shuffle; the per-key work logs at `trace`/`debug`, so
+  after the handful of `erasing dk page` lines the UART goes silent
+  for the rest of the operation. Budget ~25 flash sector ops per
+  17 KiB record (~100 ms each on PVT2) before calling it dead, and
+  never power-cycle a device mid-wipe.
+
 - **Stale screen session:** if a script crashes and leaves a
   broken `uart` screen session, kill it manually:
   ```sh
@@ -266,10 +334,16 @@ your test design around what UART can show.
 | `PI_FLASH_DIR` | `~/xous-flash` | Pi-side directory for `xous.img` + `usb_update.py` |
 | `PI_UART_LOG` | `~/uart-logs/precursor-uart.log` | Pi-side path of the UART log |
 | `XOUS_CORE_DIR` | `../xous-core` | Path to your xous-core checkout |
-| `XOUS_TARGET` | `precursor-c809403e` | xtask target for `app-image-xip` |
+| `XOUS_TARGET` | `riscv32imac-unknown-xous-elf` | cargo target dir the bundled `xous.img` lands in |
 | `BUILD_LOG` | `/tmp/xous-build-$(date +%s).log` | Build stdout/stderr |
 | `FLASH_LOG` | `/tmp/flash-$(date +%s).log` | Flash stdout/stderr (Pi-side for `flash-via-pi.sh`) |
 | `FOLLOW` | `1` | `watch-uart.sh`: 1 = `tail -F`, 0 = last 200 lines |
+
+(`precursor-c809403e` is the legacy `XOUS_TARGET` name from when
+xous-core used JSON target specs. Cargo writes the image under the
+`riscv32imac-unknown-xous-elf` triple; all scripts in this folder
+default to that. Update any wrapper scripts still exporting the
+old name.)
 
 Override at the call site:
 

@@ -10,8 +10,8 @@ publish.workspace = true
 [dependencies]
 # presage pinned to commit 600c4ed. The workspace
 # [patch."https://github.com/whisperfish/presage"] in xous-app-signal's
-# top-level Cargo.toml redirects this to vendor/presage/presage, which
-# carries the local tokio-removal patches.
+# top-level Cargo.toml redirects this to the rev-pinned tunnell/presage
+# fork (docs/FORKS.md), which carries the local tokio-removal patches.
 presage = { git = "https://github.com/whisperfish/presage", rev = "600c4ed" }
 
 # Serde + JSON for state serialization. JSON (not bincode) so the
@@ -36,7 +36,8 @@ bincode = "1"
 
 # Used to derive the per-uuid+profilekey lookup key for the
 # `signal.profiles` dict. Same pattern as presage-store-sled
-# (`profile_key_for_uuid` at vendor/presage/presage-store-sled/src/lib.rs:275).
+# (`profile_key_for_uuid` at presage-store-sled/src/lib.rs:275 in
+# whisperfish/presage).
 sha2 = "0.10"
 
 # Error type derives.
@@ -79,7 +80,7 @@ xous-pddb-ipc = { path = "../xous-pddb-ipc" }
 
 # base64-encodes the group master_key inside the per-thread
 # dictionary-name hash. Same hashing scheme presage-store-sled uses
-# (vendor/presage/presage-store-sled/src/content.rs:471-485).
+# (presage-store-sled/src/content.rs:471-485 in whisperfish/presage).
 base64 = "0.22"
 
 [features]

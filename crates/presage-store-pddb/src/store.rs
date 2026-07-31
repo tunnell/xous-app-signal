@@ -12,10 +12,9 @@
 //! `clear` is the only API that wipes the user's account state.
 //! After it returns successfully:
 //!
-//! - the StateStore dict (`signal.state`) is gone — registration
-//!   data, identity keypairs, master key, sender cert all removed;
-//! - every ContentsStore dict (`signal.contacts`, `signal.groups`,
-//!   etc.) is gone;
+//! - the StateStore dict (`signal.state`) is gone — registration data, identity keypairs, master key, sender
+//!   cert all removed;
+//! - every ContentsStore dict (`signal.contacts`, `signal.groups`, etc.) is gone;
 //! - every ProtocolStore dict for both ACI and PNI is gone;
 //! - the in-memory session cache and dirty set are empty.
 //!
@@ -30,8 +29,8 @@ use presage::store::{ContentsStore, StateStore, Store};
 use crate::{Error, IdentityType, PddbProtocolStore, PddbStore};
 
 impl Store for PddbStore {
-    type Error = Error;
     type AciStore = PddbProtocolStore;
+    type Error = Error;
     type PniStore = PddbProtocolStore;
 
     /// Clear *everything* — state, profiles, every protocol-store
@@ -72,20 +71,13 @@ impl Store for PddbStore {
         // Wipe both protocol-store dictionaries (sessions, identities,
         // pre-keys, signed pre-keys, kyber pre-keys, sender keys).
         for identity in [IdentityType::Aci, IdentityType::Pni] {
-            self.backend
-                .delete_dict(&crate::protocol::dict_session(identity))?;
-            self.backend
-                .delete_dict(&crate::protocol::dict_identity(identity))?;
-            self.backend
-                .delete_dict(&crate::protocol::dict_prekey_bundle(identity))?;
-            self.backend
-                .delete_dict(&crate::protocol::dict_signed_prekey(identity))?;
-            self.backend
-                .delete_dict(&crate::protocol::dict_kyber_prekey(identity))?;
-            self.backend
-                .delete_dict(&crate::protocol::dict_kyber_meta(identity))?;
-            self.backend
-                .delete_dict(&crate::protocol::dict_sender_key(identity))?;
+            self.backend.delete_dict(&crate::protocol::dict_session(identity))?;
+            self.backend.delete_dict(&crate::protocol::dict_identity(identity))?;
+            self.backend.delete_dict(&crate::protocol::dict_prekey_bundle(identity))?;
+            self.backend.delete_dict(&crate::protocol::dict_signed_prekey(identity))?;
+            self.backend.delete_dict(&crate::protocol::dict_kyber_prekey(identity))?;
+            self.backend.delete_dict(&crate::protocol::dict_kyber_meta(identity))?;
+            self.backend.delete_dict(&crate::protocol::dict_sender_key(identity))?;
         }
 
         // Drop in-memory session state — otherwise a flush after
@@ -100,11 +92,7 @@ impl Store for PddbStore {
         Ok(())
     }
 
-    fn aci_protocol_store(&self) -> Self::AciStore {
-        PddbProtocolStore::new(self.clone(), IdentityType::Aci)
-    }
+    fn aci_protocol_store(&self) -> Self::AciStore { PddbProtocolStore::new(self.clone(), IdentityType::Aci) }
 
-    fn pni_protocol_store(&self) -> Self::PniStore {
-        PddbProtocolStore::new(self.clone(), IdentityType::Pni)
-    }
+    fn pni_protocol_store(&self) -> Self::PniStore { PddbProtocolStore::new(self.clone(), IdentityType::Pni) }
 }

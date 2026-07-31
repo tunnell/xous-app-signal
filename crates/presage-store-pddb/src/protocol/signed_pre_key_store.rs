@@ -3,8 +3,8 @@
 //! Two methods, both per-id storage in
 //! `signal.protocol.{aci,pni}.signed_prekey`. Records are stored as
 //! their libsignal binary form (`record.serialize()?`) — same shape
-//! presage-store-sqlite uses (vendor/presage/presage-store-sqlite/
-//! src/protocol.rs:341-360).
+//! presage-store-sqlite uses (presage-store-sqlite/
+//! src/protocol.rs:341-360 in whisperfish/presage).
 //!
 //! # Security
 //!
@@ -24,9 +24,8 @@ use presage::libsignal_service::protocol::{
     GenericSignedPreKey, SignalProtocolError, SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
 };
 
-use crate::list_keys_as_u32s;
-
 use super::{PddbProtocolStore, dict_signed_prekey, protocol_backend_err};
+use crate::list_keys_as_u32s;
 
 #[async_trait(?Send)]
 impl SignedPreKeyStore for PddbProtocolStore {
@@ -53,28 +52,16 @@ impl SignedPreKeyStore for PddbProtocolStore {
         let dict = dict_signed_prekey(self.identity);
         let key = u32::from(signed_prekey_id).to_string();
         let bytes = record.serialize()?;
-        self.store
-            .backend
-            .put(&dict, &key, &bytes)
-            .map_err(protocol_backend_err)
+        self.store.backend.put(&dict, &key, &bytes).map_err(protocol_backend_err)
     }
 }
 
-pub(super) fn count_signed_pre_keys(
-    store: &PddbProtocolStore,
-) -> Result<usize, SignalProtocolError> {
+pub(super) fn count_signed_pre_keys(store: &PddbProtocolStore) -> Result<usize, SignalProtocolError> {
     let dict = dict_signed_prekey(store.identity);
-    store
-        .store
-        .backend
-        .list_keys(&dict)
-        .map(|keys| keys.len())
-        .map_err(protocol_backend_err)
+    store.store.backend.list_keys(&dict).map(|keys| keys.len()).map_err(protocol_backend_err)
 }
 
-pub(super) fn max_signed_pre_key_id(
-    store: &PddbProtocolStore,
-) -> Result<Option<u32>, SignalProtocolError> {
+pub(super) fn max_signed_pre_key_id(store: &PddbProtocolStore) -> Result<Option<u32>, SignalProtocolError> {
     let dict = dict_signed_prekey(store.identity);
     let ids = list_keys_as_u32s(&*store.store.backend, &dict).map_err(protocol_backend_err)?;
     Ok(ids.into_iter().max())

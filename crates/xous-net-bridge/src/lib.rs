@@ -7,18 +7,13 @@
 //!
 //! # Layout
 //!
-//! - [`tls`] — sync rustls 0.22 handshake driver over
-//!   `std::net::TcpStream`, pinned trust roots for Signal production
-//!   and staging, and the [`tls::CountingResumptionStore`] that
-//!   observability hangs off.
-//! - [`http`] — [`http::SyncHttpClient`]: one-shot HTTP/1.1 client
-//!   ([`HttpClient`] impl) and dispatcher for [`ws_pump`]'s WSS
-//!   upgrade.
-//! - [`ws`] — minimal `tungstenite::client` wrapper for
-//!   examples/smoke-tests; not on the hot path.
-//! - [`ws_pump`] — production WSS bridge: a pair of worker threads
-//!   share an `Arc<Mutex<WebSocket>>` and exchange frames with the
-//!   async executor via [`WebSocketChannels`].
+//! - [`tls`] — sync rustls 0.22 handshake driver over `std::net::TcpStream`, pinned trust roots for Signal
+//!   production and staging, and the [`tls::CountingResumptionStore`] that observability hangs off.
+//! - [`http`] — [`http::SyncHttpClient`]: one-shot HTTP/1.1 client ([`HttpClient`] impl) and dispatcher for
+//!   [`ws_pump`]'s WSS upgrade.
+//! - [`ws`] — minimal `tungstenite::client` wrapper for examples/smoke-tests; not on the hot path.
+//! - [`ws_pump`] — production WSS bridge: a pair of worker threads share an `Arc<Mutex<WebSocket>>` and
+//!   exchange frames with the async executor via [`WebSocketChannels`].
 //!
 //! # Crate boundaries
 //!
@@ -71,32 +66,26 @@
 //!
 //! What is NOT supported by this transport, by construction:
 //!
-//! - TLS 1.2 fallback against Signal endpoints — the production
-//!   stack negotiates TLS 1.3; a TLS 1.2 negotiation visible in the
-//!   post-handshake `proto=` log line means either a MITM or a
-//!   misconfigured staging endpoint, and should be treated as a
-//!   finding.
-//! - System CA bundle — never consulted; even with system roots
-//!   compromised, a misissued cert from any public CA cannot MITM
-//!   a Signal connection through this crate.
-//! - HTTP redirects — Signal-Server replies 4xx/5xx for any path the
-//!   client should follow; redirects are dropped on the floor.
-//! - HTTP `Transfer-Encoding: chunked` — Signal endpoints never use
-//!   it; see [`http`] for the failure modes if they did.
-//! - Connection pooling — every HTTP request opens a fresh TCP and
-//!   sends `Connection: close`. What survives across requests is the
-//!   `Arc<ClientConfig>` and its in-memory session-ticket cache,
-//!   which is what enables TLS 1.3 PSK resumption.
+//! - TLS 1.2 fallback against Signal endpoints — the production stack negotiates TLS 1.3; a TLS 1.2
+//!   negotiation visible in the post-handshake `proto=` log line means either a MITM or a misconfigured
+//!   staging endpoint, and should be treated as a finding.
+//! - System CA bundle — never consulted; even with system roots compromised, a misissued cert from any public
+//!   CA cannot MITM a Signal connection through this crate.
+//! - HTTP redirects — Signal-Server replies 4xx/5xx for any path the client should follow; redirects are
+//!   dropped on the floor.
+//! - HTTP `Transfer-Encoding: chunked` — Signal endpoints never use it; see [`http`] for the failure modes if
+//!   they did.
+//! - Connection pooling — every HTTP request opens a fresh TCP and sends `Connection: close`. What survives
+//!   across requests is the `Arc<ClientConfig>` and its in-memory session-ticket cache, which is what enables
+//!   TLS 1.3 PSK resumption.
 //!
 //! Caller responsibilities:
 //!
-//! - Pass [`signal_production_roots`] (or [`signal_staging_roots`])
-//!   to [`http::SyncHttpClient::new`] for any Signal-bound traffic.
-//!   Passing [`webpki_roots()`] silently downgrades to the public
-//!   Mozilla bundle and defeats the MITM-resistance assumption.
-//! - Treat any frame surfaced on `WebSocketChannels::incoming` as
-//!   untrusted bytes until libsignal-service-rs has decrypted and
-//!   authenticated the envelope.
+//! - Pass [`signal_production_roots`] (or [`signal_staging_roots`]) to [`http::SyncHttpClient::new`] for any
+//!   Signal-bound traffic. Passing [`webpki_roots()`] silently downgrades to the public Mozilla bundle and
+//!   defeats the MITM-resistance assumption.
+//! - Treat any frame surfaced on `WebSocketChannels::incoming` as untrusted bytes until libsignal-service-rs
+//!   has decrypted and authenticated the envelope.
 //!
 //! # Platform constraints
 //!

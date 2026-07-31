@@ -37,28 +37,20 @@ pub struct MockBackend {
 }
 
 impl MockBackend {
-    pub fn new() -> Self {
-        Self::default()
-    }
+    pub fn new() -> Self { Self::default() }
 
     fn lock(&self) -> Result<MutexGuard<'_, Store>, Error> {
-        self.inner
-            .lock()
-            .map_err(|_| Error::backend("mock backend mutex poisoned"))
+        self.inner.lock().map_err(|_| Error::backend("mock backend mutex poisoned"))
     }
 }
 
 impl KvBackend for MockBackend {
     fn get(&self, dict: &str, key: &str) -> Result<Option<Vec<u8>>, Error> {
-        Ok(self
-            .lock()?
-            .get(&(dict.to_owned(), key.to_owned()))
-            .cloned())
+        Ok(self.lock()?.get(&(dict.to_owned(), key.to_owned())).cloned())
     }
 
     fn put(&self, dict: &str, key: &str, value: &[u8]) -> Result<(), Error> {
-        self.lock()?
-            .insert((dict.to_owned(), key.to_owned()), value.to_vec());
+        self.lock()?.insert((dict.to_owned(), key.to_owned()), value.to_vec());
         Ok(())
     }
 
@@ -74,11 +66,6 @@ impl KvBackend for MockBackend {
     }
 
     fn list_keys(&self, dict: &str) -> Result<Vec<String>, Error> {
-        Ok(self
-            .lock()?
-            .keys()
-            .filter(|(d, _)| d == dict)
-            .map(|(_, k)| k.clone())
-            .collect())
+        Ok(self.lock()?.keys().filter(|(d, _)| d == dict).map(|(_, k)| k.clone()).collect())
     }
 }

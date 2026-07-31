@@ -38,13 +38,10 @@ use crate::tls::{RustlsStream, tls_connect};
 ///
 /// # Errors
 ///
-/// - Invalid URL components or [`IntoClientRequest`] failures surface
-///   as [`io::Error::other`].
-/// - TLS connect / handshake failures bubble through from
-///   [`tls_connect`] unchanged.
-/// - Tungstenite client errors (HTTP status != 101, malformed upgrade
-///   response, etc.) are wrapped as [`io::Error::other`] with the
-///   tungstenite display string.
+/// - Invalid URL components or [`IntoClientRequest`] failures surface as [`io::Error::other`].
+/// - TLS connect / handshake failures bubble through from [`tls_connect`] unchanged.
+/// - Tungstenite client errors (HTTP status != 101, malformed upgrade response, etc.) are wrapped as
+///   [`io::Error::other`] with the tungstenite display string.
 pub fn ws_connect(
     host: &str,
     port: u16,
@@ -58,7 +55,6 @@ pub fn ws_connect(
     // and what Signal's chat WS endpoint expects.
     let stream = tls_connect(host, port, roots, &[b"http/1.1"])?;
 
-    let (ws, resp) =
-        tungstenite::client(request, stream).map_err(|e| io::Error::other(e.to_string()))?;
+    let (ws, resp) = tungstenite::client(request, stream).map_err(|e| io::Error::other(e.to_string()))?;
     Ok((ws, resp))
 }

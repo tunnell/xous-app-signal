@@ -89,11 +89,7 @@ impl SyncHttpClient {
         // an HTTP/1.1 request) want ALPN "http/1.1", so a single shared
         // config covers all transport in this client.
         let config = build_tls_config(roots, &[b"http/1.1"]);
-        Self {
-            config,
-            user_agent,
-            timeout: std::time::Duration::from_secs(65),
-        }
+        Self { config, user_agent, timeout: std::time::Duration::from_secs(65) }
     }
 }
 
@@ -131,10 +127,10 @@ impl HttpClient for SyncHttpClient {
     ///
     /// # Errors
     ///
-    /// - `HttpError::Network` for thread spawn failure, channel
-    ///   error, TLS connect failure, read/write IO error.
-    /// - `HttpError::Encode` if a header value is non-ASCII (Signal
-    ///   endpoints don't ship UTF-8 headers; this is defensive).
+    /// - `HttpError::Network` for thread spawn failure, channel error, TLS connect failure, read/write IO
+    ///   error.
+    /// - `HttpError::Encode` if a header value is non-ASCII (Signal endpoints don't ship UTF-8 headers; this
+    ///   is defensive).
     /// - `HttpError::InvalidUrl` for missing host.
     /// - `HttpError::Decode` for malformed response framing.
     ///
@@ -165,9 +161,7 @@ impl HttpClient for SyncHttpClient {
             })
             .map_err(|e| HttpError::Network(format!("thread spawn: {e}")))?;
 
-        rx.recv()
-            .await
-            .map_err(|_| HttpError::Network("HTTP worker thread died".to_string()))?
+        rx.recv().await.map_err(|_| HttpError::Network("HTTP worker thread died".to_string()))?
     }
 
     /// Open a WSS connection to `url` and return a
@@ -207,11 +201,8 @@ fn sync_execute(
     _timeout: std::time::Duration,
 ) -> Result<HttpResponse, HttpError> {
     let _perf_start = std::time::Instant::now();
-    let host = req
-        .url
-        .host_str()
-        .ok_or_else(|| HttpError::InvalidUrl("missing host".to_string()))?
-        .to_string();
+    let host =
+        req.url.host_str().ok_or_else(|| HttpError::InvalidUrl("missing host".to_string()))?.to_string();
     let port = req.url.port_or_known_default().unwrap_or(443);
     let path = match req.url.query() {
         Some(q) => format!("{}?{}", req.url.path(), q),
@@ -222,7 +213,9 @@ fn sync_execute(
     let _perf_body_len = req.body.as_deref().map(|b| b.len()).unwrap_or(0);
     tracing::info!(
         "perf/net: http_req entry method={} url={} body_len={}",
-        _perf_method, _perf_url, _perf_body_len
+        _perf_method,
+        _perf_url,
+        _perf_body_len
     );
 
     let _perf_pre_tls = std::time::Instant::now();
@@ -247,8 +240,7 @@ fn sync_execute(
     write!(request, "{} {} HTTP/1.1\r\n", req.method.as_str(), path)
         .map_err(|e| HttpError::Encode(e.to_string()))?;
     write!(request, "Host: {}\r\n", host).map_err(|e| HttpError::Encode(e.to_string()))?;
-    write!(request, "User-Agent: {}\r\n", user_agent)
-        .map_err(|e| HttpError::Encode(e.to_string()))?;
+    write!(request, "User-Agent: {}\r\n", user_agent).map_err(|e| HttpError::Encode(e.to_string()))?;
     write!(request, "Connection: close\r\n").map_err(|e| HttpError::Encode(e.to_string()))?;
     write!(request, "Accept: */*\r\n").map_err(|e| HttpError::Encode(e.to_string()))?;
 
@@ -261,34 +253,24 @@ fn sync_execute(
     }
 
     for (name, value) in &req.headers {
-        let v = value
-            .to_str()
-            .map_err(|_| HttpError::Encode("header value not ASCII".to_string()))?;
-        write!(request, "{}: {}\r\n", name.as_str(), v)
-            .map_err(|e| HttpError::Encode(e.to_string()))?;
+        let v = value.to_str().map_err(|_| HttpError::Encode("header value not ASCII".to_string()))?;
+        write!(request, "{}: {}\r\n", name.as_str(), v).map_err(|e| HttpError::Encode(e.to_string()))?;
     }
 
     let body = req.body.as_deref().unwrap_or(&[]);
-    write!(request, "Content-Length: {}\r\n", body.len())
-        .map_err(|e| HttpError::Encode(e.to_string()))?;
+    write!(request, "Content-Length: {}\r\n", body.len()).map_err(|e| HttpError::Encode(e.to_string()))?;
     request.extend_from_slice(b"\r\n");
     request.extend_from_slice(body);
 
     let _perf_pre_write = std::time::Instant::now();
-    stream
-        .write_all(&request)
-        .map_err(|e| HttpError::Network(format!("write: {e}")))?;
-    stream
-        .flush()
-        .map_err(|e| HttpError::Network(format!("flush: {e}")))?;
+    stream.write_all(&request).map_err(|e| HttpError::Network(format!("write: {e}")))?;
+    stream.flush().map_err(|e| HttpError::Network(format!("flush: {e}")))?;
     let _perf_write_ms = _perf_pre_write.elapsed().as_millis();
 
     // Read until EOF (since we sent Connection: close).
     let _perf_pre_read = std::time::Instant::now();
     let mut raw = Vec::with_capacity(4096);
-    stream
-        .read_to_end(&mut raw)
-        .map_err(|e| HttpError::Network(format!("read: {e}")))?;
+    stream.read_to_end(&mut raw).map_err(|e| HttpError::Network(format!("read: {e}")))?;
     let _perf_read_ms = _perf_pre_read.elapsed().as_millis();
 
     let resp = parse_http_response(&raw);
@@ -298,9 +280,14 @@ fn sync_execute(
     };
     tracing::info!(
         "perf/net: http_req exit method={} url={} req_body_len={} status={} resp_body_len={} tls_ms={} write_ms={} read_ms={} total_ms={}",
-        _perf_method, _perf_url, _perf_body_len,
-        _perf_status, _perf_resp_body_len,
-        _perf_tls_ms, _perf_write_ms, _perf_read_ms,
+        _perf_method,
+        _perf_url,
+        _perf_body_len,
+        _perf_status,
+        _perf_resp_body_len,
+        _perf_tls_ms,
+        _perf_write_ms,
+        _perf_read_ms,
         _perf_start.elapsed().as_millis()
     );
     resp
@@ -320,21 +307,18 @@ fn sync_execute(
 ///
 /// # Errors
 ///
-/// - `HttpError::Decode` for missing header terminator, non-UTF-8
-///   header bytes, missing status line / code, or a status code that
-///   doesn't fit in `u16`.
+/// - `HttpError::Decode` for missing header terminator, non-UTF-8 header bytes, missing status line / code,
+///   or a status code that doesn't fit in `u16`.
 fn parse_http_response(raw: &[u8]) -> Result<HttpResponse, HttpError> {
-    let header_end = find_header_end(raw)
-        .ok_or_else(|| HttpError::Decode("no header terminator".to_string()))?;
+    let header_end =
+        find_header_end(raw).ok_or_else(|| HttpError::Decode("no header terminator".to_string()))?;
     let header_block = &raw[..header_end];
     let body = raw[header_end + 4..].to_vec();
 
-    let header_text = std::str::from_utf8(header_block)
-        .map_err(|_| HttpError::Decode("non-UTF-8 header".to_string()))?;
+    let header_text =
+        std::str::from_utf8(header_block).map_err(|_| HttpError::Decode("non-UTF-8 header".to_string()))?;
     let mut lines = header_text.split("\r\n");
-    let status_line = lines
-        .next()
-        .ok_or_else(|| HttpError::Decode("missing status line".to_string()))?;
+    let status_line = lines.next().ok_or_else(|| HttpError::Decode("missing status line".to_string()))?;
     let mut status_parts = status_line.splitn(3, ' ');
     let _http_version = status_parts.next();
     let status_code = status_parts
@@ -342,8 +326,7 @@ fn parse_http_response(raw: &[u8]) -> Result<HttpResponse, HttpError> {
         .ok_or_else(|| HttpError::Decode("missing status code".to_string()))?
         .parse::<u16>()
         .map_err(|e| HttpError::Decode(e.to_string()))?;
-    let status =
-        http::StatusCode::from_u16(status_code).map_err(|e| HttpError::Decode(e.to_string()))?;
+    let status = http::StatusCode::from_u16(status_code).map_err(|e| HttpError::Decode(e.to_string()))?;
 
     let mut headers = HeaderMap::new();
     for line in lines {
@@ -351,26 +334,19 @@ fn parse_http_response(raw: &[u8]) -> Result<HttpResponse, HttpError> {
             continue;
         }
         if let Some((name, value)) = line.split_once(":") {
-            if let (Ok(n), Ok(v)) = (
-                http::HeaderName::try_from(name.trim()),
-                http::HeaderValue::try_from(value.trim()),
-            ) {
+            if let (Ok(n), Ok(v)) =
+                (http::HeaderName::try_from(name.trim()), http::HeaderValue::try_from(value.trim()))
+            {
                 headers.insert(n, v);
             }
         }
     }
 
-    Ok(HttpResponse {
-        status,
-        headers,
-        body,
-    })
+    Ok(HttpResponse { status, headers, body })
 }
 
 /// Locate the offset of the `\r\n\r\n` terminator separating the
 /// HTTP/1.1 header block from the body. Returns the offset of the
 /// first byte of the terminator, or `None` if no terminator is
 /// present.
-fn find_header_end(raw: &[u8]) -> Option<usize> {
-    raw.windows(4).position(|w| w == b"\r\n\r\n")
-}
+fn find_header_end(raw: &[u8]) -> Option<usize> { raw.windows(4).position(|w| w == b"\r\n\r\n") }

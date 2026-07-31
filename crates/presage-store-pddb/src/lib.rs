@@ -11,38 +11,32 @@
 //!
 //! Trait impls sit on top of an internal [`KvBackend`] abstraction:
 //!
-//! - [`KvBackend`] exposes `get` / `put` / `delete` / `delete_dict` /
-//!   `list_keys` keyed on `(dict_name, key_name)` — the same shape
-//!   PDDB itself exposes. `PddbBackend` (under the `pddb-backend`
-//!   feature) forwards into the `xous-pddb-ipc` client;
-//!   [`MockBackend`] is an in-memory `HashMap` for hosted-mode tests.
-//! - [`BufferingBackend`] wraps any inner backend and adds
-//!   send-time write coalescing: writes inside a [`BatchGuard`] scope
-//!   stay in RAM until [`BatchGuard::commit`].
-//! - [`PddbStore`] owns an `Arc<dyn KvBackend>`, an in-memory session
-//!   cache (dirty-set + flush instead of write-through), and a
-//!   `trust_new_identities` policy flag. `Clone + Send + Sync +
-//!   'static` (the bound `presage::store::Store` demands).
+//! - [`KvBackend`] exposes `get` / `put` / `delete` / `delete_dict` / `list_keys` keyed on `(dict_name,
+//!   key_name)` — the same shape PDDB itself exposes. `PddbBackend` (under the `pddb-backend` feature)
+//!   forwards into the `xous-pddb-ipc` client; [`MockBackend`] is an in-memory `HashMap` for hosted-mode
+//!   tests.
+//! - [`BufferingBackend`] wraps any inner backend and adds send-time write coalescing: writes inside a
+//!   [`BatchGuard`] scope stay in RAM until [`BatchGuard::commit`].
+//! - [`PddbStore`] owns an `Arc<dyn KvBackend>`, an in-memory session cache (dirty-set + flush instead of
+//!   write-through), and a `trust_new_identities` policy flag. `Clone + Send + Sync + 'static` (the bound
+//!   `presage::store::Store` demands).
 //!
 //! # Trait coverage
 //!
-//! - `StateStore` (10 methods): registration data, master key,
-//!   identity-key pairs, sender certificate.
-//! - The 6 libsignal protocol storage traits + the `ProtocolStore`
-//!   blanket impl. ACI/PNI splits are runtime-dispatched via
-//!   [`IdentityType`]; sessions are buffered in `PddbStore` and
-//!   flushed in bulk by [`PddbStore::flush_sessions`].
-//! - 3 libsignal-service-rs extension traits (`PreKeysStore`,
-//!   `KyberPreKeyStoreExt`, `SessionStoreExt`).
-//! - Full `ContentsStore`: messages-by-thread, contacts, groups,
-//!   profile keys, profile and group avatars, sticker packs.
+//! - `StateStore` (10 methods): registration data, master key, identity-key pairs, sender certificate.
+//! - The 6 libsignal protocol storage traits + the `ProtocolStore` blanket impl. ACI/PNI splits are
+//!   runtime-dispatched via [`IdentityType`]; sessions are buffered in `PddbStore` and flushed in bulk by
+//!   [`PddbStore::flush_sessions`].
+//! - 3 libsignal-service-rs extension traits (`PreKeysStore`, `KyberPreKeyStoreExt`, `SessionStoreExt`).
+//! - Full `ContentsStore`: messages-by-thread, contacts, groups, profile keys, profile and group avatars,
+//!   sticker packs.
 //!
 //! # Crate boundaries
 //!
 //! Upstream: `xous-signal-worker::run_signal_worker` takes a
 //! [`PddbStore`] and hands it to `presage::Manager`. Below:
 //! `xous-pddb-ipc` (only under the `pddb-backend` feature) and the
-//! presage trait surface from the vendored copies. No transport
+//! presage trait surface from the rev-pinned forks (docs/FORKS.md). No transport
 //! deps — this crate never touches the network.
 //!
 //! # Trust boundary
@@ -85,7 +79,7 @@ pub use buffering_backend::{BatchGuard, BufferingBackend};
 pub use error::Error;
 pub use protocol::{IdentityType, PddbProtocolStore};
 #[cfg(feature = "pddb-backend")]
-pub use put_truncate_smoke::{smoke_put_truncates, SmokeResult};
+pub use put_truncate_smoke::{SmokeResult, smoke_put_truncates};
 
 /// Internal KV abstraction used by all `PddbStore` trait impls.
 ///
@@ -103,14 +97,12 @@ pub use put_truncate_smoke::{smoke_put_truncates, SmokeResult};
 /// `KvBackend` is the abstraction layer over the durability
 /// substrate. The two impls in this crate are:
 ///
-/// - `PddbBackend` (feature `pddb-backend`) — forwards to the running
-///   PDDB server. Bytes are authenticated by PDDB's per-page
-///   AES-256-GCM-SIV before `KvBackend::get` returns them. This is
-///   the only trust boundary for persisted secrets.
-/// - [`MockBackend`] — plaintext `HashMap`, hosted-mode tests only.
-///   **Never built into production xas.** Carries no crypto. Lives
-///   here because the trait impls are what unit tests cover, and a
-///   real PDDB connection isn't available in hosted mode.
+/// - `PddbBackend` (feature `pddb-backend`) — forwards to the running PDDB server. Bytes are authenticated by
+///   PDDB's per-page AES-256-GCM-SIV before `KvBackend::get` returns them. This is the only trust boundary
+///   for persisted secrets.
+/// - [`MockBackend`] — plaintext `HashMap`, hosted-mode tests only. **Never built into production xas.**
+///   Carries no crypto. Lives here because the trait impls are what unit tests cover, and a real PDDB
+///   connection isn't available in hosted mode.
 ///
 /// Bytes flowing across this trait are opaque to the backend — the
 /// store-trait impls (`StateStore`, `ContentsStore`, the protocol
@@ -195,7 +187,7 @@ pub trait KvBackend: Send + Sync + fmt::Debug {
 /// extends the lifetime of the cached `SessionRecord` bytes, which
 /// libsignal-protocol does not zeroize on Drop today (PS.sec-B in
 /// `~/REFACTOR_NOTES.md`). `xous_signal_worker::manager_task` drops
-/// the Manager when its `send_rx` closes; the cache is gone only
+/// the Manager when its op channel closes; the cache is gone only
 /// once the last clone has been dropped.
 ///
 /// # Security
@@ -244,8 +236,7 @@ pub struct PddbStore {
     /// the [`protocol::session_store`] module doc for the
     /// per-record sensitivity analysis and the zeroization gap
     /// (libsignal's `SessionRecord` does not derive `Zeroize`).
-    pub(crate) session_cache:
-        Arc<Mutex<HashMap<protocol::session_store::SessionKey, SessionRecord>>>,
+    pub(crate) session_cache: Arc<Mutex<HashMap<protocol::session_store::SessionKey, SessionRecord>>>,
 
     /// Companion to `session_cache`: keys present here have unsaved
     /// changes since the last flush. Split from the cache itself so
@@ -270,9 +261,7 @@ impl PddbStore {
     /// [`BufferingBackend`]; writes pass through to the inner backend
     /// immediately. For send-time write coalescing, use
     /// [`new_buffering`](PddbStore::new_buffering) instead.
-    pub fn new(backend: Arc<dyn KvBackend>) -> Self {
-        Self::with_options(backend, OnNewIdentity::Trust)
-    }
+    pub fn new(backend: Arc<dyn KvBackend>) -> Self { Self::with_options(backend, OnNewIdentity::Trust) }
 
     /// Build a store with an explicit trust policy.
     ///
@@ -324,9 +313,7 @@ impl PddbStore {
     /// Convenience for hosted-mode tests — wraps a fresh
     /// [`MockBackend`]. **Test-only**; the mock has no encryption and
     /// must never reach a production build.
-    pub fn with_mock_backend() -> Self {
-        Self::new(Arc::new(MockBackend::new()))
-    }
+    pub fn with_mock_backend() -> Self { Self::new(Arc::new(MockBackend::new())) }
 
     /// Connect to xous-core's running PDDB server and wrap the
     /// resulting `xous_pddb_ipc::PddbClient` as a real
@@ -367,14 +354,11 @@ impl PddbStore {
     ///
     /// # Errors
     ///
-    /// - `Ok(None)` if the store was constructed without buffering
-    ///   (e.g. `PddbStore::new(Arc::new(MockBackend::new()))`). Caller
-    ///   code can treat `None` as a no-op: writes simply pass through
-    ///   unchanged. This makes the call site safe to add
-    ///   unconditionally.
-    /// - `Err` if a batch is already in flight on this store. Only
-    ///   one batch can be open at a time per `BufferingBackend`
-    ///   instance.
+    /// - `Ok(None)` if the store was constructed without buffering (e.g.
+    ///   `PddbStore::new(Arc::new(MockBackend::new()))`). Caller code can treat `None` as a no-op: writes
+    ///   simply pass through unchanged. This makes the call site safe to add unconditionally.
+    /// - `Err` if a batch is already in flight on this store. Only one batch can be open at a time per
+    ///   `BufferingBackend` instance.
     pub fn begin_send_batch(&self) -> Result<Option<BatchGuard<'_>>, Error> {
         match self.buffering.as_deref() {
             Some(b) => b.begin_batch().map(Some),
@@ -391,15 +375,11 @@ impl PddbStore {
     /// Number of entries currently in the session cache (any state —
     /// dirty or not). Test-/debug-only convenience; returns 0 if
     /// the cache mutex is poisoned.
-    pub fn session_cache_len(&self) -> usize {
-        self.session_cache.lock().map(|c| c.len()).unwrap_or(0)
-    }
+    pub fn session_cache_len(&self) -> usize { self.session_cache.lock().map(|c| c.len()).unwrap_or(0) }
 
     /// Number of dirty session entries waiting to be flushed.
     /// Returns 0 if the dirty-set mutex is poisoned.
-    pub fn session_dirty_len(&self) -> usize {
-        self.session_dirty.lock().map(|d| d.len()).unwrap_or(0)
-    }
+    pub fn session_dirty_len(&self) -> usize { self.session_dirty.lock().map(|d| d.len()).unwrap_or(0) }
 
     /// Persist every dirty session entry to the backend, then clear
     /// the dirty set. Cache entries themselves stay populated so
@@ -438,34 +418,23 @@ impl PddbStore {
             SessionBundle, backend_get_session_bundle, backend_put_session_bundle,
         };
 
-        let mut dirty = self
-            .session_dirty
-            .lock()
-            .map_err(|_| Error::backend("session dirty mutex poisoned"))?;
+        let mut dirty =
+            self.session_dirty.lock().map_err(|_| Error::backend("session dirty mutex poisoned"))?;
         if dirty.is_empty() {
             return Ok(0);
         }
-        let cache = self
-            .session_cache
-            .lock()
-            .map_err(|_| Error::backend("session cache mutex poisoned"))?;
+        let cache = self.session_cache.lock().map_err(|_| Error::backend("session cache mutex poisoned"))?;
 
         // Group dirty entries by `(identity, address.name())`. The
         // grouping is the whole point — one PDDB put per group, not
         // per dirty entry.
-        let mut groups: HashMap<(protocol::IdentityType, String), Vec<(u32, Vec<u8>)>> =
-            HashMap::new();
+        let mut groups: HashMap<(protocol::IdentityType, String), Vec<(u32, Vec<u8>)>> = HashMap::new();
         for key in dirty.iter() {
             let Some(record) = cache.get(key) else {
                 continue;
             };
-            let bytes = record
-                .serialize()
-                .map_err(|e| Error::Encode(e.to_string()))?;
-            groups
-                .entry((key.0, key.1.clone()))
-                .or_default()
-                .push((key.2, bytes));
+            let bytes = record.serialize().map_err(|e| Error::Encode(e.to_string()))?;
+            groups.entry((key.0, key.1.clone())).or_default().push((key.2, bytes));
         }
 
         let mut written = 0_usize;
@@ -547,15 +516,8 @@ pub(crate) fn backend_put_json<T: serde::Serialize + ?Sized>(
 /// The silent-drop behaviour is intentional: a stray non-numeric key
 /// in a prekey dict would otherwise crash the max-id calculation.
 /// In practice presage only ever writes numeric keys to these dicts.
-pub(crate) fn list_keys_as_u32s(
-    backend: &dyn KvBackend,
-    dict: &str,
-) -> Result<Vec<u32>, Error> {
-    Ok(backend
-        .list_keys(dict)?
-        .into_iter()
-        .filter_map(|k| k.parse::<u32>().ok())
-        .collect())
+pub(crate) fn list_keys_as_u32s(backend: &dyn KvBackend, dict: &str) -> Result<Vec<u32>, Error> {
+    Ok(backend.list_keys(dict)?.into_iter().filter_map(|k| k.parse::<u32>().ok()).collect())
 }
 
 /// Like [`backend_get_json`] but errors on missing key.
@@ -599,10 +561,9 @@ mod tests {
     /// `phone_number` and `profile_key` go in as their fully-typed
     /// serde representations (struct and byte array, respectively).
     fn fixture_registration() -> RegistrationData {
-        let phone_number =
-            serde_json::to_value(phonenumber::parse(None, "+15555550100").unwrap()).unwrap();
+        let phone_number = serde_json::to_value(phonenumber::parse(None, "+15555550100").unwrap()).unwrap();
         // RegistrationData::profile_key serializes as base64 (not a
-        // byte array) — see vendor/presage/presage/src/serde.rs
+        // byte array) — see presage/src/serde.rs (whisperfish/presage)
         // serde_profile_key. We deserialize from a fixed base64 string
         // here so the test doesn't depend on a particular encoding
         // detail of `ProfileKey::generate`.
@@ -650,10 +611,7 @@ mod tests {
             store.save_registration_data(&reg).await.unwrap();
             assert!(store.is_registered().await);
             let loaded = store.load_registration_data().await.unwrap().unwrap();
-            assert_eq!(
-                serde_json::to_value(&loaded).unwrap(),
-                serde_json::to_value(&reg).unwrap(),
-            );
+            assert_eq!(serde_json::to_value(&loaded).unwrap(), serde_json::to_value(&reg).unwrap(),);
         });
     }
 
@@ -671,20 +629,8 @@ mod tests {
             // through the dict.
             store.set_aci_identity_key_pair(aci_kp).await.unwrap();
             store.set_pni_identity_key_pair(pni_kp).await.unwrap();
-            assert!(
-                store
-                    .backend
-                    .get("signal.state", "aci_identity_key_pair")
-                    .unwrap()
-                    .is_some()
-            );
-            assert!(
-                store
-                    .backend
-                    .get("signal.state", "pni_identity_key_pair")
-                    .unwrap()
-                    .is_some()
-            );
+            assert!(store.backend.get("signal.state", "aci_identity_key_pair").unwrap().is_some());
+            assert!(store.backend.get("signal.state", "pni_identity_key_pair").unwrap().is_some());
         });
     }
 
@@ -729,15 +675,9 @@ mod tests {
         let profile = fixture_profile();
         block_on(async {
             assert!(store.profile(uuid, key).await.unwrap().is_none());
-            store
-                .save_profile(uuid, key, profile.clone())
-                .await
-                .unwrap();
+            store.save_profile(uuid, key, profile.clone()).await.unwrap();
             let loaded = store.profile(uuid, key).await.unwrap().unwrap();
-            assert_eq!(
-                serde_json::to_value(&loaded).unwrap(),
-                serde_json::to_value(&profile).unwrap(),
-            );
+            assert_eq!(serde_json::to_value(&loaded).unwrap(), serde_json::to_value(&profile).unwrap(),);
         });
     }
 
@@ -749,10 +689,7 @@ mod tests {
         let store_a = PddbStore::with_mock_backend();
         let mut store_b = store_a.clone();
         block_on(async {
-            store_b
-                .save_registration_data(&fixture_registration())
-                .await
-                .unwrap();
+            store_b.save_registration_data(&fixture_registration()).await.unwrap();
             assert!(store_a.is_registered().await);
         });
     }
@@ -767,18 +704,15 @@ mod tests {
     use presage::libsignal_service::protocol::{
         Aci, GenericSignedPreKey, IdentityKeyStore, KeyPair, KyberPreKeyId, KyberPreKeyRecord,
         KyberPreKeyStore, PreKeyId, PreKeyRecord, PreKeyStore, ProtocolAddress, SenderKeyRecord,
-        SenderKeyStore, SessionRecord, SessionStore, SignedPreKeyId, SignedPreKeyRecord,
-        SignedPreKeyStore, Timestamp, kem,
+        SenderKeyStore, SessionRecord, SessionStore, SignedPreKeyId, SignedPreKeyRecord, SignedPreKeyStore,
+        Timestamp, kem,
     };
     use presage::store::Store;
 
     fn registered_store() -> PddbStore {
         let mut store = PddbStore::with_mock_backend();
         block_on(async {
-            store
-                .save_registration_data(&fixture_registration())
-                .await
-                .unwrap();
+            store.save_registration_data(&fixture_registration()).await.unwrap();
         });
         store
     }
@@ -812,28 +746,19 @@ mod tests {
             let other_kp = IdentityKeyPair::generate(&mut rng);
             let other_id = *other_kp.identity_key();
             let change = aci.save_identity(&addr, &other_id).await.unwrap();
-            assert!(matches!(
-                change,
-                presage::libsignal_service::protocol::IdentityChange::NewOrUnchanged
-            ));
+            assert!(matches!(change, presage::libsignal_service::protocol::IdentityChange::NewOrUnchanged));
             let loaded = aci.get_identity(&addr).await.unwrap().unwrap();
             assert_eq!(loaded, other_id);
 
             // Saving the same identity again is NewOrUnchanged.
             let change = aci.save_identity(&addr, &other_id).await.unwrap();
-            assert!(matches!(
-                change,
-                presage::libsignal_service::protocol::IdentityChange::NewOrUnchanged
-            ));
+            assert!(matches!(change, presage::libsignal_service::protocol::IdentityChange::NewOrUnchanged));
 
             // Saving a different one is ReplacedExisting.
             let third_kp = IdentityKeyPair::generate(&mut rng);
             let third_id = *third_kp.identity_key();
             let change = aci.save_identity(&addr, &third_id).await.unwrap();
-            assert!(matches!(
-                change,
-                presage::libsignal_service::protocol::IdentityChange::ReplacedExisting
-            ));
+            assert!(matches!(change, presage::libsignal_service::protocol::IdentityChange::ReplacedExisting));
         });
     }
 
@@ -846,9 +771,7 @@ mod tests {
             for id_u32 in [1u32, 2, 3, 100] {
                 let kp = KeyPair::generate(&mut rng);
                 let record = PreKeyRecord::new(PreKeyId::from(id_u32), &kp);
-                aci.save_pre_key(PreKeyId::from(id_u32), &record)
-                    .await
-                    .unwrap();
+                aci.save_pre_key(PreKeyId::from(id_u32), &record).await.unwrap();
             }
             // Round-trip
             for id_u32 in [1u32, 2, 3, 100] {
@@ -871,10 +794,8 @@ mod tests {
         block_on(async {
             let mut aci = store.aci_protocol_store();
             let kp = KeyPair::generate(&mut rng);
-            let sig = identity_kp
-                .private_key()
-                .calculate_signature(&kp.public_key.serialize(), &mut rng)
-                .unwrap();
+            let sig =
+                identity_kp.private_key().calculate_signature(&kp.public_key.serialize(), &mut rng).unwrap();
             let id = SignedPreKeyId::from(7);
             let record = SignedPreKeyRecord::new(id, Timestamp::from_epoch_millis(1), &kp, &sig);
             aci.save_signed_pre_key(id, &record).await.unwrap();
@@ -892,8 +813,7 @@ mod tests {
             let mut aci = store.aci_protocol_store();
             let id = KyberPreKeyId::from(11);
             let record =
-                KyberPreKeyRecord::generate(kem::KeyType::Kyber1024, id, identity_kp.private_key())
-                    .unwrap();
+                KyberPreKeyRecord::generate(kem::KeyType::Kyber1024, id, identity_kp.private_key()).unwrap();
             aci.save_kyber_pre_key(id, &record).await.unwrap();
             assert!(aci.get_kyber_pre_key(id).await.is_ok());
 
@@ -914,11 +834,8 @@ mod tests {
             let mut aci = store.aci_protocol_store();
             let id = KyberPreKeyId::from(31);
             let record =
-                KyberPreKeyRecord::generate(kem::KeyType::Kyber1024, id, identity_kp.private_key())
-                    .unwrap();
-            aci.store_last_resort_kyber_pre_key(id, &record)
-                .await
-                .unwrap();
+                KyberPreKeyRecord::generate(kem::KeyType::Kyber1024, id, identity_kp.private_key()).unwrap();
+            aci.store_last_resort_kyber_pre_key(id, &record).await.unwrap();
 
             let ec_id = SignedPreKeyId::from(13);
             let base = KeyPair::generate(&mut rng).public_key;
@@ -985,9 +902,7 @@ mod tests {
             // record bytes.
             use presage::libsignal_service::protocol::create_sender_key_distribution_message;
             let _ = identity_kp; // unused in this construction
-            let _ = create_sender_key_distribution_message(&addr, dist_id, &mut aci, &mut rng)
-                .await
-                .unwrap();
+            let _ = create_sender_key_distribution_message(&addr, dist_id, &mut aci, &mut rng).await.unwrap();
 
             // Subsequent load returns Some.
             let loaded = aci.load_sender_key(&addr, dist_id).await.unwrap();
@@ -1018,12 +933,7 @@ mod tests {
 
             // Save id=5; next becomes 6.
             let kp = KeyPair::generate(&mut rng);
-            aci.save_pre_key(
-                PreKeyId::from(5),
-                &PreKeyRecord::new(PreKeyId::from(5), &kp),
-            )
-            .await
-            .unwrap();
+            aci.save_pre_key(PreKeyId::from(5), &PreKeyRecord::new(PreKeyId::from(5), &kp)).await.unwrap();
             assert_eq!(aci.next_pre_key_id().await.unwrap(), 6);
         });
     }
@@ -1038,19 +948,14 @@ mod tests {
             let aci_uuid = "00000000-0000-4000-8000-000000000040";
             let addr1 = fixture_address(aci_uuid, 1);
             let addr2 = fixture_address(aci_uuid, 2);
-            aci.store_session(&addr1, &SessionRecord::new_fresh())
-                .await
-                .unwrap();
-            aci.store_session(&addr2, &SessionRecord::new_fresh())
-                .await
-                .unwrap();
+            aci.store_session(&addr1, &SessionRecord::new_fresh()).await.unwrap();
+            aci.store_session(&addr2, &SessionRecord::new_fresh()).await.unwrap();
             store.flush_sessions().unwrap();
 
             // get_sub_device_sessions: should return [2] (excluding device 1 = main).
-            let aci_id =
-                ServiceId::Aci(presage::libsignal_service::protocol::Aci::from_uuid_bytes(
-                    Uuid::from_str(aci_uuid).unwrap().into_bytes(),
-                ));
+            let aci_id = ServiceId::Aci(presage::libsignal_service::protocol::Aci::from_uuid_bytes(
+                Uuid::from_str(aci_uuid).unwrap().into_bytes(),
+            ));
             let subs = aci_const.get_sub_device_sessions(&aci_id).await.unwrap();
             assert_eq!(subs.len(), 1);
             assert_eq!(u32::from(subs[0]), 2);
@@ -1089,9 +994,8 @@ mod tests {
             };
             store.save_contact(&contact).await.unwrap();
 
-            let aci = ServiceId::Aci(presage::libsignal_service::protocol::Aci::from_uuid_bytes(
-                uuid.into_bytes(),
-            ));
+            let aci =
+                ServiceId::Aci(presage::libsignal_service::protocol::Aci::from_uuid_bytes(uuid.into_bytes()));
             let loaded = store.contact_by_id(&aci).await.unwrap().unwrap();
             assert_eq!(loaded.name, "Test User");
 
@@ -1144,9 +1048,8 @@ mod tests {
             // Second save (same key): returns false.
             assert!(!store.upsert_profile_key(&uuid, pk).await.unwrap());
 
-            let aci = ServiceId::Aci(presage::libsignal_service::protocol::Aci::from_uuid_bytes(
-                uuid.into_bytes(),
-            ));
+            let aci =
+                ServiceId::Aci(presage::libsignal_service::protocol::Aci::from_uuid_bytes(uuid.into_bytes()));
             let loaded = store.profile_key(&aci).await.unwrap().unwrap();
             assert_eq!(loaded.get_bytes(), pk.get_bytes());
         });
@@ -1214,10 +1117,7 @@ mod tests {
 
         block_on(async {
             for ts in [100u64, 200, 300] {
-                store
-                    .save_message(&thread, build_content(ServiceId::Aci(aci), ts))
-                    .await
-                    .unwrap();
+                store.save_message(&thread, build_content(ServiceId::Aci(aci), ts)).await.unwrap();
             }
 
             // Single-message lookup.
@@ -1225,24 +1125,14 @@ mod tests {
             assert_eq!(msg.metadata.timestamp, 200);
 
             // Range query: 150..=250 → just 200.
-            let msgs: Vec<_> = store
-                .messages(&thread, 150u64..=250)
-                .await
-                .unwrap()
-                .collect();
+            let msgs: Vec<_> = store.messages(&thread, 150u64..=250).await.unwrap().collect();
             assert_eq!(msgs.len(), 1);
-            assert_eq!(
-                msgs.into_iter().next().unwrap().unwrap().metadata.timestamp,
-                200
-            );
+            assert_eq!(msgs.into_iter().next().unwrap().unwrap().metadata.timestamp, 200);
 
             // Range unbounded: all three, sorted.
             let msgs: Vec<_> = store.messages(&thread, ..).await.unwrap().collect();
             assert_eq!(msgs.len(), 3);
-            let timestamps: Vec<u64> = msgs
-                .into_iter()
-                .map(|r| r.unwrap().metadata.timestamp)
-                .collect();
+            let timestamps: Vec<u64> = msgs.into_iter().map(|r| r.unwrap().metadata.timestamp).collect();
             assert_eq!(timestamps, vec![100, 200, 300]);
 
             // Delete one.
@@ -1263,16 +1153,11 @@ mod tests {
         let pk = ProfileKey::generate([3u8; 32]);
         block_on(async {
             // Populate StateStore + ContentsStore + ProtocolStore.
-            store
-                .save_registration_data(&fixture_registration())
-                .await
-                .unwrap();
+            store.save_registration_data(&fixture_registration()).await.unwrap();
             store.upsert_profile_key(&uuid, pk).await.unwrap();
             let mut aci = store.aci_protocol_store();
             let addr = fixture_address("00000000-0000-4000-8000-000000000071", 1);
-            aci.store_session(&addr, &SessionRecord::new_fresh())
-                .await
-                .unwrap();
+            aci.store_session(&addr, &SessionRecord::new_fresh()).await.unwrap();
             store.flush_sessions().unwrap();
 
             assert!(store.is_registered().await);
@@ -1286,11 +1171,9 @@ mod tests {
             assert!(aci2.load_session(&addr).await.unwrap().is_none());
             assert!(
                 store
-                    .profile_key(&ServiceId::Aci(
-                        presage::libsignal_service::protocol::Aci::from_uuid_bytes(
-                            uuid.into_bytes()
-                        )
-                    ))
+                    .profile_key(&ServiceId::Aci(presage::libsignal_service::protocol::Aci::from_uuid_bytes(
+                        uuid.into_bytes()
+                    )))
                     .await
                     .unwrap()
                     .is_none()
@@ -1345,13 +1228,7 @@ mod tests {
             assert!(!store.is_send_batching());
 
             // The identity key was discarded by the abort.
-            assert!(
-                store
-                    .backend
-                    .get("signal.state", "aci_identity_key_pair")
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(store.backend.get("signal.state", "aci_identity_key_pair").unwrap().is_none());
             // Sentinel still present.
             assert_eq!(
                 store.backend.get("signal.state", "sentinel").unwrap().as_deref(),
@@ -1377,13 +1254,7 @@ mod tests {
             assert!(!store.is_send_batching());
 
             // Now visible in inner backend.
-            assert!(
-                store
-                    .backend
-                    .get("signal.state", "aci_identity_key_pair")
-                    .unwrap()
-                    .is_some()
-            );
+            assert!(store.backend.get("signal.state", "aci_identity_key_pair").unwrap().is_some());
         });
     }
 
@@ -1402,16 +1273,11 @@ mod tests {
 
         block_on(async {
             store.set_aci_identity_key_pair(local_kp).await.unwrap();
-            store
-                .save_registration_data(&fixture_registration())
-                .await
-                .unwrap();
+            store.save_registration_data(&fixture_registration()).await.unwrap();
 
             let peer_addr = ProtocolAddress::new(
                 Aci::from_uuid_bytes(
-                    Uuid::from_str("00000000-0000-4000-8000-0000000000ab")
-                        .unwrap()
-                        .into_bytes(),
+                    Uuid::from_str("00000000-0000-4000-8000-0000000000ab").unwrap().into_bytes(),
                 )
                 .service_id_string(),
                 1u32.try_into().unwrap(),

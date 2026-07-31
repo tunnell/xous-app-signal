@@ -39,9 +39,24 @@ probe-pddb = []
 # 2026-05-14 — they raced with xous-names server registration during
 # boot and crashed Precursor PVT2 hardware with a `ServerNotFound`
 # cascade. The bulk-write A/B benchmark now lives in shellchat as
-# `pddb bulk_probe`. See
-# research/2026-05-14-shellchat-probe-results.md.
+# `pddb bulk_probe` (user-invoked after PIN entry and PDDB mount);
+# the load-bearing NOTE in src/main.rs explains why no probe may
+# auto-fire after worker spawn.
 pddb-real = ["presage-store-pddb/pddb-backend"]
+
+# In-image TCP echo probe: after the worker spawns, main() starts a
+# `std::net::TcpListener` echo server on 127.0.0.1:7777 in one
+# thread and drives four client cases against it (three patterned
+# messages + one streamed 8 KiB payload), verifying byte-exact
+# echoes through the REAL on-target stack: libstd -> services/net ->
+# smoltcp loopback. Logs the `XAS-ECHO:` sentinel grammar asserted
+# by `xas-echo.robot`. The bundled kernel image must have its net
+# service built with `net/renode-minimal` (xous-core branch
+# `xas-integration-net`): smoltcp only gains its 127.0.0.1/8
+# interface address when an IPv4 config is applied, and on the
+# closed renode COM/WF200 setup no DHCP bind ever fires — the
+# feature seeds a static config at boot through the same handler.
+probe-echo = []
 
 # Probe that exercises `BufferingBackend` + `BatchGuard` against a
 # `MockBackend` (no real PDDB required). Drives a synthetic
@@ -52,18 +67,6 @@ pddb-real = ["presage-store-pddb/pddb-backend"]
 # Safe to enable on hardware: does NOT touch real PDDB, only the
 # in-memory MockBackend.
 probe-send-batch = []
-
-# Hardware auto-link probe.
-# When enabled (rv32-xous only), main() fires Cmd::LinkDevice after
-# worker spawn and renders a QR code on the LCD via xous-modals-ipc
-# (hand-rolled client over `services/modals`). User scans with the
-# Signal phone, taps any key to dismiss, link completes (or fails)
-# and the worker emits Event::LinkComplete / LinkError.
-#
-# Recommended build for hardware deploy:
-#   cargo build --target=riscv32imac-unknown-xous-elf --release \
-#               -p xous-app-signal --features pddb-real,auto-link
-auto-link = []
 
 # Build profiles for the two Xous environments.
 # Mirror the older xous-signal-client's pattern (Cargo.toml had its
@@ -102,10 +105,10 @@ xous-signal-worker = { path = "../xous-signal-worker" }
 presage-store-pddb = { path = "../presage-store-pddb" }
 async-channel = { workspace = true }
 
-# The stdin-UI fallback (used by main.rs when gam_app::run() can't
-# reach a Xous server) lives inline at src/stdin_ui/. It used to
-# be its own crate (xous-app-signal-ui) but the boundary didn't
-# earn its keep — only main.rs consumed it.
+# (The former stdin-UI fallback at src/stdin_ui/ was removed:
+# xas always runs inside a Xous environment now, and a failed
+# gam_app::run() is a hard startup error rather than a fallback
+# trigger.)
 
 # log facade. Boot events log::info! through here so the
 # Renode UART tester can assert on them. Hosted binds env_logger
@@ -123,9 +126,8 @@ log = "0.4"
 #
 # Unconditional (not target-cfg-gated): gam is needed for both the
 # hosted-Xous emulation (target=linux, running inside cargo xtask
-# run) AND rv32 hardware. The fallback for "running standalone with
-# no Xous infra" is detected at runtime: gam_app::run() returns
-# Err and main() falls back to stdin Ui::run.
+# run) AND rv32 hardware. There is no standalone/no-Xous mode:
+# if gam_app::run() returns Err, main() exits with the error.
 gam = { path = "../../../repos/xous-core/services/gam" }
 # Direct dep on graphics-server so we can fan out the
 # `precursor` feature → `utralib/precursor` (otherwise
@@ -156,12 +158,12 @@ xous-names = { package = "xous-api-names", version = "0.9.71" }
 # or surface a "connect Wi-Fi from shellchat" screen instead. Same
 # transitive dep set as gam — already in the build.
 com = { path = "../../../repos/xous-core/services/com" }
+llio = { path = "../../../repos/xous-core/services/llio" }
 com_rs = { git = "https://github.com/betrusted-io/com_rs", rev = "891bdd3ca8e41f81510d112483e178aea3e3a921" }
 
 # Menu actions: modals client for the device-name TextEntry
-# prompt + QR-code Notification on link. Same API as
-# `xous-modals-ipc` (which we keep for the rv32 auto-link path)
-# but uses the upstream gam-aware client directly.
+# prompt + QR-code Notification on link. Uses the upstream
+# gam-aware client directly.
 modals = { path = "../../../repos/xous-core/services/modals" }
 locales = { path = "../../../repos/xous-core/locales" }
 
@@ -207,11 +209,6 @@ xous-api-susres = { path = "../../../repos/xous-core/api/xous-api-susres" }
 flatipc = { path = "../../../repos/xous-core/libs/flatipc" }
 flatipc-derive = { path = "../../../repos/xous-core/libs/flatipc-derive" }
 
-# Hand-rolled modals IPC for the QR-code provisioning
-# screen. Used only when `auto-link` is enabled, but listed
-# unconditionally because Cargo features can't add target-cfg-gated
-# deps from a non-target-cfg-gated feature flag.
-xous-modals-ipc = { path = "../xous-modals-ipc" }
 # (utralib was added in a Phase C-3 first-attempt and removed when
-# u32e_backend turned out to be incompatible with the vendored
-# libsignal lizard port. Re-add when u32e is unblocked.)
+# u32e_backend turned out to be incompatible with the lizard port in
+# the curve25519-dalek fork. Re-add when u32e is unblocked.)

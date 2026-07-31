@@ -53,32 +53,23 @@
 //!
 //! Behavior:
 //!
-//! - `get` opens with `create_dict=false, create_key=false` and
-//!   reads the whole key into a `Vec<u8>`. Returns `Ok(None)` on
-//!   `NotFound`, the bytes on `Ok`, error otherwise.
-//! - `put` opens with `create_dict=true, create_key=true` and
-//!   writes the value. No client-side `flush_writes`: the PDDB
-//!   server's `Opcode::WriteKey` handler already calls
-//!   `basis_cache.sync(...)` on every write (see body for the
-//!   line-cite), so `WriteKeyFlush` is redundant. Releases the
-//!   handle on Drop.
-//! - `delete` and `delete_dict` are direct opcodes; `NotFound` on
-//!   delete is mapped to `Ok(())` (idempotent).
-//! - `list_keys` calls `KeyCountInDict` + `ListKeyV2` chain, returns
-//!   `Ok(Vec::new())` if the dict is empty, `NotFound` -> empty Vec
-//!   for upstream-compatible behavior.
+//! - `get` opens with `create_dict=false, create_key=false` and reads the whole key into a `Vec<u8>`. Returns
+//!   `Ok(None)` on `NotFound`, the bytes on `Ok`, error otherwise.
+//! - `put` opens with `create_dict=true, create_key=true` and writes the value. No client-side
+//!   `flush_writes`: the PDDB server's `Opcode::WriteKey` handler already calls `basis_cache.sync(...)` on
+//!   every write (see body for the line-cite), so `WriteKeyFlush` is redundant. Releases the handle on Drop.
+//! - `delete` and `delete_dict` are direct opcodes; `NotFound` on delete is mapped to `Ok(())` (idempotent).
+//! - `list_keys` calls `KeyCountInDict` + `ListKeyV2` chain, returns `Ok(Vec::new())` if the dict is empty,
+//!   `NotFound` -> empty Vec for upstream-compatible behavior.
 //!
 //! Design notes:
 //!
-//! - A single `Mutex<PddbClient>` shared via `Arc` across
-//!   [`crate::PddbStore`] clones (matching the
-//!   `PddbStore::clone()` shallow-share contract). The `Mutex`
-//!   serializes IPC requests; PDDB's server is itself
-//!   single-threaded so concurrent requests would queue anyway.
-//! - On `is_mounted() == false`, every operation returns
-//!   `Error::backend("PDDB not mounted")`. The store layer is
-//!   expected to surface this as a presage `StoreError` and the
-//!   caller (worker thread) decides whether to retry / wait.
+//! - A single `Mutex<PddbClient>` shared via `Arc` across [`crate::PddbStore`] clones (matching the
+//!   `PddbStore::clone()` shallow-share contract). The `Mutex` serializes IPC requests; PDDB's server is
+//!   itself single-threaded so concurrent requests would queue anyway.
+//! - On `is_mounted() == false`, every operation returns `Error::backend("PDDB not mounted")`. The store
+//!   layer is expected to surface this as a presage `StoreError` and the caller (worker thread) decides
+//!   whether to retry / wait.
 
 #![cfg(feature = "pddb-backend")]
 
@@ -161,9 +152,7 @@ impl PddbBackend {
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, PddbClient>, Error> {
-        self.client
-            .lock()
-            .map_err(|_| Error::backend("PDDB client mutex poisoned"))
+        self.client.lock().map_err(|_| Error::backend("PDDB client mutex poisoned"))
     }
 }
 
@@ -176,7 +165,9 @@ impl KvBackend for PddbBackend {
             Err(e) if e.kind == IpcErrorKind::NotFound => {
                 tracing::info!(
                     "perf/store: PddbBackend::get NotFound dict={:?} key={:?} ms={}",
-                    dict, key, _perf_start.elapsed().as_millis()
+                    dict,
+                    key,
+                    _perf_start.elapsed().as_millis()
                 );
                 return Ok(None);
             }
@@ -186,7 +177,10 @@ impl KvBackend for PddbBackend {
         read_all(&mut handle, &mut bytes).map_err(|e| Error::backend(format!("read: {}", e)))?;
         tracing::info!(
             "perf/store: PddbBackend::get Ok dict={:?} key={:?} len={} ms={}",
-            dict, key, bytes.len(), _perf_start.elapsed().as_millis()
+            dict,
+            key,
+            bytes.len(),
+            _perf_start.elapsed().as_millis()
         );
         Ok(Some(bytes))
     }
@@ -206,9 +200,8 @@ impl KvBackend for PddbBackend {
             Err(e) if e.kind == IpcErrorKind::NotFound => {}
             Err(e) => return Err(map_ipc_err(e, "put: pre-delete")),
         }
-        let mut handle = guard
-            .open(dict, key, OpenOptions::create_all())
-            .map_err(|e| map_ipc_err(e, "open for write"))?;
+        let mut handle =
+            guard.open(dict, key, OpenOptions::create_all()).map_err(|e| map_ipc_err(e, "open for write"))?;
         // No explicit `handle.flush()` here. The PDDB server's
         // `Opcode::WriteKey` handler at xous-core/services/pddb/src/
         // main.rs:2293-2294 already calls `basis_cache.sync(...)`
@@ -220,7 +213,10 @@ impl KvBackend for PddbBackend {
         handle.write_all(value).map_err(|e| Error::backend(format!("write: {}", e)))?;
         tracing::info!(
             "perf/store: PddbBackend::put dict={:?} key={:?} len={} ms={}",
-            dict, key, _perf_val_len, _perf_start.elapsed().as_millis()
+            dict,
+            key,
+            _perf_val_len,
+            _perf_start.elapsed().as_millis()
         );
         Ok(())
     }
@@ -237,12 +233,12 @@ impl KvBackend for PddbBackend {
         // upstream `Opcode::WriteKeyBatch` handler applies each entry
         // with `truncate=true` so the `delete_key` prelude we'd
         // otherwise need for #14 is unnecessary on the batch path.
-        let result = guard
-            .write_batch(entries)
-            .map_err(|e| map_ipc_err(e, "write_batch"));
+        let result = guard.write_batch(entries).map_err(|e| map_ipc_err(e, "write_batch"));
         tracing::info!(
             "perf/store: PddbBackend::put_batch n_entries={} total_bytes={} ok={} ms={}",
-            _perf_n, _perf_total, result.is_ok(),
+            _perf_n,
+            _perf_total,
+            result.is_ok(),
             _perf_start.elapsed().as_millis()
         );
         result
@@ -258,7 +254,9 @@ impl KvBackend for PddbBackend {
         };
         tracing::info!(
             "perf/store: PddbBackend::delete dict={:?} key={:?} ms={}",
-            dict, key, _perf_start.elapsed().as_millis()
+            dict,
+            key,
+            _perf_start.elapsed().as_millis()
         );
         result
     }
@@ -269,7 +267,8 @@ impl KvBackend for PddbBackend {
         let result = guard.delete_dict(dict).map_err(|e| map_ipc_err(e, "delete_dict"));
         tracing::info!(
             "perf/store: PddbBackend::delete_dict dict={:?} ms={}",
-            dict, _perf_start.elapsed().as_millis()
+            dict,
+            _perf_start.elapsed().as_millis()
         );
         result
     }
@@ -285,7 +284,9 @@ impl KvBackend for PddbBackend {
         let _perf_n = result.as_ref().map(|v| v.len()).unwrap_or(0);
         tracing::info!(
             "perf/store: PddbBackend::list_keys dict={:?} n={} ms={}",
-            dict, _perf_n, _perf_start.elapsed().as_millis()
+            dict,
+            _perf_n,
+            _perf_start.elapsed().as_millis()
         );
         result
     }
@@ -319,8 +320,6 @@ fn map_ipc_err(e: xous_pddb_ipc::Error, ctx: &str) -> Error {
         IpcErrorKind::NoFreeSpace => Error::backend(format!("{}: out of space", ctx)),
         IpcErrorKind::InvalidInput => Error::backend(format!("{}: invalid input ({})", ctx, e.msg)),
         IpcErrorKind::NotFound => Error::backend(format!("{}: not found", ctx)),
-        IpcErrorKind::Internal | IpcErrorKind::Ipc => {
-            Error::backend(format!("{}: {}", ctx, e.msg))
-        }
+        IpcErrorKind::Internal | IpcErrorKind::Ipc => Error::backend(format!("{}: {}", ctx, e.msg)),
     }
 }

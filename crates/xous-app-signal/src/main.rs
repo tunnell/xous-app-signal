@@ -2,38 +2,31 @@
 //!
 //! Sits at the top of the crate stack. From bottom to top:
 //!
-//! - `xous-net-bridge` — sync TLS + WSS + HTTPS transport, owns the
-//!   `Arc<ClientConfig>` for TLS-1.3 ticket resumption.
-//! - `presage-store-pddb` — `presage::Store` impl backed by Xous's
-//!   PDDB (real) or an in-memory mock (hosted).
-//! - `xous-signal-worker` — owns the `presage::Manager` on a
-//!   dedicated worker thread driven by `smol-rs::LocalExecutor`,
-//!   exposes a [`Cmd`] / [`Event`] async-channel surface.
-//! - This crate — UI (`gam_app::App` on hardware, `stdin_ui::Ui` on
-//!   hosted) wired to the worker via the two channels.
+//! - `xous-net-bridge` — sync TLS + WSS + HTTPS transport, owns the `Arc<ClientConfig>` for TLS-1.3 ticket
+//!   resumption.
+//! - `presage-store-pddb` — `presage::Store` impl backed by Xous's PDDB (real) or an in-memory mock (hosted).
+//! - `xous-signal-worker` — owns the `presage::Manager` on a dedicated worker thread driven by
+//!   `smol-rs::LocalExecutor`, exposes a [`Cmd`] / [`Event`] async-channel surface.
+//! - This crate — UI (`gam_app::App`, on hardware and hosted-Xous emulation) wired to the worker via the two
+//!   channels.
 //!
 //! The startup sequence is:
 //!
-//! 1. Wire up the rv32 TRNG-backed `getrandom` shim if compiling for
-//!    Xous; on hosted the OS RNG is used.
-//! 2. Construct a [`PddbStore`] (mock backend on hosted; real PDDB
-//!    behind the `pddb-backend` feature).
+//! 1. Wire up the rv32 TRNG-backed `getrandom` shim if compiling for Xous; on hosted the OS RNG is used.
+//! 2. Construct a [`PddbStore`] (mock backend on hosted; real PDDB behind the `pddb-backend` feature).
 //! 3. Spawn [`run_signal_worker`].
 //! 4. Hand the cmd/event channels to the UI and run.
-//! 5. The UI sends [`Cmd::Shutdown`] on quit; the worker drains and
-//!    emits `Event::ShuttingDown`.
+//! 5. The UI sends [`Cmd::Shutdown`] on quit; the worker drains and emits `Event::ShuttingDown`.
 //!
 //! See `docs/ARCHITECTURE.md` for the full data-flow walkthrough and
 //! `docs/UI.md` for the UI design.
 
 mod dialogue;
 mod gam_app;
-mod stdin_ui;
+mod store;
 
 use async_channel::bounded;
 use presage_store_pddb::PddbStore;
-#[cfg(not(all(feature = "auto-link", target_os = "xous")))]
-use stdin_ui::Ui;
 use xous_signal_worker::{Cmd, Event, run_signal_worker};
 
 /// `__getrandom_v03_custom` implementation backed by xous-core's
@@ -72,10 +65,7 @@ use xous_signal_worker::{Cmd, Event, run_signal_worker};
 /// for `len` bytes; this function only writes into `dest[..len]`.
 #[cfg(target_os = "xous")]
 #[unsafe(no_mangle)]
-unsafe extern "Rust" fn __getrandom_v03_custom(
-    dest: *mut u8,
-    len: usize,
-) -> Result<(), getrandom::Error> {
+unsafe extern "Rust" fn __getrandom_v03_custom(dest: *mut u8, len: usize) -> Result<(), getrandom::Error> {
     use std::cell::OnceCell;
     thread_local! {
         static TRNG: OnceCell<trng::Trng> = const { OnceCell::new() };
@@ -102,11 +92,7 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
             let mut buf = [0u32; 1020];
             trng.fill_buf(&mut buf[..chunk]).map_err(|_| getrandom::Error::UNSUPPORTED)?;
             unsafe {
-                core::ptr::copy_nonoverlapping(
-                    buf.as_ptr() as *const u8,
-                    dest.add(filled_bytes),
-                    chunk * 4,
-                );
+                core::ptr::copy_nonoverlapping(buf.as_ptr() as *const u8, dest.add(filled_bytes), chunk * 4);
             }
             filled_bytes += chunk * 4;
             remaining_words -= chunk;
@@ -119,11 +105,7 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
             let mut scratch = [0u32; 1];
             trng.fill_buf(&mut scratch).map_err(|_| getrandom::Error::UNSUPPORTED)?;
             unsafe {
-                core::ptr::copy_nonoverlapping(
-                    scratch.as_ptr() as *const u8,
-                    dest.add(filled_bytes),
-                    tail,
-                );
+                core::ptr::copy_nonoverlapping(scratch.as_ptr() as *const u8, dest.add(filled_bytes), tail);
             }
         }
 
@@ -147,20 +129,17 @@ unsafe extern "Rust" fn __getrandom_v03_custom(
 /// → unbounded memory on a poorly-behaved peer with high message
 /// flux. 16 is the negotiated middle: enough for a bursty receive
 /// from a chat the user just opened, small enough to keep the
-/// post-Drop bare-`String` body exposure window bounded (see A.1 /
-/// A.3 in `~/REFACTOR_NOTES.md`).
+/// post-Drop bare-`String` body exposure window bounded (SecretBox
+/// wrapping of message bodies is tracked in issue #37, item 3).
 const CHAN_CAP: usize = 16;
 
 /// Construct the [`PddbStore`] the worker will use.
 ///
 /// Selects backend based on feature flags:
 ///
-/// - default (hosted / smoke / probe-flow / probe-pddb): in-memory
-///   mock backend.
-/// - `pddb-real` on rv32-xous: real
-///   `PddbStore::with_pddb_backend`. On connect failure (PDDB
-///   service not yet up), logs a warning and falls back to mock so
-///   the binary still boots.
+/// - default (hosted / smoke / probe-flow / probe-pddb): in-memory mock backend.
+/// - `pddb-real` on rv32-xous: real `PddbStore::with_pddb_backend`. On connect failure (PDDB service not yet
+///   up), logs a warning and falls back to mock so the binary still boots.
 ///
 /// # Trust boundary
 ///
@@ -218,6 +197,9 @@ fn main() -> std::io::Result<()> {
     #[cfg(all(feature = "probe-send-batch", target_os = "xous"))]
     probe_send_batch();
 
+    #[cfg(feature = "probe-echo")]
+    probe_echo();
+
     // NOTE: load-bearing — there is no `probe-pddb-real` or
     // `probe-bulk-ab` auto-fire probe here. Calling
     // `presage_store_pddb::PddbBackend::connect()` immediately after
@@ -263,32 +245,10 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    // The auto-link feature drives the link flow + QR modal
-    // on real hardware. When enabled, we *replace* the regular UI
-    // loop — the auto-link probe is the UI for this build mode. On
-    // success, it logs LinkComplete details to UART and lets main()
-    // continue to the worker shutdown path.
-    #[cfg(all(feature = "auto-link", target_os = "xous"))]
-    auto_link(cmd_tx.clone(), event_rx.clone());
-
-    #[cfg(not(all(feature = "auto-link", target_os = "xous")))]
-    {
-        // Try to run as a real GAM-rendered Xous app first
-        // (works for both hosted Xous emulation and rv32 hardware
-        // when running inside a Xous environment). If we're not
-        // inside Xous (no xous-names server reachable, e.g.
-        // running standalone for unit tests), fall back to the
-        // stdin-driven hosted UI.
-        let cmd_tx_for_gam = cmd_tx.clone();
-        let event_rx_for_gam = event_rx.clone();
-        match gam_app::run(cmd_tx_for_gam, event_rx_for_gam) {
-            Ok(()) => {}
-            Err(e) => {
-                log::info!("xas: GAM UI unavailable ({}); falling back to stdin Ui", e);
-                Ui::new(cmd_tx, event_rx).run()?;
-            }
-        }
-    }
+    // Run as a GAM-rendered Xous app (hosted Xous emulation or rv32
+    // hardware). Requires a reachable Xous environment; a bare
+    // `cargo run` outside Xous errors out here.
+    gam_app::run(cmd_tx, event_rx).map_err(std::io::Error::other)?;
 
     // Worker has been told to shut down; join it. If the join hangs
     // it's a worker-side bug — surface as a nonzero exit, not a
@@ -305,8 +265,7 @@ fn main() -> std::io::Result<()> {
 /// already been installed, e.g. by a test harness).
 #[cfg(not(target_os = "xous"))]
 fn init_logger() {
-    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-        .try_init();
+    let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).try_init();
 }
 
 /// TCP-connect probe verifying Renode's WF200 wifi emulation
@@ -315,12 +274,11 @@ fn init_logger() {
 /// Three connect targets, each logged with elapsed time and
 /// result:
 ///
-/// 1. `8.8.8.8:53` — Google DNS over TCP. No DNS lookup needed;
-///    answers "is there any route to the internet".
-/// 2. `1.1.1.1:443` — Cloudflare HTTPS. Same shape as (1) but a
-///    different provider, in case route filtering is in play.
-/// 3. `chat.signal.org:443` — the real Signal endpoint. Requires
-///    DNS, so this also exercises the Xous `dns` service.
+/// 1. `8.8.8.8:53` — Google DNS over TCP. No DNS lookup needed; answers "is there any route to the internet".
+/// 2. `1.1.1.1:443` — Cloudflare HTTPS. Same shape as (1) but a different provider, in case route filtering
+///    is in play.
+/// 3. `chat.signal.org:443` — the real Signal endpoint. Requires DNS, so this also exercises the Xous `dns`
+///    service.
 ///
 /// Each probe has a 10-second timeout. Output goes to the same
 /// `INFO:xas:` stream the Robot smoke tests assert on.
@@ -345,12 +303,7 @@ fn probe_network() {
         let addrs: Result<Vec<SocketAddr>, _> = target.to_socket_addrs().map(|i| i.collect());
         match addrs {
             Err(e) => {
-                log::warn!(
-                    "probe: {} resolve FAIL after {:?}: {}",
-                    label,
-                    start.elapsed(),
-                    e
-                );
+                log::warn!("probe: {} resolve FAIL after {:?}: {}", label, start.elapsed(), e);
                 continue;
             }
             Ok(addrs) if addrs.is_empty() => {
@@ -361,12 +314,7 @@ fn probe_network() {
                 let addr = addrs[0];
                 match TcpStream::connect_timeout(&addr, timeout) {
                     Ok(_stream) => {
-                        log::info!(
-                            "probe: {} CONNECT OK to {} after {:?}",
-                            label,
-                            addr,
-                            start.elapsed()
-                        );
+                        log::info!("probe: {} CONNECT OK to {} after {:?}", label, addr, start.elapsed());
                     }
                     Err(e) => {
                         log::warn!(
@@ -385,6 +333,233 @@ fn probe_network() {
     log::info!("probe: network probe done");
 }
 
+/// In-image TCP echo probe — the first renode assertion where the
+/// network stack must actually WORK, not merely fail cleanly.
+///
+/// Spawns a `std::net::TcpListener` echo server on `127.0.0.1:7777`
+/// in one thread, then drives four client cases against it, one
+/// connection each:
+///
+/// 1. `msg-1`..`msg-3` — three short patterned messages, sequential write-then-read (payloads are far below
+///    the net service's per-socket 1530-byte (`NET_MTU`) rx/tx buffers, so no interleaving is needed).
+/// 2. `bulk-8k` — one 8192-byte position-derived pattern, STREAMED: a writer thread pushes while the probe
+///    thread reads the echo concurrently, sharing the socket via `impl Read/Write for &TcpStream`. 8 KiB
+///    exceeds the sum of all four in-path smoltcp socket buffers (4 x 1530 B), so a blind `write_all` before
+///    the first read would deadlock on echo back-pressure; concurrent one-socket rx/tx from two threads is
+///    also exactly the shape `xous-net-bridge::ws_pump` uses in production.
+///
+/// The client side is `std::net::TcpStream` directly, not
+/// `xous-net-bridge`: every bridge entry point is TLS-fused (no
+/// plain-TCP path until the issue #39 open/pump split), and the
+/// point of this stage is the on-target `std::net` → services/net →
+/// smoltcp path, which is byte-identical for the bridge once it
+/// opens its socket.
+///
+/// Sentinel grammar (asserted by `xas-echo.robot`):
+/// `XAS-ECHO: <name> PASS|FAIL ...` per case, then
+/// `XAS-ECHO DONE: pass=N fail=M`.
+///
+/// Kernel-image requirement: net service built with
+/// `net/renode-minimal` (xous-core branch `xas-integration-net`).
+/// smoltcp only gains its `127.0.0.1/8` interface address when an
+/// IPv4 config is applied (`WlanIpConfigUpdate` path), which never
+/// happens on the closed renode switch — the feature seeds a static
+/// config at boot through the same handler.
+#[cfg(feature = "probe-echo")]
+fn probe_echo() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Instant;
+
+    const ECHO_ADDR: &str = "127.0.0.1:7777";
+
+    log::info!("probe-echo: starting in-image TCP echo probe on {}", ECHO_ADDR);
+
+    // Deterministic case payloads. The bulk pattern is derived from the
+    // byte position so truncation, reordering, and offset errors all
+    // show up as a first-differing-offset, with no RNG dependency.
+    let bulk: Vec<u8> = (0..8192usize).map(|i| (i.wrapping_mul(31).wrapping_add(7) & 0xff) as u8).collect();
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        ("msg-1", b"xas-echo-1: the quick brown fox jumps over the lazy dog".to_vec()),
+        ("msg-2", b"xas-echo-2: 0123456789 abcdefghijklmnopqrstuvwxyz".to_vec()),
+        ("msg-3", b"xas-echo-3: ZYXWVUTSRQPONMLKJIHGFEDCBA 9876543210".to_vec()),
+        ("bulk-8k", bulk),
+    ];
+    let case_count = cases.len();
+
+    let listener = match TcpListener::bind(ECHO_ADDR) {
+        Ok(l) => l,
+        Err(e) => {
+            for (name, _) in &cases {
+                log::warn!("XAS-ECHO: {} FAIL (listener bind: {})", name, e);
+            }
+            log::info!("XAS-ECHO DONE: pass=0 fail={}", case_count);
+            return;
+        }
+    };
+
+    // Echo server: accept connections until the process exits, echoing
+    // each until EOF. The accept loop is deliberately unbounded — the
+    // warm-up below consumes a nondeterministic number of connections —
+    // so this thread parks in accept() forever once the probe is done.
+    // One leaked parked thread in a probe-only build, never joined.
+    std::thread::spawn(move || {
+        loop {
+            let (mut sock, peer) = match listener.accept() {
+                Ok(a) => a,
+                Err(e) => {
+                    log::warn!("probe-echo: server accept failed: {}", e);
+                    return;
+                }
+            };
+            log::info!("probe-echo: server accepted conn from {}", peer);
+            // NO read timeout on the server socket, and that is load-bearing:
+            // the net service's rx pump checks a blocked read's expiry
+            // BEFORE its CloseWait/Closed remote-hangup branch, so a read
+            // that carries a timeout is never woken early by the peer's
+            // FIN — it sleeps until the timer fires and only then reports
+            // EOF. With a timeout here, every client close would stall
+            // this single-threaded loop on the dead connection for the
+            // full ECHO_IO_TIMEOUT, serializing the next case behind it
+            // and starving that case past its own client-side read budget
+            // (observed on target: warm-up passes, then every real case
+            // times out). A timeout-less read IS woken promptly on
+            // CloseWait and returns Ok(0). A wedged connection is still
+            // bounded: every case's CLIENT socket carries
+            // ECHO_IO_TIMEOUT, so the case FAILs its sentinel and the
+            // robot aborts instead of hanging.
+            let _ = sock.set_write_timeout(Some(ECHO_IO_TIMEOUT));
+            let mut buf = [0u8; 1024];
+            loop {
+                match sock.read(&mut buf) {
+                    // Client closed: this connection is done.
+                    Ok(0) => {
+                        log::info!("probe-echo: server conn from {} closed (EOF)", peer);
+                        break;
+                    }
+                    Ok(n) => {
+                        if let Err(e) = sock.write_all(&buf[..n]) {
+                            log::warn!("probe-echo: server echo write failed: {}", e);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("probe-echo: server read failed: {}", e);
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Warm-up: the probe fires right after worker spawn, which can race
+    // the net service's renode-minimal static-IPv4 seed (until the seed
+    // lands, smoltcp has no 127.0.0.1/8 address and loopback connects
+    // fail fast with no route/address). Retry a throwaway connect until
+    // the stack carries one, then run the real cases.
+    let warmup_start = Instant::now();
+    let mut stack_ready = false;
+    while warmup_start.elapsed() < ECHO_WARMUP_BUDGET {
+        match run_echo_case(ECHO_ADDR, b"xas-echo-warmup") {
+            Ok(()) => {
+                stack_ready = true;
+                log::info!("probe-echo: stack ready after {:?}", warmup_start.elapsed());
+                break;
+            }
+            Err(e) => {
+                log::debug!("probe-echo: warm-up not ready ({}); retrying", e);
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
+    }
+    if !stack_ready {
+        log::warn!("probe-echo: stack not ready after {:?}", warmup_start.elapsed());
+    }
+
+    let mut pass = 0usize;
+    let mut fail = 0usize;
+    for (name, payload) in &cases {
+        let start = Instant::now();
+        match run_echo_case(ECHO_ADDR, payload) {
+            Ok(()) => {
+                pass += 1;
+                log::info!(
+                    "XAS-ECHO: {} PASS ({} bytes round-trip in {:?})",
+                    name,
+                    payload.len(),
+                    start.elapsed()
+                );
+            }
+            Err(e) => {
+                fail += 1;
+                log::warn!("XAS-ECHO: {} FAIL ({})", name, e);
+            }
+        }
+    }
+
+    log::info!("XAS-ECHO DONE: pass={} fail={}", pass, fail);
+}
+
+/// How long [`probe_echo`] retries its warm-up connect before giving
+/// up on the network stack coming ready. Boot-order slack only; on a
+/// healthy renode-minimal image the first or second attempt lands.
+#[cfg(feature = "probe-echo")]
+const ECHO_WARMUP_BUDGET: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// Per-call I/O bound for [`probe_echo`]'s CLIENT sockets (and the
+/// server's echo writes): generous next to loopback latency, small
+/// next to the robot's virtual-time budget, so a wedged case FAILs
+/// its sentinel instead of eating the wall-clock cap. Deliberately
+/// NOT applied to the server's reads — see the comment at the accept
+/// loop: a timeout'd read is never woken early by a remote close, so
+/// it would stall the loop for the full bound after every case.
+#[cfg(feature = "probe-echo")]
+const ECHO_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// One [`probe_echo`] client case: connect to `addr`, stream
+/// `payload` from a writer thread while this thread reads the echo,
+/// and verify the round-trip byte-exact.
+///
+/// The socket is shared between the two threads as `&TcpStream`
+/// through an `Arc` (std implements `Read`/`Write` on the
+/// reference), avoiding `try_clone()` — same sharing model
+/// `xous-net-bridge` uses. Dropping both `Arc`s closes the socket,
+/// which is the echo server's end-of-case signal.
+#[cfg(feature = "probe-echo")]
+fn run_echo_case(addr: &str, payload: &[u8]) -> Result<(), String> {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::sync::Arc;
+
+    let addr: SocketAddr = addr.parse().map_err(|e| format!("addr parse: {}", e))?;
+    let stream = TcpStream::connect_timeout(&addr, ECHO_IO_TIMEOUT).map_err(|e| format!("connect: {}", e))?;
+    stream.set_read_timeout(Some(ECHO_IO_TIMEOUT)).map_err(|e| format!("set_read_timeout: {}", e))?;
+    stream.set_write_timeout(Some(ECHO_IO_TIMEOUT)).map_err(|e| format!("set_write_timeout: {}", e))?;
+
+    let stream = Arc::new(stream);
+    let writer_stream = Arc::clone(&stream);
+    let to_send = payload.to_vec();
+    let writer = std::thread::spawn(move || -> Result<(), String> {
+        (&*writer_stream).write_all(&to_send).map_err(|e| format!("write: {}", e))
+    });
+
+    let mut echoed = vec![0u8; payload.len()];
+    let read_res = (&*stream).read_exact(&mut echoed).map_err(|e| format!("read: {}", e));
+    let write_res = writer.join().map_err(|_| "writer thread panicked".to_string())?;
+    write_res?;
+    read_res?;
+
+    if echoed != payload {
+        let first_bad = echoed.iter().zip(payload.iter()).position(|(a, b)| a != b);
+        return Err(format!(
+            "payload mismatch ({} bytes, first differing offset {:?})",
+            payload.len(),
+            first_bad
+        ));
+    }
+    Ok(())
+}
+
 /// Poll xous-core's PDDB Mount Poller via raw `xous` IPC and log
 /// the result.
 ///
@@ -396,14 +571,13 @@ fn probe_network() {
 /// returns a `Scalar1(0|1)` mount state.
 ///
 /// Outcomes:
-/// - `OK true` / `OK false` — IPC plumbing works; the value
-///   indicates whether the image auto-mounts or expects
-///   password-driven mount.
-/// - `connection refused` / no response — protocol drift (rkyv
-///   version, Buffer layout, or SID name mismatch).
+/// - `OK true` / `OK false` — IPC plumbing works; the value indicates whether the image auto-mounts or
+///   expects password-driven mount.
+/// - `connection refused` / no response — protocol drift (rkyv version, Buffer layout, or SID name mismatch).
 #[cfg(all(feature = "probe-pddb", target_os = "xous"))]
 fn probe_pddb() {
     use std::time::Instant;
+
     use xous::{Message, send_message};
 
     log::info!("probe-pddb: starting PDDB mount-poller probe");
@@ -425,11 +599,7 @@ fn probe_pddb() {
     let conn = match xns.request_connection_blocking("_PDDB Mount Poller_") {
         Ok(c) => c,
         Err(e) => {
-            log::warn!(
-                "probe-pddb: request_connection FAIL after {:?}: {:?}",
-                start.elapsed(),
-                e
-            );
+            log::warn!("probe-pddb: request_connection FAIL after {:?}: {:?}", start.elapsed(), e);
             return;
         }
     };
@@ -441,18 +611,10 @@ fn probe_pddb() {
     let resp = send_message(conn, Message::new_blocking_scalar(0, 0, 0, 0, 0));
     match resp {
         Ok(xous::Result::Scalar1(v)) => {
-            log::info!(
-                "probe-pddb: Poll OK is_mounted={} after {:?}",
-                v != 0,
-                poll_start.elapsed()
-            );
+            log::info!("probe-pddb: Poll OK is_mounted={} after {:?}", v != 0, poll_start.elapsed());
         }
         Ok(other) => {
-            log::warn!(
-                "probe-pddb: Poll unexpected response {:?} after {:?}",
-                other,
-                poll_start.elapsed()
-            );
+            log::warn!("probe-pddb: Poll unexpected response {:?} after {:?}", other, poll_start.elapsed());
         }
         Err(e) => {
             log::warn!("probe-pddb: Poll FAIL after {:?}: {:?}", poll_start.elapsed(), e);
@@ -461,7 +623,6 @@ fn probe_pddb() {
 
     log::info!("probe-pddb: probe done in {:?}", start.elapsed());
 }
-
 
 /// Exercise [`presage_store_pddb::BufferingBackend`] +
 /// [`presage_store_pddb::KvBackend`] semantics against a fresh
@@ -480,13 +641,11 @@ fn probe_pddb() {
 ///
 /// 1. Wrap a fresh `MockBackend` in a `BufferingBackend`.
 /// 2. `begin_batch` and confirm `is_batching` flips.
-/// 3. Three writes simulating a cold send (recipient identity,
-///    sender certificate, outbound message body).
+/// 3. Three writes simulating a cold send (recipient identity, sender certificate, outbound message body).
 /// 4. Intra-batch read-through (writes visible inside the batch).
 /// 5. Commit; confirm the replay count.
 /// 6. Post-commit reads (writes durable in the inner backend).
-/// 7. Abort path: open a second batch, write, drop without
-///    committing, verify the writes are gone.
+/// 7. Abort path: open a second batch, write, drop without committing, verify the writes are gone.
 #[cfg(all(feature = "probe-send-batch", target_os = "xous"))]
 fn probe_send_batch() {
     use std::sync::Arc;
@@ -519,15 +678,9 @@ fn probe_send_batch() {
     let phase = Instant::now();
     backend.put("signal.protocol.aci.identity", "peer.1", b"identity-bytes").unwrap();
     backend.put("signal.state", "sender_certificate", b"sender-cert-bytes").unwrap();
-    backend
-        .put("signal.contents.thread.peer", "00000000000186A0", b"hello world")
-        .unwrap();
+    backend.put("signal.contents.thread.peer", "00000000000186A0", b"hello world").unwrap();
     let buffered = guard.buffered_len();
-    log::info!(
-        "probe-send-batch: 3 writes buffered in {:?} (count={})",
-        phase.elapsed(),
-        buffered
-    );
+    log::info!("probe-send-batch: 3 writes buffered in {:?} (count={})", phase.elapsed(), buffered);
     if buffered != 3 {
         log::warn!("probe-send-batch: FAIL: expected 3 buffered, got {}", buffered);
         return;
@@ -554,11 +707,7 @@ fn probe_send_batch() {
         log::warn!("probe-send-batch: FAIL: still batching after commit");
         return;
     }
-    log::info!(
-        "probe-send-batch: commit OK in {:?} (replayed {})",
-        phase.elapsed(),
-        n
-    );
+    log::info!("probe-send-batch: commit OK in {:?} (replayed {})", phase.elapsed(), n);
 
     // --- 5. Post-commit reads.
     let r1 = backend.get("signal.protocol.aci.identity", "peer.1").unwrap();
@@ -582,151 +731,12 @@ fn probe_send_batch() {
     }
     let after_abort = backend.get("signal.state", "sender_certificate").unwrap();
     if after_abort.as_deref() != Some(b"sender-cert-bytes".as_slice()) {
-        log::warn!(
-            "probe-send-batch: FAIL: abort didn't restore inner ({:?})",
-            after_abort
-        );
+        log::warn!("probe-send-batch: FAIL: abort didn't restore inner ({:?})", after_abort);
         return;
     }
     log::info!("probe-send-batch: abort path OK");
 
     log::info!("probe-send-batch: probe done in {:?}", start.elapsed());
-}
-
-
-/// Hardware auto-link probe.
-///
-/// Sends `Cmd::LinkDevice` and drives the resulting event stream
-/// to either `Event::LinkComplete` or `Event::LinkError`. On
-/// `Event::LinkUrl(url)`, opens a `xous-modals-ipc` notification
-/// modal that displays the URL as a QR code (rendered by the
-/// upstream modals server's `notification.set_qrcode` call). The
-/// user scans the QR with their Signal phone and dismisses the
-/// modal; meanwhile the worker is parked on the provisioning
-/// WebSocket waiting for the encrypted envelope.
-///
-/// # Trust boundary
-///
-/// The provisioning URL is the link credential during its window.
-/// This probe displays it to the user via the modals service; the
-/// modal is shown on the local screen only and is not forwarded
-/// elsewhere. However, the `log::info!("auto-link: link URL =
-/// {}", url)` line below emits the URL to UART at info level —
-/// same leak surface as `xous_signal_worker`'s W-W.1
-/// (`~/REFACTOR_NOTES.md`). Both call sites are scheduled for the
-/// same fix (drop the URL from the log, retain only the length);
-/// see A.2 in `~/REFACTOR_NOTES.md`.
-///
-/// # Failure modes worth distinguishing in the UART log
-///
-/// - "No modals response" — the modals service is unreachable.
-///   In a stock image this means the build skipped `services/modals`;
-///   `cargo xtask app-image` always pulls it in.
-/// - `Event::LinkError(_)` — worker-side failure (DNS, TLS, WS,
-///   or libsignal protocol error). The reason string identifies
-///   the layer.
-/// - `Event::LinkComplete` — success. The ACI / phone fields are
-///   logged so the next flash iteration can verify
-///   `with_pddb_backend` actually persisted the registration.
-///
-/// # Security
-///
-/// The ACI / phone fields are PII; the modal that displays them
-/// is the same one the user just dismissed, so display-only on
-/// the device. The `log::info!` that records device / ACI / phone
-/// is structured for the audit trail but should still be redacted
-/// before forwarding logs off-device.
-#[cfg(all(feature = "auto-link", target_os = "xous"))]
-fn auto_link(cmd_tx: async_channel::Sender<Cmd>, event_rx: async_channel::Receiver<Event>) {
-    use xous_modals_ipc::ModalsClient;
-
-    log::info!("auto-link: starting");
-
-    let xns = match xous_names::XousNames::new() {
-        Ok(x) => x,
-        Err(e) => {
-            log::error!("auto-link: XousNames::new failed: {:?}", e);
-            return;
-        }
-    };
-    let trng_client = match trng::Trng::new(&xns) {
-        Ok(t) => t,
-        Err(e) => {
-            log::error!("auto-link: Trng::new failed: {:?}", e);
-            return;
-        }
-    };
-    let modals = match ModalsClient::new(&xns, &trng_client) {
-        Ok(m) => m,
-        Err(e) => {
-            log::error!("auto-link: ModalsClient::new failed: {}", e);
-            return;
-        }
-    };
-
-    let device_name = "xas-hardware-probe".to_string();
-    log::info!("auto-link: sending Cmd::LinkDevice {{ device_name = {:?} }}", device_name);
-    if let Err(e) = cmd_tx.send_blocking(Cmd::LinkDevice { device_name }) {
-        log::error!("auto-link: cmd_tx.send_blocking failed: {:?}", e);
-        return;
-    }
-
-    loop {
-        let event = match event_rx.recv_blocking() {
-            Ok(ev) => ev,
-            Err(e) => {
-                log::error!("auto-link: event_rx.recv_blocking failed: {:?}", e);
-                return;
-            }
-        };
-        match event {
-            Event::LinkUrl(url) => {
-                log::info!("auto-link: link URL = {}", url);
-                // Show the QR modal. Blocks until user presses any
-                // key — meanwhile the worker is parked on WS, so
-                // the order of (modal-dismiss, link-complete) can
-                // interleave either way; both events get drained
-                // by the loop.
-                if let Err(e) = modals.show_notification(
-                    "Scan with the Signal phone app, then press any key.",
-                    Some(&url),
-                ) {
-                    log::warn!("auto-link: QR modal failed: {}; continuing", e);
-                }
-            }
-            Event::LinkComplete { device_name, aci, phone } => {
-                log::info!(
-                    "auto-link: LinkComplete device={} aci={} phone={}",
-                    device_name, aci, phone
-                );
-                let summary = format!("Linked!\n  device: {}\n  aci:    {}\n  phone:  {}", device_name, aci, phone);
-                let _ = modals.show_notification(&summary, None);
-                break;
-            }
-            Event::LinkError(msg) => {
-                log::warn!("auto-link: LinkError: {}", msg);
-                let _ = modals.show_notification(
-                    &format!("Link failed: {}", msg),
-                    None,
-                );
-                break;
-            }
-            other => {
-                log::info!("auto-link: drained event {:?}", other);
-            }
-        }
-    }
-
-    // Tell the worker to shut down so main() can join it cleanly.
-    let _ = cmd_tx.send_blocking(Cmd::Shutdown);
-    // Drain remaining events so the worker can exit.
-    while let Ok(ev) = event_rx.recv_blocking() {
-        log::info!("auto-link: post-shutdown event {:?}", ev);
-        if matches!(ev, Event::ShuttingDown) {
-            break;
-        }
-    }
-    log::info!("auto-link: done");
 }
 
 /// Install a `log` implementation for rv32-xous builds.
@@ -742,6 +752,4 @@ fn auto_link(cmd_tx: async_channel::Sender<Cmd>, event_rx: async_channel::Receiv
 /// not panic — subsequent `log::*!` calls become no-ops, matching
 /// the surface of a binary that never installed a logger.
 #[cfg(target_os = "xous")]
-fn init_logger() {
-    let _ = xous_api_log::init_wait();
-}
+fn init_logger() { let _ = xous_api_log::init_wait(); }

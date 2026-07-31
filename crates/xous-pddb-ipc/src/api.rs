@@ -14,31 +14,25 @@
 //! address space, and returns the receiver's mutations on
 //! `lend_mut`. We trust:
 //!
-//! - the kernel for in-process isolation (only the named PDDB server
-//!   sees the lent page);
-//! - the PDDB server to honor the wire schema (it does, because we
-//!   are a wire-level subset of its own client crate).
+//! - the kernel for in-process isolation (only the named PDDB server sees the lent page);
+//! - the PDDB server to honor the wire schema (it does, because we are a wire-level subset of its own client
+//!   crate).
 //!
 //! We do **not** trust:
 //!
-//! - field values returned by the server beyond what the variant
-//!   discriminants in [`PddbRequestCode`] / [`PddbRetcode`] declare.
-//!   `PddbBuf::len` is range-checked by [`crate::client::KeyHandle`]
-//!   on every read.
+//! - field values returned by the server beyond what the variant discriminants in [`PddbRequestCode`] /
+//!   [`PddbRetcode`] declare. `PddbBuf::len` is range-checked by [`crate::client::KeyHandle`] on every read.
 //!
 //! # Wire format
 //!
 //! Two transport flavors:
 //!
-//! 1. **rkyv 0.8 `Archive`** for the variable-shape requests
-//!    ([`PddbKeyRequest`], [`PddbDictRequest`], [`PddbKeyList`],
-//!    [`PddbWriteBatch`]). The kernel lends a freshly-serialized
-//!    page; the server deserializes and re-serializes the same type
-//!    in place. The workspace pins rkyv 0.8.16; xous-core pins
+//! 1. **rkyv 0.8 `Archive`** for the variable-shape requests ([`PddbKeyRequest`], [`PddbDictRequest`],
+//!    [`PddbKeyList`], [`PddbWriteBatch`]). The kernel lends a freshly-serialized page; the server
+//!    deserializes and re-serializes the same type in place. The workspace pins rkyv 0.8.16; xous-core pins
 //!    0.8.8. rkyv promises wire compatibility inside the 0.8.x line.
-//! 2. **C-repr 4096-byte page** for [`PddbBuf`]. The server reads it
-//!    as a raw struct (no serialization). The buffer must be
-//!    page-aligned; see [`PddbBuf::from_slice_mut`].
+//! 2. **C-repr 4096-byte page** for [`PddbBuf`]. The server reads it as a raw struct (no serialization). The
+//!    buffer must be page-aligned; see [`PddbBuf::from_slice_mut`].
 //!
 //! # rv32 / 16 MiB constraint
 //!
@@ -121,15 +115,11 @@ pub type ApiToken = [u32; 3];
 /// `xous::Message::new_lend_mut` / `new_blocking_scalar`. Each
 /// variant pairs with a specific message kind:
 ///
-/// - Scalar (no buffer): [`Opcode::TryMount`],
-///   [`Opcode::WriteKeyFlush`], [`Opcode::KeyDrop`]; the poller
+/// - Scalar (no buffer): [`Opcode::TryMount`], [`Opcode::WriteKeyFlush`], [`Opcode::KeyDrop`]; the poller
 ///   server's [`PollOp::Poll`] uses opcode 0 on a different SID.
-/// - `MutableLend` (rkyv'd page): [`Opcode::KeyRequest`],
-///   [`Opcode::DeleteKey`], [`Opcode::DeleteDict`],
-///   [`Opcode::KeyCountInDict`], [`Opcode::ListKeyV2`],
-///   [`Opcode::WriteKeyBatch`].
-/// - `MutableLend` (raw [`PddbBuf`] page): [`Opcode::ReadKey`],
-///   [`Opcode::WriteKey`].
+/// - `MutableLend` (rkyv'd page): [`Opcode::KeyRequest`], [`Opcode::DeleteKey`], [`Opcode::DeleteDict`],
+///   [`Opcode::KeyCountInDict`], [`Opcode::ListKeyV2`], [`Opcode::WriteKeyBatch`].
+/// - `MutableLend` (raw [`PddbBuf`] page): [`Opcode::ReadKey`], [`Opcode::WriteKey`].
 #[derive(Debug, Clone, Copy, FromPrimitive, ToPrimitive)]
 #[repr(u32)]
 pub enum Opcode {
@@ -197,9 +187,12 @@ pub enum Opcode {
     /// Wire payload: [`PddbWriteBatch`] with `data` packed per the
     /// format documented on that type.
     ///
-    /// Added in `tunnell/xous-core@feat/pddb-bulk-write` (xous-core
-    /// commit `8f3894f2d`). The opcode number must match upstream
-    /// exactly — see `services/pddb/src/api.rs`.
+    /// Server side added in xous-core commit `8f3894f2d`, which
+    /// lives on `tunnell/xous-core` branch
+    /// `iter2-selective-dict-sync` — NOT on any deploy branch, so
+    /// callers must probe for the opcode and keep a per-entry
+    /// fallback. The opcode number must match that commit exactly —
+    /// see `services/pddb/src/api.rs`.
     WriteKeyBatch = 57,
 }
 
@@ -670,9 +663,7 @@ impl Error {
     /// Construct an error from a kind and a message. `msg` accepts
     /// anything implementing `Into<String>` so call sites can pass
     /// static `&str` or formatted `String` interchangeably.
-    pub fn new(kind: ErrorKind, msg: impl Into<String>) -> Self {
-        Self { kind, msg: msg.into() }
-    }
+    pub fn new(kind: ErrorKind, msg: impl Into<String>) -> Self { Self { kind, msg: msg.into() } }
 }
 
 impl std::fmt::Display for Error {

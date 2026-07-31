@@ -87,7 +87,7 @@ or a roadmap item (planned but not yet built).
 | Username (`@alice.42`) on Profile | ❌ | No API to read one's own Signal username in our build (RegistrationData has no username field; Profile struct has no username field). The primary phone holds that state |
 | Username lookup in "New chat" | ✅ | F1 → enter `name.42` → presage's `lookup_username` resolves to ACI; UI opens a Thread |
 | Phone-number lookup in "New chat" | ❌ | Needs CDSI which requires boring-sys (BoringSSL) — disabled in this build because it can't target rv32-xous |
-| Logout | ⚠️ | Stub today (tells the user to wipe PDDB manually); real implementation on roadmap |
+| Logout | ✅ | Settings → Logout: confirmation modal, then the worker wipes link state from the PDDB (`Cmd::Logout`) and the UI returns to the pre-link menu |
 | Multiple linked accounts | ❌ | Single-account device by design |
 | Primary registration (this device IS the primary) | ❌ | Out of scope. Secondary-device only — your phone stays primary |
 
@@ -152,49 +152,41 @@ it before running any flash command.
 
 ## Upstream patches
 
-xas depends on three upstream patches. All three have PRs filed
-upstream and are in review; until they merge, the
-`xous-app-signal` branch of [`tunnell/xous-core`](https://github.com/tunnell/xous-core)
-and the vendored copy of `libsignal-service-rs` carry the fixes.
+**Nothing xas needs is waiting on an upstream merge.** The two
+encoding bugs that originally forced a kernel fork are both fixed
+upstream: the net-service error-encoding mismatch
+([betrusted-io/xous-core#877](https://github.com/betrusted-io/xous-core/pull/877),
+merged 2026-06-02 as `2005a801c`) and its std-side twin
+([rust-lang/rust#156414](https://github.com/rust-lang/rust/pull/156414),
+merged; the kernel-side mirror covers the gap until it reaches a
+stable toolchain). The keepalive-tolerance PR
+([whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431))
+was closed unmerged by its author in 2026-07; its fix is a
+deliberate fork delta now, not a pending patch.
 
-1. **`betrusted-io/xous-core` net-service encoding fix** —
-   [betrusted-io/xous-core#877](https://github.com/betrusted-io/xous-core/pull/877).
-   The kernel writes `NetError` codes at byte 4 of the response
-   buffer; the Rust stdlib's Xous backend reads from byte 1 in
-   the recv path. The mismatch made `ErrorKind::TimedOut`
-   unreachable from `TcpStream::recv` — fatal for any
-   long-lived WS that uses `set_read_timeout` to interleave
-   reads and writes. The fix mirrors the code at byte 1 too.
-   `BUILDING.md` instructs you to clone the `xous-app-signal`
-   branch of `tunnell/xous-core` which carries this (the branch
-   is the upstream PR commit + the CNAME-chain DNS fix below + a
-   small hosted-mode PDDB tweak).
-2. **`whisperfish/libsignal-service-rs` keepalive tolerance** —
-   [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431) (draft).
-   Upstream closes the WS the moment any keepalive is
-   outstanding. Under any non-zero scheduling jitter (e.g.
-   rv32) this races and closes healthy connections. The PR adds
-   an opt-in `with_max_outstanding_keepalives(...)` constructor
-   so callers like xas can tolerate the race without changing
-   default behavior for other consumers. The patch lives in
-   `vendor/libsignal-service-rs/` in this repo as a constant
-   `MAX_OUTSTANDING_KEEPALIVES = 3` (semantically equivalent
-   for our use); the vendored copy will be re-aligned to the
-   builder shape after the upstream PR merges.
-3. **`rust-lang/rust` Xous std-side recv encoding** —
-   [rust-lang/rust#156414](https://github.com/rust-lang/rust/pull/156414) (draft).
-   The long-arc fix that makes #1 unnecessary at the std level —
-   change the recv decode to read byte 4 (matching the send
-   decode). Rust toolchain `r?` cycles take weeks; the
-   kernel-side mirror in #1 is the immediately-shippable
-   workaround. Once #3 lands and propagates to a stable Rust
-   release, the byte-1 mirror in #1 becomes belt-and-suspenders
-   rather than load-bearing.
+What xas deliberately carries that upstream doesn't have — pins
+and compare URLs in [docs/FORKS.md](docs/FORKS.md):
 
-Once #1 merges, BUILDING.md will be updated to point at stock
-`betrusted-io/xous-core`. PR #2's merge triggers a re-vendor of
-`libsignal-service-rs`. PR #3 is asynchronous and does not
-gate either of the above.
+- **Kernel fork** (`tunnell/xous-core`, branch `xas-integration` =
+  upstream `dev` + a small cherry-pick set; releases freeze it
+  into `xas-vN` tags — v0.2 builds use the frozen `xas-v0.2`
+  tag): the `apps/manifest.json` xas registration, the DNS
+  CNAME-chain fix, the quiet-socket reaper fixes (filed once as
+  [#880](https://github.com/betrusted-io/xous-core/pull/880),
+  closed pending the upstream Renode-CI net refactor), and a few
+  hosted-test conveniences.
+- **Crate forks**: keepalive tolerance + a sync transport layer
+  (`libsignal-service-rs`); tokio removal + a PNI-cipher fix
+  (`presage`); the lizard module port from signalapp's tree
+  (`curve25519-dalek`).
+
+Separately, a batch of maintainer PRs is open at
+`betrusted-io/xous-core` — the Renode net-CI suite
+[#918](https://github.com/betrusted-io/xous-core/pull/918) and
+eight pddb `std::fs` fixes #910–#917 — which came out of xas
+testing but stand on their own.
+
+---
 
 ---
 
@@ -206,14 +198,15 @@ xous-app-signal/
 │   ├── presage-store-pddb/     storage trait impls over PDDB
 │   ├── xous-net-bridge/        sync TLS + WS pump + channel bridge
 │   ├── xous-pddb-ipc/          hand-rolled PDDB IPC client
-│   ├── xous-modals-ipc/        hand-rolled modals IPC client
 │   ├── xous-signal-worker/     presage::Manager on worker thread + Cmd/Event channels
 │   ├── xous-app-signal/        binary entry point (binary name: `xas`)
-│       └── src/stdin_ui/       stdin-driven UI fallback for standalone runs (no Xous server)
-├── docs/                       ARCHITECTURE.md (reader's-eye-view of the codebase)
-├── tests/                      hosted-mode + Renode + precursor (hardware) test harnesses
-└── vendor/                     vendored forks of presage / libsignal-service-rs / curve25519-dalek
+├── docs/                       ARCHITECTURE.md (reader's-eye-view), FORKS.md (dependency fork pins)
+└── tests/                      hosted-mode + Renode + precursor (hardware) test harnesses
 ```
+
+The patched Signal-stack forks (presage, libsignal-service-rs,
+curve25519-dalek) are consumed as rev-pinned git dependencies,
+not in-tree copies — see [docs/FORKS.md](docs/FORKS.md).
 
 ---
 

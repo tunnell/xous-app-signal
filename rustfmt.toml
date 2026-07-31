@@ -1,0 +1,28 @@
+# Mirrors betrusted-io/xous-core's rustfmt.toml so xas code reads
+# like the ecosystem it targets. Applied repo-wide since the
+# mechanical `cargo +nightly fmt` commit (#48); CI runs the fmt
+# check as a hard gate, scoped with -p to the first-party crates.
+# (The former vendored trees and their ignore entry are gone — the
+# patched forks are rev-pinned git deps now; see docs/FORKS.md.)
+
+newline_style = "Unix"
+use_field_init_shorthand = true
+use_try_shorthand = true
+max_width = 110
+use_small_heuristics = "Max"
+
+# Unstable features below (require nightly rustfmt, like xous-core)
+unstable_features = true
+style_edition = "2024"
+comment_width = 110
+group_imports = "StdExternalCrate"
+normalize_doc_attributes = true
+format_code_in_doc_comments = true
+format_macro_bodies = true
+format_macro_matchers = true
+format_strings = false
+wrap_comments = true
+fn_single_line = true
+reorder_impl_items = true
+reorder_imports = true
+reorder_modules = true

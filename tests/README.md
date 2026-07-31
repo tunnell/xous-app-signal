@@ -75,7 +75,8 @@ Has historically not caught the bugs that bit us in production
 (those were all timing-, scheduling-, or net-encoding-related).
 **Not actively used in this project's day-to-day workflow.**
 
-**Run:** see [`tests/renode/`](renode/). Reach for it only when
+**Run:** `tests/renode/run-renode-tests.sh` — documented in
+BUILDING.md §2.7. Reach for it only when
 you have a bug that repros on rv32 but not in hosted, and you
 don't have a Precursor handy.
 
@@ -119,3 +120,13 @@ command.**
 
 If a release-cycle check fails, fix on `dev` and re-run — don't
 merge a partial release to `main`.
+
+## Verification norms
+
+Hosted PASS is a sanity check, not a ship gate. Real verification
+for kernel-, net-, or transport-affecting changes is **rv32
+hardware** (Pi rig flash + UART tail, [`tests/precursor/`](precursor/))
+or **Renode** (`tests/renode/run-renode-tests.sh`): cold-path
+timing, WS idle-close behavior, and the Xous custom allocator all
+diverge from hosted x86_64. When framing a fix as ready, name the
+target it was verified on.
