@@ -120,3 +120,13 @@ command.**
 
 If a release-cycle check fails, fix on `dev` and re-run — don't
 merge a partial release to `main`.
+
+## Verification norms
+
+Hosted PASS is a sanity check, not a ship gate. Real verification
+for kernel-, net-, or transport-affecting changes is **rv32
+hardware** (Pi rig flash + UART tail, [`tests/precursor/`](precursor/))
+or **Renode** (`tests/renode/run-renode-tests.sh`): cold-path
+timing, WS idle-close behavior, and the Xous custom allocator all
+diverge from hosted x86_64. When framing a fix as ready, name the
+target it was verified on.

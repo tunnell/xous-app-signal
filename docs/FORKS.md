@@ -61,7 +61,8 @@ against them. To audit a delta, open the compare URL or run
    + libsignal-service as a pair), regenerate `Cargo.lock`, update
    the matrix above, and run the full verification gate (hosted
    tests, net-bridge + store suites, rv32 build; transport-affecting
-   bumps need Renode/hardware evidence per AGENTS.md).
+   bumps need Renode/hardware evidence per the verification norms
+   in tests/README.md).
 4. At each xas release, tag the consumed rev in every fork as
    `xas-vX.Y` (same convention as the frozen `xous-core@xas-vX.Y`
    kernel branches) so release provenance survives branch churn.

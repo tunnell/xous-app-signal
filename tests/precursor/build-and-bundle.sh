@@ -29,8 +29,8 @@ fi
 
 # Preflight: gam's apps.rs must already register APP_NAME_XAS or the
 # cargo build will fail with E0425 (or, worse, succeed with a bundle
-# whose launcher doesn't see Signal — see AGENTS.md "trap 3" and
-# BUILDING.md §2.1 / §3.1). Most common cause: xous-core checked out
+# whose launcher doesn't see Signal — see BUILDING.md §2.1 and the
+# §3 branch-selection note). Most common cause: xous-core checked out
 # on a branch (e.g. dev) whose apps/manifest.json doesn't list xas.
 APPS_RS="$XOUS_CORE_DIR/services/gam/src/apps.rs"
 if [[ ! -f "$APPS_RS" ]] || ! grep -q '\bAPP_NAME_XAS\b' "$APPS_RS"; then

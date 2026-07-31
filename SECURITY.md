@@ -104,8 +104,8 @@ story above.
 
 ## Verification conventions
 
-Security-sensitive crates follow the rustdoc conventions in
-AGENTS.md (`# Trust boundary` / `# Security` / `# Errors` /
-`# Platform constraints` sections; zeroize + constant-time
-discipline). `docs/ARCHITECTURE.md` §7 holds the longer-form trust
+Security-sensitive crates follow these rustdoc conventions:
+`# Trust boundary` / `# Security` / `# Errors` /
+`# Platform constraints` sections, plus zeroize + constant-time
+discipline. `docs/ARCHITECTURE.md` §7 holds the longer-form trust
 narrative and §12 the mechanically checkable invariants.

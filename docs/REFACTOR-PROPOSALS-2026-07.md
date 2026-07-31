@@ -239,5 +239,5 @@ warning-set diff, `cargo test -- --list` diff, hosted 53/53,
 net-bridge + store suites, rv32 release build. Log lines are a
 de-facto public API until #12 lands — enumerate the grepped contract
 before renaming any log prefix. Transport changes additionally need
-Renode or hardware evidence per AGENTS.md (hosted PASS is a sanity
-check, not a ship gate).
+Renode or hardware evidence per tests/README.md's verification
+norms (hosted PASS is a sanity check, not a ship gate).
