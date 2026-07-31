@@ -202,9 +202,11 @@ step requires a 25-minute flash:
    Set `FOLLOW=0` for a one-shot last-200-lines snapshot.
 
 6. **On the device:** unlock PDDB → join Wi-Fi (shellchat:
-   `wlan off` → `wlan on` → `ssid scan` → `wlan status` until
-   Connected; 2.4 GHz networks only — see BUILDING.md §3.4) →
-   open xas → exercise the feature you're testing.
+   `wlan off` → `wlan on` → `ssid scan`; first time on a network
+   also `wlan setssid <ssid>` → `wlan setpass <pass>` → `wlan save`;
+   then `wlan status` until Connected; 2.4 GHz networks only — see
+   BUILDING.md §3.4) → open xas → exercise the feature you're
+   testing.
 
 7. **Analyze the UART log.** If reproducing a bug, diff against
    a known-good baseline (see "Capturing a baseline" below). If
@@ -296,6 +298,11 @@ your test design around what UART can show.
   parser accepts it but nothing reads it — the device resets after
   every completed invocation regardless. Keep passing it (all
   recipes here do) in case the tool later gates the reset on it.
+
+- **UART capture logs contain binary junk** (stray NULs/garbage
+  bytes from the reset transient), so plain `grep` may decide the
+  log is a binary file and print nothing (or just "binary file
+  matches"). Use `grep -a` when filtering captured UART logs.
 
 - **Stale screen session:** if a script crashes and leaves a
   broken `uart` screen session, kill it manually:

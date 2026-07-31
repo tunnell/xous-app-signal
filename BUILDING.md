@@ -854,9 +854,15 @@ When the Precursor boots into Xous:
    wlan off
    wlan on
    ssid scan
+   wlan setssid <your-ssid>       # first time on this network only
+   wlan setpass <your-passphrase>
+   wlan save       # persists to PDDB + (re)starts the connection manager
    wlan status     # poll until "Connected"
    net ping 1.1.1.1   # sanity-check IP works
    ```
+   `wlan save` is what actually joins: `setssid`/`setpass` pause the
+   connection manager while you type. `wlan known` lists networks
+   already saved in the PDDB (skip the credential lines for those).
    **Use a 2.4 GHz network only** — Precursor's WF200 radio is
    single-band 802.11 b/g/n. 5 GHz networks won't appear in
    `ssid scan`. Phone hotspots default to 5 GHz now; force
