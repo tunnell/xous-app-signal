@@ -308,6 +308,14 @@ your test design around what UART can show.
   log is a binary file and print nothing (or just "binary file
   matches"). Use `grep -a` when filtering captured UART logs.
 
+- **A long PDDB delete looks exactly like a hang.** `delete_dict`
+  overwrites every freed page and rewrites page-table entries through
+  the `mbbb` shuffle; the per-key work logs at `trace`/`debug`, so
+  after the handful of `erasing dk page` lines the UART goes silent
+  for the rest of the operation. Budget ~25 flash sector ops per
+  17 KiB record (~100 ms each on PVT2) before calling it dead, and
+  never power-cycle a device mid-wipe.
+
 - **Stale screen session:** if a script crashes and leaves a
   broken `uart` screen session, kill it manually:
   ```sh
