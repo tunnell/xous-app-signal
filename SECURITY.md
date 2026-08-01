@@ -53,8 +53,9 @@ with the code in this tree plus its trust assumptions below.
    Known gaps).
 5. **Physical access with bus probing / side channels** (RAM
    readout, timing, suspend-state capture). Partially addressed:
-   this is the tier the hardening backlog targets
-   (docs/REFACTOR-PROPOSALS-2026-07.md §4, formerly issue #37) —
+   this is the tier the hardening backlog targets (the security
+   backlog in docs/REFACTOR-PROPOSALS-2026-07.md, formerly
+   issue #37) —
    zeroization, constant-time compares, secret wrapping. Reports
    welcome, fixes prioritized behind tier 1-4 issues.
 6. **Compromised Xous kernel, malicious gateware, or a compromised
@@ -92,8 +93,9 @@ someone holding the device.
 
 ## Known gaps (accepted, tracked)
 
-The maintainer's hardening backlog is public:
-docs/REFACTOR-PROPOSALS-2026-07.md §4, formerly issue #37 (log
+The maintainer's hardening backlog is public: the security
+backlog section of docs/REFACTOR-PROPOSALS-2026-07.md, formerly
+issue #37 (log
 redaction of PII, SecretBox/zeroization of message bodies and key
 material, logout wipe completeness — also #9, panic handling on the
 send path, typed errors, lint tiers). A report that duplicates a
@@ -107,5 +109,6 @@ story above.
 Security-sensitive crates follow these rustdoc conventions:
 `# Trust boundary` / `# Security` / `# Errors` /
 `# Platform constraints` sections, plus zeroize + constant-time
-discipline. `docs/ARCHITECTURE.md` §7 holds the longer-form trust
-narrative and §12 the mechanically checkable invariants.
+discipline. The longer-form trust narrative is the "Trust +
+threat model" section of `docs/ARCHITECTURE.md`; the mechanically
+checkable invariants are its closing section.
