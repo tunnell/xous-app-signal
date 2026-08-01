@@ -860,7 +860,9 @@ itself works the same.
 When the Precursor boots into Xous:
 
 1. **Unlock PDDB**: enter your PDDB password (set once on first
-   boot; change with the `pddb` shellchat command).
+   boot; change with the `pddb` shellchat command). To pick that
+   password without trusting a digital RNG, roll it from dice or
+   coins with [ortolan](https://github.com/tunnell/ortolan).
 2. **Wi-Fi**: switch to shellchat from the launcher and run
    **in this exact order**:
    ```
