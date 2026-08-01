@@ -4,14 +4,10 @@ Date: 2026-07-06. Successor to the 2026-05-09 post-MVP review
 (`docs/REFACTOR-PROPOSALS.md` at `f5f046b`, since acted on and
 deleted — P1/P2/P3/P5/P7/P9 landed; P4/P6/P8 fold into items below).
 
-Method: an AI-assisted multi-agent review — parallel deep-reads of
-all six first-party crates, the issue tracker (26 issues / 13 PRs),
-betrusted-io/xous-core PRs and app conventions (mtxchat, libs/chat,
-sigchat), and the xous-book — followed by adversarial verification
-of every proposal against the code at `refactor/worker-op-channel`
-HEAD `d55281d`. Verdicts: 4 confirmed, 8 confirmed-with-corrections,
-0 refuted. Disclosure per README's contribution policy: drafted with
-AI agents; every claim carries a file:line cite a reviewer can check.
+Reviewed against the code at `refactor/worker-op-channel` HEAD
+`d55281d`; every claim cites a file:line a reviewer can check.
+Drafted with the help of a coding agent, per the README's
+contribution policy.
 
 Facts that changed the plan (all verified against GitHub 2026-07-06):
 
@@ -167,7 +163,7 @@ reduces to the FORKS.md maintenance cadence.
 
 The v1 security/hardening umbrella (issue #37, closed 2026-07-25 when
 roadmap tracking moved from the issue tracker into this document)
-carried ten prioritized items from the post-v0.2 deep-read. Three
+carried ten prioritized items from the post-v0.2 review. Three
 exited earlier: item 9 shipped as SECURITY.md (PR #51), item 10 is
 proposal 1.1 (typed WorkerError), item 4 is proposal 2.2 (logout
 drain-then-wipe).
