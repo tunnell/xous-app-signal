@@ -44,8 +44,8 @@ written, the document is wrong — please open an issue.
   install with `cargo xtask install-toolkit` (§1.5).
 - A **Precursor PVT2** (the RISC-V hardware device).
 - A **USB-C cable** that supports data (not power-only).
-- **USB access to `1209:5bf0`.** Rule (any of
-  `/etc/udev/rules.d/99-precursor.rules`):
+- **USB access to `1209:5bf0`.** Rule, in
+  `/etc/udev/rules.d/70-precursor.rules`:
   ```
   SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="5bf0", TAG+="uaccess"
   SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="3613", TAG+="uaccess"
@@ -53,6 +53,9 @@ written, the document is wrong — please open an issue.
   then `udevadm control --reload && udevadm trigger` (a reload alone
   misses an already-plugged device). `TAG+="uaccess"` works where
   `GROUP="plugdev"` does not — Arch and Fedora have no `plugdev`.
+  The filename must sort before `73-seat-late.rules`, which is what
+  turns the tag into an ACL
+  ([systemd#4288](https://github.com/systemd/systemd/issues/4288#issuecomment-348166161)).
   **Containers:** the rule belongs on the host, and the container
   needs the bus mounted (`--device`, or `-v /dev/bus/usb:/dev/bus/usb`
   for podman/distrobox); flashing from a toolbox otherwise fails with
@@ -931,7 +934,7 @@ When the Precursor boots into Xous:
 | `lsusb \| grep 1209` shows `1209:3613` not `1209:5bf0` | Precursor in running mode, not loader | Easiest: main menu → "Lock device (reboot)" — reboots into the loader (verified 2026-07-31). Hardware fallback: hold left-side button + paperclip-reset |
 | `failed to read .../repos/xous-core/services/trng/Cargo.toml` (cargo build, very early) | `repos/xous-core` symlink missing or in the wrong place | See section 1 — symlink lives at `<workspace-parent>/repos/xous-core`, *not* inside `xous-app-signal/`. Run `ln -s ../xous-core repos/xous-core` from the workspace parent. |
 | `error[E0583]: file not found for module 'apps'` in `services/gam/src/lib.rs` | `gam/src/apps.rs` not bootstrapped | See section 2.1 — write `apps.rs` by hand (with `APP_NAME_XAS`) before the standalone hosted build. |
-| `usb_update.py` permission denied (Linux host) | udev rule missing | Write `/etc/udev/rules.d/99-precursor.rules` with `SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="5bf0", MODE="0666", GROUP="plugdev"` plus an identical line for idProduct `3613`, then `udevadm control --reload`. (A `tools/49-precursor.rules` referenced by earlier revisions does not exist in xous-core.) Sudo works as a last resort (not recommended) |
+| `usb_update.py` permission denied (Linux host) | udev rule missing, or in a file that sorts after `73-seat-late.rules` | §0 "USB access to `1209:5bf0`" — use the filename given there. Sudo works as a last resort (not recommended) |
 | Hosted xas shows "OOM during link" | Default heap cap too low | Run with `RUST_LOG=info` to see allocator messages; rebuild with `--features pddb-real,hosted` (the dist build is otherwise too lean) |
 | Link fails with `invalid peer certificate: NotValidYet` (Wi-Fi and `net ping` are fine) | Device clock unset — fresh devices ship with no RTC/timezone offsets | §3.4 step 3: Preferences → Set Timezone / Set Time, then retry the link |
 | Link fails **after** the QR scan: `HTTP 409` on `PUT /v1/devices/link` (may surface as "response body could not be deserialized") | Signal linked-device limit reached (max 5); stale test links hold slots | Phone → Settings → Linked Devices → remove old entries (each `xas` test link counts), then retry — a fresh QR is generated per attempt |
