@@ -17,3 +17,6 @@ snapshots/
 
 # Per-robot renode-test results (run-renode-tests.sh -r dirs)
 tests/renode/renode-results/
+
+# Untracked research/scratch area (planning evidence, spike reports)
+ignore/
