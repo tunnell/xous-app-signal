@@ -57,8 +57,13 @@ summary of its own diff, nothing a reader takes on faith. Someone who
 has never heard of udev still learns what broke and why.
 
 **Titles** carry a conventional-commit prefix (`fix(ui):`, `docs:`,
-`perf(pddb):`) because the title becomes the commit subject on merge.
-Imperative mood, no trailing period, under about 72 characters. This
+`perf(pddb):`), matching the commit subjects underneath them. We merge
+with merge commits rather than squashing, so the title is not itself
+recorded in git — it is what people scan the PR list by, which is
+reason enough to make it say something. Imperative mood, no trailing
+period, under about 72 characters. A title should name the effect, not
+the file touched: "a wipe takes minutes, not a minute" beats "update
+modal string". This
 is a local convention — 35 of the first 41 PRs here follow it, while
 xous-core upstream uses bare lowercase subjects. Keep it inside xas;
 drop it when sending a patch upstream.
