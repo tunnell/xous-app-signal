@@ -536,8 +536,7 @@ impl PddbClient {
     /// boundary into the PDDB server's address space inside the
     /// page-lent buffer; the buffer is allocated locally, copied
     /// into via `copy_from_slice`, and dropped when this method
-    /// returns. No explicit zeroization runs on Drop today — see
-    /// workspace recommendation W4 in `~/REFACTOR_NOTES.md`.
+    /// returns. No explicit zeroization runs on Drop today.
     ///
     /// Not atomic across entries. If entry N fails, entries `0..N`
     /// have already been applied; the trailing sync still runs, so
@@ -712,8 +711,7 @@ impl OpenOptions {
 /// internal buffer is reused across calls and is not explicitly
 /// zeroized between operations or on Drop; the previous payload
 /// remains in the buffer's backing page until overwritten or until
-/// the kernel reclaims the page. See workspace recommendation W4 in
-/// `~/REFACTOR_NOTES.md`.
+/// the kernel reclaims the page.
 ///
 /// `KeyHandle` operates on opaque PDDB record bytes; no
 /// constant-time guarantee is required nor provided.
@@ -763,9 +761,8 @@ impl<'a> KeyHandle<'a> {
     ///    boundary again.
     ///
     /// This call does **not** witness durability — `Ok(())` only
-    /// guarantees the server reported `PddbRetcode::Ok`. See the
-    /// `[design] commit witness` item in `~/REFACTOR_NOTES-pddb.md`
-    /// for the type-state version recommended for v1.
+    /// guarantees the server reported `PddbRetcode::Ok`. A type-state
+    /// commit-witness version is a possible future refinement.
     ///
     /// # Errors
     ///
@@ -924,8 +921,7 @@ impl<'a> Write for KeyHandle<'a> {
     /// handle's reusable internal buffer via `copy_from_slice` and
     /// page-lent to the PDDB server; on return the buffer retains
     /// the bytes until overwritten or until the handle is dropped.
-    /// The kernel does not zero the page on Drop. See workspace
-    /// recommendation W4 in `~/REFACTOR_NOTES.md`.
+    /// The kernel does not zero the page on Drop.
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -994,8 +990,7 @@ impl<'a> Drop for KeyHandle<'a> {
         // released on its own Drop; the kernel does not zero
         // freed pages either. Secret bytes that flowed through
         // this handle may sit in the freed page until the
-        // allocator hands it out again. See W4 in
-        // ~/REFACTOR_NOTES.md.
+        // allocator hands it out again.
         let _ = send_message(
             self.conn,
             Message::new_blocking_scalar(

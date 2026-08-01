@@ -26,8 +26,7 @@
 //!   not zero on drop.
 //!
 //! Treat `delete_session` as "best-effort durable forget", not as a
-//! cryptographic wipe. For a stronger wipe primitive see
-//! REFACTOR_NOTES sec-C.
+//! cryptographic wipe.
 
 use async_trait::async_trait;
 use presage::libsignal_service::prelude::SessionStoreExt;

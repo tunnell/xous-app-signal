@@ -112,9 +112,8 @@ pub enum Cmd {
     /// # Logging
     ///
     /// The worker emits `body_len` (length only, never the body
-    /// itself) to its log pipeline. `recipient` is logged in full —
-    /// see `xous-signal-worker` REFACTOR_NOTES for the logging-discipline
-    /// audit item covering recipient/ACI emission.
+    /// itself) to its log pipeline. `recipient` is logged in full — a
+    /// known logging-discipline issue covering recipient/ACI emission.
     SendMessage { recipient: String, body: String, timestamp: u64 },
 
     /// Read account-identity info from the loaded Manager and
@@ -164,13 +163,13 @@ pub enum Cmd {
     /// operator currently has.
     ///
     /// `presage_store_pddb`'s `Store::clear` is not atomic across
-    /// dictionaries (see `presage-store-pddb/src/store.rs::clear`
-    /// and `~/REFACTOR_NOTES.md` PS.sec-E): a mid-clear error leaves
+    /// dictionaries (see `presage-store-pddb/src/store.rs::clear`):
+    /// a mid-clear error leaves
     /// `session_cache` and `session_dirty` partially populated, and
     /// downstream the PDDB free-list does **not** zero pages on
-    /// dictionary delete (PS.sec-C). Acquiring the flash post-wipe
+    /// dictionary delete. Acquiring the flash post-wipe
     /// can therefore recover ciphertext that the API surface
-    /// presents as gone. The W-W.7 refactor to surface partial-wipe
+    /// presents as gone. A future refactor to surface partial-wipe
     /// success per dictionary depends on this clear-semantics
     /// contract; the secure-erase opcode the PDDB team would expose
     /// is the deeper fix.
@@ -273,9 +272,8 @@ pub enum Event {
     /// - Render directly to the user's display only; do not stage it through any in-memory buffer that may be
     ///   later dumped.
     ///
-    /// See `xous-signal-worker` REFACTOR_NOTES for the audit item
-    /// covering the current UART emission of this URL inside
-    /// `handle_link_device`.
+    /// A known audit item covers the current UART emission of this
+    /// URL inside `handle_link_device`.
     LinkUrl(String),
 
     /// Linking succeeded. The worker has just transitioned to
@@ -353,8 +351,7 @@ pub enum Event {
     /// 2. The string MUST NOT be logged or persisted outside the PDDB-backed `Store`. The worker itself logs
     ///    only the variant kind and `body_len`, never the body.
     /// 3. The string lives in RAM only — `Drop` of this struct deallocates without zeroizing. Defense in
-    ///    depth would require a `Zeroizing<String>` wrapper here; out of scope for the channel surface but
-    ///    flagged in REFACTOR_NOTES.
+    ///    depth would require a `Zeroizing<String>` wrapper here; out of scope for the channel surface.
     Message {
         /// `service_id_string()` of the sender — the thread key the
         /// UI groups conversations by. libsignal-authenticated; see

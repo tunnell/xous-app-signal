@@ -59,7 +59,7 @@
 //! `KyberPreKeyRecord`/`PreKeyRecord`/`SignedPreKeyRecord` derive
 //! `Zeroize` for their inner private-key bytes). The `Vec<u8>` /
 //! `Vec<(u32, Vec<u8>)>` copies this module holds during
-//! load/serialize do **not** zero on drop — see REFACTOR_NOTES.
+//! load/serialize do **not** zero on drop.
 //!
 //! # Logging
 //!

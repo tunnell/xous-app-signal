@@ -39,7 +39,7 @@
 //! All read/write paths return / accept `Vec<u8>` that do not zero
 //! on drop. The `MasterKey` and the `password` field inside
 //! `RegistrationData` are the values most worth wrapping in
-//! `secrecy::SecretBox`; see REFACTOR_NOTES sec-D.
+//! `secrecy::SecretBox`.
 //!
 //! Serialization choices:
 //!

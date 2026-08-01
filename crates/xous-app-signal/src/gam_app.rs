@@ -898,9 +898,8 @@ fn looks_like_signal_username(s: &str) -> bool {
 /// `Cmd::Logout` and lets the forwarder + [`handle_worker_event`]
 /// pick up the resulting `Event::LoggedOut` (or, on partial
 /// failure, a warning log line from the worker followed by
-/// `Event::LoggedOut` anyway — see workspace REFACTOR_NOTES
-/// W-W.7 for a tracked improvement that would surface partial
-/// wipes more strongly).
+/// `Event::LoggedOut` anyway; surfacing partial wipes more
+/// strongly is a tracked improvement).
 ///
 /// # Security
 ///

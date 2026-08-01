@@ -116,9 +116,9 @@ impl HttpClient for SyncHttpClient {
     /// first-touch contacts produces N profile fetches and therefore
     /// N spawns; if that workload ever dominates, a fixed-size worker
     /// pool with a bounded queue would convert the unbounded behaviour
-    /// into a documentable back-pressure point (REFACTOR_NOTES NB.5
-    /// is the related cap on response body size; W8 is the heapless
-    /// budgeting follow-up).
+    /// into a documentable back-pressure point. A related cap on
+    /// response body size and a heapless budgeting pass are possible
+    /// follow-ups.
     ///
     /// # Timeouts
     ///
