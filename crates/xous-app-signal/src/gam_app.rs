@@ -954,8 +954,12 @@ fn drive_wipe_settings(app: &mut App, cmd_tx: &Sender<Cmd>, modals_xns: &xous_na
         log::warn!("xas/gam_app: Cmd::Logout (wipe) send err: {:?}", e);
         app.screen = Screen::Menu;
         app.render().ok();
-        let _ = modals
-            .show_notification("Wipe failed:\nworker not reachable.\nThe app may need a restart.", None);
+        let _ = modals.show_notification(
+            "Wipe failed:\n\
+             worker not reachable.\n\
+             The app may need a restart.",
+            None,
+        );
     }
 }
 
@@ -984,8 +988,12 @@ fn drive_logout(cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::XousNames) {
     log::info!("xas/gam_app: Logout confirmed; sending Cmd::Logout");
     if let Err(e) = cmd_tx.send_blocking(Cmd::Logout) {
         log::warn!("xas/gam_app: Cmd::Logout send err: {:?}", e);
-        let _ = modals
-            .show_notification("Logout failed:\nworker not reachable.\nThe app may need a restart.", None);
+        let _ = modals.show_notification(
+            "Logout failed:\n\
+             worker not reachable.\n\
+             The app may need a restart.",
+            None,
+        );
     }
     // Don't transition here; wait for Event::LoggedOut to arrive via
     // the forwarder, where handle_worker_event will reset App state.
