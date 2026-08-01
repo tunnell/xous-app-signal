@@ -74,7 +74,14 @@ impl MessageStore {
     /// evicting the oldest row first if the buffer is full. `group`
     /// tags a message that carried GV2 group context (see
     /// [`ThreadMessage::group`]).
-    pub fn push_incoming(&mut self, uuid: Uuid, author_label: String, body: String, timestamp: u64, group: bool) {
+    pub fn push_incoming(
+        &mut self,
+        uuid: Uuid,
+        author_label: String,
+        body: String,
+        timestamp: u64,
+        group: bool,
+    ) {
         self.evict_if_full();
         self.messages.push(ThreadMessage {
             uuid,
