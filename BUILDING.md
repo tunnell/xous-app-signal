@@ -520,6 +520,12 @@ useful as a CI sanity-check. PASS criterion is two log lines:
 `worker/link: URL received from libsignal: sgnl://linkdevice?...`
 and `xas/gam_app: link URL = sgnl://linkdevice?...`.
 
+Both lines are behind the default-off `link-uri-uart` feature (the
+URL is the link credential; default builds log only its length), so
+build the binary for this test with
+`cargo build --release -p xous-app-signal --features
+pddb-real,hosted,link-uri-uart`.
+
 The script still needs an X server (it greps for the "Precursor"
 window with `xdotool` and injects keystrokes via `libX11.so.6`),
 but a real display is not required — `xvfb-run` works.

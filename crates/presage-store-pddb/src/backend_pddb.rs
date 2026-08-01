@@ -35,12 +35,12 @@
 //! value bytes. `dict` and `key` are non-secret in the cryptographic
 //! sense, but for the protocol stores (`signal.protocol.aci.session`,
 //! `signal.protocol.aci.identity`, etc.) the `key` is derived from
-//! the peer's `ProtocolAddress.name()`, i.e. the peer's ACI UUID.
-//! Every session read on a busy device therefore emits a peer's ACI
-//! to UART at info level — same privacy class as the worker's
-//! W-W.2 line-discipline finding in `~/REFACTOR_NOTES.md`. The
-//! redaction helper that lands for W-W.2 should replace `key={:?}`
-//! here too.
+//! the peer's `ProtocolAddress.name()`, i.e. the peer's ACI UUID —
+//! same privacy class as the other per-message identifiers
+//! logged per receive. Key names therefore go through
+//! [`crate::redact::log_id`]: last-4 by default, full under the
+//! `verbose-pii` feature. Dict names are logged in full — they are
+//! fixed schema names or thread-hash digests, not identifiers.
 //!
 //! # rv32 / 16 MiB constraint
 //!
@@ -166,7 +166,7 @@ impl KvBackend for PddbBackend {
                 tracing::info!(
                     "perf/store: PddbBackend::get NotFound dict={:?} key={:?} ms={}",
                     dict,
-                    key,
+                    crate::redact::log_id(key),
                     _perf_start.elapsed().as_millis()
                 );
                 return Ok(None);
@@ -178,7 +178,7 @@ impl KvBackend for PddbBackend {
         tracing::info!(
             "perf/store: PddbBackend::get Ok dict={:?} key={:?} len={} ms={}",
             dict,
-            key,
+            crate::redact::log_id(key),
             bytes.len(),
             _perf_start.elapsed().as_millis()
         );
@@ -214,7 +214,7 @@ impl KvBackend for PddbBackend {
         tracing::info!(
             "perf/store: PddbBackend::put dict={:?} key={:?} len={} ms={}",
             dict,
-            key,
+            crate::redact::log_id(key),
             _perf_val_len,
             _perf_start.elapsed().as_millis()
         );
@@ -255,7 +255,7 @@ impl KvBackend for PddbBackend {
         tracing::info!(
             "perf/store: PddbBackend::delete dict={:?} key={:?} ms={}",
             dict,
-            key,
+            crate::redact::log_id(key),
             _perf_start.elapsed().as_millis()
         );
         result

@@ -68,6 +68,18 @@ probe-echo = []
 # in-memory MockBackend.
 probe-send-batch = []
 
+# Log the full sgnl:// provisioning URL during linking — both the
+# worker emit site and the UI re-log (tests/hosted/test_link_qr.sh
+# greps both lines). The URL is the link credential for its ~60 s
+# window and UART access is unauthenticated, so default builds log
+# only its length.
+link-uri-uart = ["xous-signal-worker/link-uri-uart"]
+
+# Full identifiers (ACI UUIDs, e164 numbers, contact labels) in log
+# lines for ops triage; default builds emit the redacted last-4 form
+# from presage-store-pddb's `log_id`.
+verbose-pii = ["xous-signal-worker/verbose-pii", "presage-store-pddb/verbose-pii"]
+
 # Build profiles for the two Xous environments.
 # Mirror the older xous-signal-client's pattern (Cargo.toml had its
 # own precursor/hosted features cascading to each Xous service).

@@ -1568,14 +1568,17 @@ fn handle_worker_event(
 ) {
     match event {
         Event::LinkUrl(url) => {
-            // LOGGING / SECURITY: the URL below is the link
-            // credential during its window. Logging it at info level
-            // is the same finding as W-W.1 in `~/REFACTOR_NOTES.md`
-            // (originally flagged at the worker emit site); A.2
-            // tracks the UI-side cross-reference. Anyone with UART
-            // access during the link window can replay this URL to
-            // pair their own device against the pending request.
+            // LOGGING / SECURITY: the URL is the link credential
+            // during its window — anyone with UART access can replay
+            // it to pair their own device against the pending request
+            // Full URL only
+            // under the default-off `link-uri-uart` feature; the
+            // exact "link URL = " text is grepped by
+            // tests/hosted/test_link_qr.sh.
+            #[cfg(feature = "link-uri-uart")]
             log::info!("xas/gam_app: link URL = {}", url);
+            #[cfg(not(feature = "link-uri-uart"))]
+            log::info!("xas/gam_app: link URL received ({} bytes)", url.len());
             // Open the QR modal. show_notification blocks until the
             // user dismisses it — meanwhile the worker keeps the
             // provisioning WS alive waiting for the encrypted
@@ -1634,7 +1637,7 @@ fn handle_worker_event(
                 sender_name.clone().or_else(|| sender_phone.clone()).unwrap_or_else(|| sender.clone());
             log::info!(
                 "xas/gam_app: inbound message from {} ({} bytes) group={}",
-                author_label,
+                presage_store_pddb::log_id(&author_label),
                 body.len(),
                 group_master_key.is_some(),
             );

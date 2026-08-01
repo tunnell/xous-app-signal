@@ -17,8 +17,13 @@
 # Prerequisites:
 # - Xous-core checkout at $XOUS_CORE_DIR (default
 #   ~/precursor-signal/repos/xous-core), `xas` branch checked out.
-# - xas binary built for hosted at
-#   target/release/xas (default $XAS_BIN_PATH).
+# - xas binary built for hosted WITH `--features link-uri-uart` at
+#   target/release/xas (default $XAS_BIN_PATH): the URL log lines
+#   this test greps are behind that default-off feature (default
+#   builds log only the URL length — the URL is the link credential
+#   and would otherwise leak on UART).
+#   `cargo build --release -p xous-app-signal \
+#     --features pddb-real,hosted,link-uri-uart`
 # - X11 display reachable as $DISPLAY (default localhost:10.0;
 #   the test launches Xous with this DISPLAY exported and uses
 #   XSendEvent via Python ctypes for keystroke injection).
@@ -176,6 +181,8 @@ echo "    device-name modal accepted"
 
 # Step 5: poll the kernel log for the URL emission. PASS as soon
 # as both worker and gam_app log it; FAIL on timeout.
+# Both grep targets require the binary to be built with
+# `--features link-uri-uart` (URL logging is default-off).
 echo "==> waiting up to ${LINK_TIMEOUT}s for link URL emission"
 WAIT=0
 SAW_WORKER=0
@@ -210,6 +217,9 @@ if [ $SAW_WORKER -eq 1 ] && [ $SAW_GAMAPP -eq 1 ]; then
 else
     echo
     echo "FAIL: link URL did not reach the UI within ${LINK_TIMEOUT}s." >&2
+    if grep -q "link URL received (" "$KERNEL_LOG" 2>/dev/null; then
+        echo "HINT: found the redacted-form line — rebuild the xas binary with --features link-uri-uart." >&2
+    fi
     echo "(set KEEP_LOGS=1 to keep $LOG_DIR for triage)"
 fi
 

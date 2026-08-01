@@ -69,6 +69,7 @@ mod error;
 mod protocol;
 #[cfg(feature = "pddb-backend")]
 mod put_truncate_smoke;
+mod redact;
 mod state;
 mod store;
 
@@ -80,6 +81,7 @@ pub use error::Error;
 pub use protocol::{IdentityType, PddbProtocolStore};
 #[cfg(feature = "pddb-backend")]
 pub use put_truncate_smoke::{SmokeResult, smoke_put_truncates};
+pub use redact::{log_id, redact_id};
 
 /// Internal KV abstraction used by all `PddbStore` trait impls.
 ///
