@@ -575,11 +575,8 @@ impl App {
 
             // Group threads are labeled so a room never masquerades
             // as a 1:1 (display_name is the last speaker's name).
-            let name = if d.is_group {
-                format!("[group] {}", d.display_name)
-            } else {
-                d.display_name.clone()
-            };
+            let name =
+                if d.is_group { format!("[group] {}", d.display_name) } else { d.display_name.clone() };
             let name_short = crate::dialogue::ellipsize(&name, 24);
             // First line: focus, name, right-padded timestamp.
             writeln!(out, "{} {:<24} {:>6}", focus_marker, name_short, timestamp)
