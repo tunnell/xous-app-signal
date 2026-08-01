@@ -56,7 +56,8 @@ near line 68. Nine variants:
 | `Profile` | Settings → Profile | Account info: device name, ACI, phone number. May show "(not loaded)" on cold-start without a fresh `LinkComplete` (Tier-2 chore: fire `Cmd::GetAccountInfo`) |
 | `Help` | F3 from Home, or Settings → Help | In-app FAQ — Wi-Fi recipe, send-latency note, file-a-bug pointer |
 
-Five screens were never built (deferred to "later" in V1 §13):
+Five screens were never built (the V1 design deferred them to
+"later"):
 group chats, attachments, search-in-list, archive view, typing
 indicators.
 
@@ -95,7 +96,8 @@ The full table is the `match (&app.screen, k)` block in
 [`gam_app.rs::handle_keys`](../crates/xous-app-signal/src/gam_app.rs)
 near line 910 — that's the source of truth.
 
-Not yet implemented (V1 §7 listed but xas doesn't bind):
+Not yet implemented (the V1 design listed these; xas doesn't
+bind them):
 `Shift+↑`/`Shift+↓` for page nav, `n` (next unread), `u` (toggle
 unread), `p` (toggle pin), digit shortcuts `1`-`9`/`0` for
 direct conversation jump.
@@ -132,8 +134,8 @@ sync while still being responsive to events from the worker.
 The actual `Cmd` and `Event` enums (8 + 13 variants) live in
 [`crates/xous-signal-worker/src/cmd.rs`](../crates/xous-signal-worker/src/cmd.rs).
 For a layer-by-layer trace of how a `Cmd::SendMessage` goes
-from key-press to TLS bytes, see
-[`ARCHITECTURE.md`](ARCHITECTURE.md) §9.
+from key-press to TLS bytes, see the layer walkthrough in
+[`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## What's deferred
 
@@ -159,7 +161,7 @@ UI items still on the roadmap:
 
 ## Memory
 
-V1 §8 budgeted ~10 KiB UI working set + ~32 KiB during
+The V1 design budgeted ~10 KiB UI working set + ~32 KiB during
 conversation view. The current implementation hits both budgets
 comfortably — `messages: Vec<ThreadMessage>` is capped at
 `INBOX_CAPACITY` (5) and `dialogues` is computed on demand. The
