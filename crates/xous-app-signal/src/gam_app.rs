@@ -337,12 +337,7 @@ impl App {
         } else {
             // Pre-link Menu IS the landing screen. The typed-'yes'
             // modal, not the cursor position, guards the wipe.
-            [
-                Some(MenuItem::Link),
-                Some(MenuItem::About),
-                Some(MenuItem::Help),
-                Some(MenuItem::WipeSettings),
-            ]
+            [Some(MenuItem::Link), Some(MenuItem::About), Some(MenuItem::Help), Some(MenuItem::WipeSettings)]
         }
     }
 
@@ -959,7 +954,8 @@ fn drive_wipe_settings(app: &mut App, cmd_tx: &Sender<Cmd>, modals_xns: &xous_na
         log::warn!("xas/gam_app: Cmd::Logout (wipe) send err: {:?}", e);
         app.screen = Screen::Menu;
         app.render().ok();
-        let _ = modals.show_notification("Wipe failed:\nworker not reachable.\nThe app may need a restart.", None);
+        let _ = modals
+            .show_notification("Wipe failed:\nworker not reachable.\nThe app may need a restart.", None);
     }
 }
 
