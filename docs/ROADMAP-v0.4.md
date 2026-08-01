@@ -16,7 +16,7 @@ remaining failure is loud. Feature work that does not serve that
 (history, group UI, pocket UX) waits for v0.5 or for its gating
 measurement.
 
-**Hardware budget.** Two flash sessions, batched in §Flash sessions.
+**Hardware budget.** Two flash sessions, batched into the two flash sessions below.
 Everything else validates hosted first. One-session fallback included.
 
 ## Sequencing spine
@@ -34,7 +34,8 @@ Everything else validates hosted first. One-session fallback included.
 ```
 
 Cut order if the cycle runs short: item 8's non-rider parts, then item 6,
-then item 5's §4.2 half (keep §4.1). Items 2–4 and §4.1 do not get cut.
+then item 5's PII-redaction half (keep the URL gate). Items 2–4 and the
+URL gate do not get cut.
 
 ## The slate
 
@@ -81,8 +82,8 @@ pinned kyber, watchdog reset), attacked at all three points:
   link 409 before hardware did). Registers only from the default branch.
 - **2d process** — branch protection + actions/checkout Node-20 bump.
 Maintainer decision needed: validation account for 2a — a staging
-registration, or the live account with a stated risk plan (§Open
-questions).
+registration, or the live account with a stated risk plan (see
+Open questions, below).
 Hardware: session 1 (account/link).
 
 ### 3. Group misfile guard (S — banked on `spike/group-guard`)
@@ -125,13 +126,13 @@ exists.
 Hardware: chunked-delete flash wall-time vs one dict_remove — session 2;
 ship with conservative pacing if unmeasured.
 
-### 5. Log-leak kill: roadmap §4.1 + §4.2 (M)
+### 5. Log-leak kill: URL gate + PII redaction (M)
 
-§4.1: the provisioning URL is info-logged at BOTH worker lib.rs:619 and
+URL gate: the provisioning URL is info-logged at BOTH worker lib.rs:619 and
 gam_app.rs:1549; UART access during the pairing window pairs an
 attacker's device. Gate both sites and both test_link_qr.sh greps
 (:184, :187) behind a default-off `link-uri-uart` feature; default build
-emits length only. §4.2: redact ACI/e164/device-name per the code-map
+emits length only. PII redaction: redact ACI/e164/device-name per the code-map
 inventory (author labels at gam_app.rs:1606, PDDB perf lines keyed by
 peer ACI, worker :1731 e164) behind a `verbose-pii` feature. The log
 lines are a de-facto grep contract for the hosted tests — update the
@@ -176,7 +177,7 @@ terminal-close copy (after a terminal 4409/4401, say "relaunch by
 WriteKeyBatch client-opcode deletion (op 57 never shipped in any kernel;
 every device send pays a doomed IPC — server patch archived at
 `archive/writekeybatch-server-8f3894f2d`); doc truth-sync (UI.md, this
-file's §-statuses in REFACTOR-PROPOSALS, the false handle_send batch
+file's per-section statuses in REFACTOR-PROPOSALS, the false handle_send batch
 claim, the stack eager-commit comment, the stale aes comment,
 tests/README tier honesty: renode cannot catch server drift, hosted
 cannot catch RTC or flash-latency bugs).
@@ -209,10 +210,10 @@ another home.
   the placeholder covers the social break.
 - **Outbound READ receipts** — needs Configuration-sync fork work;
   not-sending is privacy-conservative.
-- **gam_app split (§1.3) + typed WorkerError (§1.1)** — the split's
+- **gam_app split (item 1.3) + typed WorkerError (item 1.1)** — the split's
   in-cycle forcing function dissolved when group typing deferred;
   WorkerError re-scopes against the post-rebase error surface. Both v0.5.
-- **Logout drain-then-wipe (§2.2 rework)** — unobserved race; deferred
+- **Logout drain-then-wipe (item 2.2 rework)** — unobserved race; deferred
   behind the rebase settling.
 - **Suspend/network-wake notification** — no wake path exists; settled.
 - **libs/chat adoption; global aes patch** — feature-frozen upstream, no
