@@ -26,7 +26,7 @@ written, the document is wrong — please open an issue.
   `rust-toolchain.toml` says `channel = "stable"`, not a fixed
   version — a `rustup update` moves you to whatever stable is that
   day, and the Xous std bundle must match that rustc exactly
-  (§1.5).
+  (step 1.5).
 - **Git** ≥ 2.30.
 - **A working C compiler and pkg-config** (for some transitive
   build deps). On Debian/Ubuntu: `apt install build-essential
@@ -41,7 +41,7 @@ written, the document is wrong — please open an issue.
 
 - The **Xous std sysroot** for `riscv32imac-unknown-xous-elf`. It is
   a tier-3 target, so `rustup target add` does not supply it —
-  install with `cargo xtask install-toolkit` (§1.5).
+  install with `cargo xtask install-toolkit` (step 1.5).
 - A **Precursor PVT2** (the RISC-V hardware device).
 - A **USB-C cable** that supports data (not power-only).
 - **USB access to `1209:5bf0`.** Rule, in
@@ -73,14 +73,14 @@ written, the document is wrong — please open an issue.
 - **An X11 display** — `xset q` should return without error.
   Over SSH, use `ssh -X` or `ssh -Y`. On a headless box, install
   `xvfb` and run hosted commands under `xvfb-run` (the
-  smoke-test in §2.5 documents the exact wrapper).
+  headless smoke-test in step 2.5 documents the exact wrapper).
 - **A real Signal account** to link from (only needed for the
-  manual flow in §2.4 — the headless smoke-test in §2.5 stops
-  at QR generation and does not need a phone).
+  manual flow in step 2.4 — the headless smoke-test in step 2.5
+  stops at QR generation and does not need a phone).
 - **`signal-cli`** installed on the same machine, used as the
   test peer for sending/receiving messages.
   ([install instructions](https://github.com/AsamK/signal-cli#installation))
-- For the §2.5 headless smoke-test only: `xdotool` and `xvfb`.
+- For the headless smoke-test (step 2.5) only: `xdotool` and `xvfb`.
   Debian/Ubuntu: `apt install xdotool xvfb`; Arch:
   `pacman -S xdotool xorg-server-xvfb`.
 
@@ -114,8 +114,8 @@ you intend to use**:
    Xous std bundle via xous-core's xtask **before** any other
    cargo command in this workspace.
 
-   This step requires §1's `xous-core` clone to exist — so
-   complete §1 first, then come back here:
+   This step needs the `xous-core` clone from step 1 — do the
+   clone first, then come back here:
 
    ```sh
    cd ~/code/xas/xous-core
@@ -124,7 +124,8 @@ you intend to use**:
 
    That bundle ships precompiled `libstd-*.rlib` for the target.
    Required on the hosted path too: `rust-toolchain.toml` is read
-   before feature flags. Symptoms of skipping it are in §4.
+   before feature flags. Symptoms of skipping it are in the
+   troubleshooting table (section 4).
 
 ---
 
@@ -171,7 +172,7 @@ git clone https://github.com/tunnell/xous-app-signal.git
 # the services/net reaper fix from tunnell/xous-core#26). The xas
 # app itself is not in this tree: it builds out-of-tree in
 # xous-app-signal/ and is injected into the image via the `xas:`
-# CrateSpec (§3.2).
+# CrateSpec (step 3.2).
 #
 # Released xas versions build against a pinned snapshot of this
 # branch, published as a TAG: the v0.2 pin is the `xas-v0.2` tag
@@ -183,7 +184,7 @@ git clone https://github.com/tunnell/xous-app-signal.git
 #
 # Note: --depth 1 keeps the clone small (~250 MB vs ~2 GB full).
 # If you want to verify the branch's commit history matches the
-# table in §1's 'What each clone contributes', drop --depth 1
+# 'What each clone contributes' table below, drop --depth 1
 # here OR run `git fetch --unshallow` after cloning.
 git clone --depth 1 -b xas-integration https://github.com/tunnell/xous-core.git
 
@@ -240,14 +241,15 @@ upstream PR content," this is the map:
 | Upstream PR | Where it lives in your build | How |
 |---|---|---|
 | [betrusted-io/xous-core#877](https://github.com/betrusted-io/xous-core/pull/877) (kernel byte-1 mirror) | `xous-core/services/net/src/std_glue.rs::respond_with_error` on the pinned `xas-integration` branch | **Merged upstream 2026-06-02** as commit `2005a801c` — any `betrusted-io/xous-core` checkout at or after that commit carries it. The pinned fork branch carried the identical commit pre-merge; the pin remains required for the deltas that are *not* upstream: the CNAME-chain DNS fix (`43dcb4a59`) required for Signal connectivity, the `services/net` reaper fix (tunnell/xous-core#26; upstream [#880](https://github.com/betrusted-io/xous-core/pull/880) closed 2026-07-17 unmerged — the maintainer wants net fixes to follow the Renode-CI refactor, so the fork carries it), a small PDDB hosted-mode test convenience (`c22cfc678`), and the `apps/manifest.json` xas registration. |
-| [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431) (keepalive tolerance) | `src/websocket/mod.rs` on the `tunnell/libsignal-service-rs` fork branch `xous-782c0d6`, rev `96bcdf8e` (see `docs/FORKS.md`) | The fork uses a local `MAX_OUTSTANDING_KEEPALIVES = 3` constant. PR #431 proposed the same tolerance as an opt-in `with_max_outstanding_keepalives(...)` constructor (default = 1, preserves upstream behavior); it was **closed unmerged by its author on 2026-07-18**, so the fork constant is the long-term shape rather than a stopgap awaiting re-alignment. No action needed — cargo fetches the fork at the rev pinned in `Cargo.lock`, and the §5 lock check verifies it. |
+| [whisperfish/libsignal-service-rs#431](https://github.com/whisperfish/libsignal-service-rs/pull/431) (keepalive tolerance) | `src/websocket/mod.rs` on the `tunnell/libsignal-service-rs` fork branch `xous-782c0d6`, rev `96bcdf8e` (see `docs/FORKS.md`) | The fork uses a local `MAX_OUTSTANDING_KEEPALIVES = 3` constant. PR #431 proposed the same tolerance as an opt-in `with_max_outstanding_keepalives(...)` constructor (default = 1, preserves upstream behavior); it was **closed unmerged by its author on 2026-07-18**, so the fork constant is the long-term shape rather than a stopgap awaiting re-alignment. No action needed — cargo fetches the fork at the rev pinned in `Cargo.lock`, and the lock check in section 5 verifies it. |
 | [rust-lang/rust#156414](https://github.com/rust-lang/rust/pull/156414) (std recv byte-4 decode) | **Not in your build (yet).** | PR #156414 fixes the bug at its actual source (the std-side recv decode reads byte 4 instead of byte 1). It **merged 2026-06-04** (milestone 1.98.0) but has not reached a stable Rust release yet, so the toolchain this workspace builds with still has the byte-1 bug — and it doesn't matter, because PR #877's kernel-side mirror writes the code at byte 1 too. Once a stable release carrying the fix reaches the toolchain pin, the kernel-side mirror becomes belt-and-suspenders rather than load-bearing. No action needed for the current build. |
 
 ---
 
 ## 1.5. Install the Xous Rust target sysroot (hardware path only)
 
-**You already ran `cargo xtask install-toolkit` per §0.** This
+**You already ran `cargo xtask install-toolkit` during the
+prerequisites.** This
 section explains *why* that step was required and what to do if
 it failed — skim now, return if you hit problems. It
 applies only when you'll cross-compile xas for the Precursor's
@@ -298,7 +300,8 @@ the target). With the legacy warning you can attempt a build
 and instead get `error[E0463]: can't find crate for `core``.
 
 You have to install the sysroot some other way — see the
-"Order of operations on a fresh box" callout in §0 and the
+"Order of operations on a fresh box" callout in the
+prerequisites and the
 recommended path immediately below.
 
 ### How to install it (recommended path)
@@ -390,13 +393,13 @@ Three things conspire to make this awkward:
 (`generate_app_menus()` in `xtask/src/app_manifest.rs`) from
 `xous-core/apps/manifest.json`, and is gitignored.
 
-The `xas-integration` branch of `tunnell/xous-core` (cloned in §1) already
-registers `xas` in `manifest.json` (alongside `vault`), so once
-you've invoked xtask once (`cargo xtask run` in §2.3, or
-`cargo xtask app-image-xip` in §3.2), `apps.rs` self-maintains
-correctly forever after.
+The `xas-integration` branch of `tunnell/xous-core` (cloned in
+step 1) already registers `xas` in `manifest.json` (alongside
+`vault`), so once you've invoked xtask once (`cargo xtask run` in
+step 2.3, or `cargo xtask app-image-xip` in step 3.2), `apps.rs`
+self-maintains correctly forever after.
 
-But §2.2 below — the standalone `cargo build` of `xous-app-signal`
+But step 2.2 below — the standalone `cargo build` of `xous-app-signal`
 — links against `gam::APP_NAME_XAS` and so needs `apps.rs` on
 disk *before* xtask has been invoked. On a fresh checkout that
 file doesn't exist yet, and `cargo build` fails with
@@ -422,7 +425,7 @@ pub const EXPECTED_APP_CONTEXTS: &[&'static str] = &[
 EOF
 ```
 
-After §2.3 or §3.2 has run once, xtask overwrites this with the
+After step 2.3 or 3.2 has run once, xtask overwrites this with the
 full manifest-derived version (both `APP_NAME_XAS` and
 `APP_NAME_VAULT` plus a vault submenu constant) — no further
 hand-edits needed.
@@ -485,7 +488,7 @@ real WF200 radio; `com.wlan_status()` always returns
 `Link device` → `Screen::NoInternet` and the link flow never
 proceeds. The env var is the documented escape hatch
 (`gam_app.rs::check_internet`); production code on hardware still
-runs the preflight as designed. The §2.5 smoke-test script sets
+runs the preflight as designed. The smoke-test script (step 2.5) sets
 this env var itself; for human walkthroughs you have to set it:
 
 ```sh
@@ -530,8 +533,9 @@ unaffected. `xvfb-run` paths are pure X11 and immune.
 
 This step depends on `xdotool` and `xvfb` (Debian/Ubuntu:
 `apt install xdotool xvfb`; Arch: `pacman -S xdotool
-xorg-server-xvfb`). They're listed in §0's hosted-path
-prereqs, but flagging here too — a reader who skipped §0 because
+xorg-server-xvfb`). They're listed in the hosted-path
+prerequisites, but flagging here too — a reader who skipped
+the prerequisites because
 they have a real `$DISPLAY` may not realize the script itself
 needs `xdotool` regardless.
 
@@ -668,7 +672,7 @@ registered failing UART string, so a service death fails the pending
 wait immediately.
 
 **Environment.** `XOUS_CORE_DIR` — the xous-core checkout to bundle
-into and boot (default: the `repos/xous-core` symlink from §1; must
+into and boot (default: the `repos/xous-core` symlink from step 1; must
 register xas in `apps/manifest.json`). `RENODE_CI_MODE` — exported,
 defaults to `YES`. `SKIP_BUNDLE=1` — boot the existing `xous.img`
 as-is (only safe when it already matches the robot's features).
@@ -695,7 +699,7 @@ Two load-bearing details:
   allocate new page: OutOfMemory" → KERNEL FAILURE → reboot loop)
   shortly after xas starts, before PDDB reaches the password prompt.
   XIP executes services from flash-mapped addresses and is the same
-  bundle the hardware flash flow uses (§3.2).
+  bundle the hardware flash flow uses (step 3.2).
 - `--git-describe` is **mandatory on forks**: the xtask runs
   `git describe --tags` to embed a version string, and a fork branch
   generally has no reachable tag. Any v-prefixed semver parses;
@@ -715,7 +719,7 @@ benchmarking moved to the user-invoked shellchat `pddb bulk_probe`.)
 ## 3. Hardware path (Precursor PVT2)
 
 If you skipped section 2 entirely, you still need the
-`apps.rs` bootstrap from §2.1 — the standalone `cargo build`
+`apps.rs` bootstrap from step 2.1 — the standalone `cargo build`
 in 3.1 has the same gam dependency and fails the same way
 without it.
 
@@ -727,15 +731,15 @@ see RELEASING.md). Building against upstream `dev` (or any
 branch that doesn't register xas) will silently produce an
 image that bundles the xas binary but where the launcher menu
 doesn't list Signal — see the "Re-bootstrap on branch switches"
-note in §2.1. Sanity-check with
+note in step 2.1. Sanity-check with
 `grep APP_NAME_XAS xous-core/services/gam/src/apps.rs` before
 flashing.
 
 ### 3.1 Build the rv32 xas binary
 
 The fastest path is the precursor test script, which does the
-build + image-bundle for you (the equivalent of §3.1 + §3.2 below
-in one shot — flashing in §3.3 is separate):
+build + image-bundle for you (the equivalent of steps 3.1 and 3.2
+below in one shot — flashing, step 3.3, is separate):
 
 ```sh
 cd ~/code/xas/xous-app-signal
@@ -743,7 +747,7 @@ bash tests/precursor/build-and-bundle.sh
 ```
 
 The script invokes `cargo xtask app-image-xip` with the same
-flags documented in §3.2 (xas + vault, `--kernel-feature
+flags documented in step 3.2 (xas + vault, `--kernel-feature
 big-heap`, `--gdb-stub`, SoC version pins). Override the SoC
 version via `GIT_DESCRIBE`/`GIT_REV` env vars if your device
 reports a different one (`lsusb -v | grep iSerial` while in
@@ -927,16 +931,16 @@ When the Precursor boots into Xous:
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `error: component 'rust-std' for target 'riscv32imac-unknown-xous-elf' is unavailable for download` (any cargo command, before any crate compiles) | Modern rustup (≥ 1.28) hard-errors on the unavailable tier-3 std declared in `rust-toolchain.toml` | Install the betrusted-io std bundle first: `cd ../xous-core && cargo xtask install-toolkit`. See §0 "Order of operations" and §1.5. |
+| `error: component 'rust-std' for target 'riscv32imac-unknown-xous-elf' is unavailable for download` (any cargo command, before any crate compiles) | Modern rustup (≥ 1.28) hard-errors on the unavailable tier-3 std declared in `rust-toolchain.toml` | Install the betrusted-io std bundle first: `cd ../xous-core && cargo xtask install-toolkit`. See "Order of operations" in the prerequisites, and step 1.5. |
 | `error: rustup could not choose a version of cargo to run, because one wasn't specified explicitly` (running anything from `xous-core/`) | `xous-core/` carries no `rust-toolchain.toml` and rustup has no default | `rustup default stable` (one-time), or prefix the command with `rustup run stable …` |
 | `tests/hosted/test_link_qr.sh` reports `ERROR: Xous never booted within Ns` despite a long timeout | Often a misleading symptom of one of the two rustup pitfalls above — `cargo xtask run` exits before booting | `cat /tmp/xas-hosted-test.*/xous.log` and look for the rustup error before raising `BOOT_TIMEOUT` |
 | `lsusb \| grep 1209` shows nothing | Precursor not in loader mode | Hold left-side button while plugging in USB; release after 2 seconds |
 | `lsusb \| grep 1209` shows `1209:3613` not `1209:5bf0` | Precursor in running mode, not loader | Easiest: main menu → "Lock device (reboot)" — reboots into the loader (verified 2026-07-31). Hardware fallback: hold left-side button + paperclip-reset |
 | `failed to read .../repos/xous-core/services/trng/Cargo.toml` (cargo build, very early) | `repos/xous-core` symlink missing or in the wrong place | See section 1 — symlink lives at `<workspace-parent>/repos/xous-core`, *not* inside `xous-app-signal/`. Run `ln -s ../xous-core repos/xous-core` from the workspace parent. |
 | `error[E0583]: file not found for module 'apps'` in `services/gam/src/lib.rs` | `gam/src/apps.rs` not bootstrapped | See section 2.1 — write `apps.rs` by hand (with `APP_NAME_XAS`) before the standalone hosted build. |
-| `usb_update.py` permission denied (Linux host) | udev rule missing, or in a file that sorts after `73-seat-late.rules` | §0 "USB access to `1209:5bf0`" — use the filename given there. Sudo works as a last resort (not recommended) |
+| `usb_update.py` permission denied (Linux host) | udev rule missing, or in a file that sorts after `73-seat-late.rules` | The "USB access" prerequisite — use the filename given there. Sudo works as a last resort (not recommended) |
 | Hosted xas shows "OOM during link" | Default heap cap too low | Run with `RUST_LOG=info` to see allocator messages; rebuild with `--features pddb-real,hosted` (the dist build is otherwise too lean) |
-| Link fails with `invalid peer certificate: NotValidYet` (Wi-Fi and `net ping` are fine) | Device clock unset — fresh devices ship with no RTC/timezone offsets | §3.4 step 3: Preferences → Set Timezone / Set Time, then retry the link |
+| Link fails with `invalid peer certificate: NotValidYet` (Wi-Fi and `net ping` are fine) | Device clock unset — fresh devices ship with no RTC/timezone offsets | Step 3 of the first-time setup (3.4): Preferences → Set Timezone / Set Time, then retry the link |
 | Link fails **after** the QR scan: `HTTP 409` on `PUT /v1/devices/link` (may surface as "response body could not be deserialized") | Signal linked-device limit reached (max 5); stale test links hold slots | Phone → Settings → Linked Devices → remove old entries (each `xas` test link counts), then retry — a fresh QR is generated per attempt |
 | Hardware link succeeds but no messages flow | Wi-Fi connected to 5 GHz, or DNS broken | Re-run the wlan recipe; verify `net ping chat.signal.org` works before opening xas |
 | Send fails with "WebSocket closing" within 30s | Older xous-core without the encoding fix | Confirm you cloned the `xas-integration` branch of `tunnell/xous-core` (or the `xas-v0.2` tag for released v0.2). Relevant fixes: [#877](https://github.com/betrusted-io/xous-core/pull/877) (encoding fix — merged upstream 2026-06-02, so recent `betrusted-io/xous-core` also carries it, but only the fork adds the DNS + reaper + manifest deltas) and [tunnell/xous-core#26](https://github.com/tunnell/xous-core/pull/26) (services/net reaper fix shipped with v0.2). |
