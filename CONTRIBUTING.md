@@ -10,33 +10,51 @@ That is the whole reason for this file. Everything below serves it.
 
 ## What a pull request says
 
-Four beats, in prose, in this order. Most PRs here fit in one to
-three paragraphs.
+Write it for a person. The reader might be you in a year, or someone
+who just unboxed a Precursor and wants to know why sending was slow.
+They do not have your last three weeks in their head, and they do not
+know what a `BufferingBackend` is. Say enough that they don't have to
+open the diff to follow you.
 
-1. **What was wrong**, mechanically — the cause, not the symptom.
-   Name the file, the constant, or the measurement that proves it.
-2. **What the change does** about that cause.
-3. **What it deliberately does not do**, and what stays open.
-4. **`Closes #N`**, plus credit to whoever reported it.
+Four beats, in prose. Most PRs here fit in one to three paragraphs.
 
-Lead with the cause. A reader who stops after the first sentence
-should still have learned the useful thing. This one is `#78` in
-full:
+1. **What someone would notice** — the symptom, in plain words.
+2. **Why it happened** — the mechanism, and the number that proves it.
+3. **What you changed.**
+4. **What is still broken**, what you did not test, and `Closes #N`.
 
-> `73-seat-late.rules` is where systemd turns a `uaccess` tag into
-> an ACL, so the `99-precursor.rules` filename in BUILDING.md §0
-> sets the tag after the only rule that reads it. Renamed to
-> `70-precursor.rules` and said why.
+Start where the reader is. "Wiping settings looks like the device has
+crashed" lands before any sentence about flash sector counts does.
+Then earn it — the mechanism is what turns the first sentence from a
+complaint into a finding.
+
+The dense material belongs in the commit messages, and there you can
+go as deep as you like. A PR body is the human-facing summary of a
+branch; `git log` is where the reasoning lives in full.
+
+A whole PR body, for a one-line fix to the build instructions:
+
+> Follow our USB setup instructions on Arch and the flashing tool
+> still can't open the device. The rule file was named
+> `99-precursor.rules`, and systemd hands out the permission from
+> `73-seat-late.rules` — so by the time our rule ran, the thing that
+> reads it had already finished. Renamed to `70-precursor.rules`,
+> with a line saying why the number matters.
 >
-> While in there: the troubleshooting table still carried the
-> pre-`uaccess` recipe, so it contradicted §0 for anyone who landed
-> there first. It now points at §0 rather than restating a second
-> recipe.
+> The troubleshooting table further down had the same problem twice
+> over: it still carried the old pre-`uaccess` recipe, which fails on
+> Arch and Fedora for a different reason, so anyone who skipped to it
+> got advice contradicting the setup section. It now points back at
+> that section instead of repeating a second recipe.
 >
-> Closes #77 — reported by @nworbnhoj, with the systemd reference.
+> Not tested on Fedora or Debian — only Arch, where it was reported.
+>
+> Closes #77 — reported by @nworbnhoj, who found the systemd issue
+> that explains the ordering.
 
-Cause, second-order finding, credit. No headings, no summary of its
-own diff, nothing a reader has to take on faith.
+Symptom, cause, fix, what wasn't checked, credit. No headings, no
+summary of its own diff, nothing a reader takes on faith. Someone who
+has never heard of udev still learns what broke and why.
 
 **Titles** carry a conventional-commit prefix (`fix(ui):`, `docs:`,
 `perf(pddb):`) because the title becomes the commit subject on merge.
@@ -71,6 +89,12 @@ is a defect, not a style choice.
 paths under a maintainer-private `notes/` workspace. To any other
 reader those are dead ends that look like evidence. Quote the three
 relevant lines of UART instead, or leave it out.
+
+**Name sections, don't number them.** Write "the USB access step in
+BUILDING.md", not "BUILDING.md §0". The `§` reads like a statute, and
+section numbers rot the moment anyone inserts a heading — a name
+still finds the right place after the document moves around. Link to
+the heading where you can.
 
 ## What an issue says
 
