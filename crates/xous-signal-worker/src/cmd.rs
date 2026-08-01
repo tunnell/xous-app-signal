@@ -52,6 +52,10 @@ pub enum Cmd {
     /// for subsequent receive/send calls*. On failure it emits
     /// [`Event::LinkError`] and the worker stays unregistered.
     ///
+    /// Refused with [`Event::StaleStoreDetected`] (no link started)
+    /// when the store still holds account state from a previous
+    /// link — see that variant for the rationale.
+    ///
     /// # Trust boundary
     ///
     /// Triggers the only path that writes identity and root keys to
@@ -310,6 +314,18 @@ pub enum Event {
     /// rejecting the link request. String-typed because the IPC
     /// boundary forces stringification (same shape as `Whoami`).
     LinkError(String),
+
+    /// The worker refused a [`Cmd::LinkDevice`] because the store
+    /// still holds account state from a previous link
+    /// (`PddbStore::has_account_state`). Linking over a stale store
+    /// re-inherits stale sessions and orphaned kyber records; the
+    /// implicit link-time wipe that used to prevent this (3680fe2)
+    /// hung a device and was reverted (fa1c37b), so the worker never
+    /// wipes on this path — it emits this event and the UI routes
+    /// the user to the explicit Wipe settings flow instead. No link
+    /// was started; a fresh `Cmd::LinkDevice` after a wipe proceeds
+    /// normally.
+    StaleStoreDetected,
 
     /// Reply to `Cmd::GetAccountInfo`. Carries the same fields as
     /// `LinkComplete` but fires on demand rather than tied to the

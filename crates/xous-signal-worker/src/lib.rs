@@ -272,6 +272,26 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                 }
                 Ok(Cmd::LinkDevice { device_name }) => {
                     log::info!("worker: Cmd::LinkDevice received");
+                    // Pre-link stale-store guard. Linking on top of
+                    // leftover account state re-inherits stale
+                    // sessions and orphaned kyber records (the
+                    // prekey-storm seed). Do NOT wipe here — the
+                    // implicit link-time wipe (3680fe2) hung a
+                    // device and was reverted (fa1c37b). Detect,
+                    // refuse, and let the UI route the user to the
+                    // explicit Wipe settings flow. Probe errors
+                    // fail open inside `has_account_state`, so a
+                    // flaky PDDB cannot block a genuine first link.
+                    if store.has_account_state() {
+                        log::warn!("worker: link refused — store holds prior account state; wipe first");
+                        if event_tx.send(Event::StaleStoreDetected).await.is_err() {
+                            tracing::warn!(
+                                "event channel dropped while sending StaleStoreDetected; shutting down"
+                            );
+                            break;
+                        }
+                        continue;
+                    }
                     use futures::FutureExt;
                     use futures::future::{self, Either};
                     use futures::pin_mut;
@@ -2175,6 +2195,44 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+
+        cmd_tx.send_blocking(Cmd::Shutdown).unwrap();
+        let _ = event_rx.recv_blocking();
+        handle.join().unwrap();
+    }
+
+    /// A store that still holds account state from a previous link
+    /// refuses `Cmd::LinkDevice` with `Event::StaleStoreDetected`
+    /// and starts no link — and never wipes (fa1c37b). The empty-
+    /// store negative (a genuine first link must not trip the
+    /// guard) is covered by presage-store-pddb's
+    /// `empty_store_has_no_account_state`; exercising it here would
+    /// start a real link attempt against the network.
+    #[test]
+    fn link_device_refused_on_stale_store() {
+        use std::sync::Arc;
+
+        use presage_store_pddb::{KvBackend, MockBackend};
+
+        let backend = Arc::new(MockBackend::new());
+        // Leftover kyber record with no registration data — the
+        // exact post-fa1c37b hazard shape (presage clears the
+        // registration on link entry; protocol dicts survive).
+        backend.put("signal.protocol.aci.kyber_prekey", "17", &[0u8; 4]).unwrap();
+
+        let (cmd_tx, cmd_rx) = async_channel::bounded(CHAN_CAP);
+        let (event_tx, event_rx) = async_channel::bounded(CHAN_CAP);
+        let handle = run_signal_worker(PddbStore::new(backend), cmd_rx, event_tx);
+
+        cmd_tx.send_blocking(Cmd::LinkDevice { device_name: "test".to_string() }).unwrap();
+        match event_rx.recv_blocking().unwrap() {
+            Event::StaleStoreDetected => {}
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        // The refusal leaves the worker alive and the store intact.
+        cmd_tx.send_blocking(Cmd::Hello).unwrap();
+        assert!(matches!(event_rx.recv_blocking().unwrap(), Event::Pong));
 
         cmd_tx.send_blocking(Cmd::Shutdown).unwrap();
         let _ = event_rx.recv_blocking();
