@@ -1411,14 +1411,26 @@ async fn process_received(
             // Sync/receipt/typing messages have already been
             // absorbed by the store machinery presage runs
             // internally; they don't need UI display.
-            let body = match &content.body {
-                ContentBody::DataMessage(dm) => dm.body.clone().unwrap_or_default(),
-                ContentBody::SynchronizeMessage(sm) => sm
-                    .sent
-                    .as_ref()
-                    .and_then(|s| s.message.as_ref())
-                    .and_then(|dm| dm.body.clone())
-                    .unwrap_or_default(),
+            // `group_master_key`: group-context detection (misfile
+            // guard). A DataMessage with `group_v2` belongs to a GV2
+            // group thread, not to `sender`'s 1:1 thread; the same
+            // check runs on the sync-sent transcript's inner
+            // DataMessage so a group message sent from the linked
+            // phone tags identically — and a 1:1 transcript (no
+            // `group_v2`) stays untagged. Presence of the context
+            // is the group signal even if `master_key` is absent
+            // (defensive default to an empty key).
+            let group_of = |dm: &presage::libsignal_service::content::DataMessage| {
+                dm.group_v2.as_ref().map(|g| g.master_key.clone().unwrap_or_default())
+            };
+            let (body, group_master_key) = match &content.body {
+                ContentBody::DataMessage(dm) => (dm.body.clone().unwrap_or_default(), group_of(dm)),
+                ContentBody::SynchronizeMessage(sm) => {
+                    match sm.sent.as_ref().and_then(|s| s.message.as_ref()) {
+                        Some(dm) => (dm.body.clone().unwrap_or_default(), group_of(dm)),
+                        None => (String::new(), None),
+                    }
+                }
                 _ => return true, // EditMessage / Typing / Call — skip
             };
             if body.is_empty() {
@@ -1468,7 +1480,10 @@ async fn process_received(
                 }
             }
 
-            event_tx.send(Event::Message { sender, sender_phone, sender_name, body, timestamp }).await.is_ok()
+            event_tx
+                .send(Event::Message { sender, sender_phone, sender_name, body, timestamp, group_master_key })
+                .await
+                .is_ok()
         }
         Received::QueueEmpty => {
             // Flush dirty sessions in batched chunks at
@@ -2172,5 +2187,133 @@ mod tests {
         // drops. Don't assert on the value — just confirm the join.
         let _ = event_rx.recv_blocking();
         handle.join().unwrap();
+    }
+
+    // ---- group misfile guard: process_received tagging ----
+    //
+    // These drive the real `process_received` path with constructed
+    // `Received::Content` values (mock store, no Manager needed) and
+    // assert the `group_master_key` tag on the emitted
+    // `Event::Message` — including the sync-sent transcript cases,
+    // where a 1:1 transcript must NOT be group-tagged.
+
+    use presage::libsignal_service::content::{
+        Content, ContentBody, DataMessage, GroupContextV2, Metadata, SyncMessage, sync_message,
+    };
+    use presage::libsignal_service::protocol::{Aci, ServiceId};
+
+    const MASTER_KEY: [u8; 32] = [7u8; 32];
+
+    fn test_metadata() -> Metadata {
+        use presage::libsignal_service::prelude::Uuid;
+        let sender = ServiceId::Aci(Aci::from(Uuid::from_u128(0x1111_2222_3333_4444_5555_0001)));
+        let destination = ServiceId::Aci(Aci::from(Uuid::from_u128(0xaaaa_bbbb_cccc_dddd_eeee_0002)));
+        Metadata {
+            sender,
+            destination,
+            sender_device: 1u32.try_into().unwrap(),
+            timestamp: 1_700_000_000_000,
+            needs_receipt: false,
+            unidentified_sender: false,
+            was_plaintext: false,
+            server_guid: None,
+        }
+    }
+
+    fn data_message(body: &str, group: bool) -> DataMessage {
+        DataMessage {
+            body: Some(body.to_string()),
+            group_v2: group.then(|| GroupContextV2 {
+                master_key: Some(MASTER_KEY.to_vec()),
+                revision: Some(1),
+                group_change: None,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Run one `Received::Content` through `process_received` and
+    /// return the events it emitted.
+    fn process_one(body: ContentBody) -> Vec<Event> {
+        let store = PddbStore::with_mock_backend();
+        let (event_tx, event_rx) = async_channel::bounded::<Event>(8);
+        let content = Content::from_body(body, test_metadata());
+        let mut fetches = Vec::new();
+        let mut pending = std::collections::HashMap::new();
+        let keep_going = futures::executor::block_on(super::process_received(
+            presage::model::messages::Received::Content(Box::new(content)),
+            &store,
+            &event_tx,
+            &mut fetches,
+            &mut pending,
+        ));
+        assert!(keep_going);
+        let mut events = Vec::new();
+        while let Ok(e) = event_rx.try_recv() {
+            events.push(e);
+        }
+        events
+    }
+
+    #[test]
+    fn inbound_group_data_message_is_group_tagged() {
+        let events = process_one(ContentBody::DataMessage(data_message("the party is off", true)));
+        match events.as_slice() {
+            [Event::Message { body, group_master_key, .. }] => {
+                assert_eq!(body, "the party is off");
+                assert_eq!(group_master_key.as_deref(), Some(&MASTER_KEY[..]));
+            }
+            other => panic!("unexpected events: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inbound_one_to_one_data_message_is_not_group_tagged() {
+        let events = process_one(ContentBody::DataMessage(data_message("hi", false)));
+        match events.as_slice() {
+            [Event::Message { group_master_key: None, .. }] => {}
+            other => panic!("unexpected events: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sync_sent_group_transcript_is_group_tagged() {
+        // A group message sent from the linked phone arrives as a
+        // sync-sent transcript; it must tag with the same master key
+        // so it files into the group thread, not a 1:1.
+        let sm = SyncMessage {
+            sent: Some(sync_message::Sent {
+                message: Some(data_message("sent to the room", true)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let events = process_one(ContentBody::SynchronizeMessage(sm));
+        match events.as_slice() {
+            [Event::Message { group_master_key, .. }] => {
+                assert_eq!(group_master_key.as_deref(), Some(&MASTER_KEY[..]));
+            }
+            other => panic!("unexpected events: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sync_sent_one_to_one_transcript_is_not_mistagged() {
+        // The other direction of the same guard: a 1:1 transcript
+        // must NOT come out group-tagged.
+        let sm = SyncMessage {
+            sent: Some(sync_message::Sent {
+                message: Some(data_message("just for you", false)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let events = process_one(ContentBody::SynchronizeMessage(sm));
+        match events.as_slice() {
+            [Event::Message { group_master_key: None, body, .. }] => {
+                assert_eq!(body, "just for you");
+            }
+            other => panic!("unexpected events: {other:?}"),
+        }
     }
 }
