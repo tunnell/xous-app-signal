@@ -380,6 +380,21 @@ pub enum Event {
         /// Server timestamp (UNIX millis), matches what `Content`
         /// carries.
         timestamp: u64,
+        /// `Some(master_key)` when the DataMessage carried a
+        /// `GroupContextV2` — this is a group message, NOT a 1:1
+        /// message from `sender`. The bytes are the GV2 master key
+        /// (normally 32) used only as a stable opaque thread
+        /// discriminator; group name/member resolution stays with
+        /// presage until real group support lands. `None` for plain
+        /// 1:1 traffic, including sync-sent transcripts of 1:1
+        /// sends.
+        ///
+        /// # Security
+        ///
+        /// The GV2 master key derives the group's zkgroup secrets;
+        /// treat like `body` — never log, never persist outside the
+        /// PDDB-backed store (presage already keeps it there).
+        group_master_key: Option<Vec<u8>>,
     },
 
     /// Receive loop hit a fatal error and unwound. The
