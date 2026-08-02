@@ -170,7 +170,10 @@ locales = { path = "../../../repos/xous-core/locales" }
 # uuid is already in the dep graph transitively (via libsignal); add it
 # as a direct dep so the dialogue.rs data model can use the same Uuid
 # type as xous-signal-worker without going through a re-export.
-uuid = { version = "1", default-features = false, features = ["std"] }
+# `v5` (name-based SHA-1, pure-Rust sha1_smol) derives the group
+# pseudo-thread uuid one-way from the GV2 master key — the master key
+# is secret material, so the thread key must not embed its raw bytes.
+uuid = { version = "1", default-features = false, features = ["std", "v5"] }
 
 [target.'cfg(not(target_os = "xous"))'.dependencies]
 # env_logger initializes from RUST_LOG; defaults to info-level.

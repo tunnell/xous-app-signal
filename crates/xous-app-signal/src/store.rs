@@ -61,11 +61,27 @@ impl MessageStore {
     /// Sum of unread counts across all conversations (Home header).
     pub fn total_unread(&self) -> u32 { self.dialogues.iter().map(|d| d.unread_count).sum() }
 
+    /// Whether `uuid`'s conversation is group-tagged (any message in
+    /// it carried GV2 group context). Gate for the compose/send
+    /// path: sends can only address a single contact today.
+    pub fn is_group_thread(&self, uuid: Uuid) -> bool {
+        self.dialogues.iter().any(|d| d.uuid == uuid && d.is_group)
+    }
+
     // ---- mutation funnel ----
 
     /// Append an inbound message (unread, `SendStatus::Sent`),
-    /// evicting the oldest row first if the buffer is full.
-    pub fn push_incoming(&mut self, uuid: Uuid, author_label: String, body: String, timestamp: u64) {
+    /// evicting the oldest row first if the buffer is full. `group`
+    /// tags a message that carried GV2 group context (see
+    /// [`ThreadMessage::group`]).
+    pub fn push_incoming(
+        &mut self,
+        uuid: Uuid,
+        author_label: String,
+        body: String,
+        timestamp: u64,
+        group: bool,
+    ) {
         self.evict_if_full();
         self.messages.push(ThreadMessage {
             uuid,
@@ -75,6 +91,7 @@ impl MessageStore {
             outgoing: false,
             status: SendStatus::Sent,
             read: false,
+            group,
         });
         self.rebuild();
     }
@@ -93,6 +110,9 @@ impl MessageStore {
             outgoing: true,
             status: SendStatus::Pending,
             read: true,
+            // Compose into a group thread is blocked upstream
+            // (`gam_app` reply-block); outgoing rows are 1:1 only.
+            group: false,
         });
         self.rebuild();
     }
@@ -207,7 +227,7 @@ mod tests {
     #[test]
     fn push_incoming_creates_unread_dialogue() {
         let mut s = store();
-        s.push_incoming(uuid_a(), "Alice".into(), "hello".into(), 100);
+        s.push_incoming(uuid_a(), "Alice".into(), "hello".into(), 100, false);
         assert_eq!(s.dialogues().len(), 1);
         assert_eq!(s.dialogues()[0].display_name, "Alice");
         assert_eq!(s.dialogues()[0].unread_count, 1);
@@ -237,11 +257,11 @@ mod tests {
     fn eviction_drops_oldest_at_capacity() {
         let mut s = store();
         for i in 0..CAP as u64 {
-            s.push_incoming(uuid_a(), "Alice".into(), format!("m{}", i), 100 + i);
+            s.push_incoming(uuid_a(), "Alice".into(), format!("m{}", i), 100 + i, false);
         }
         assert_eq!(s.thread_messages(uuid_a()).count(), CAP);
         // One more evicts exactly the oldest (m0), not more.
-        s.push_incoming(uuid_a(), "Alice".into(), "overflow".into(), 999);
+        s.push_incoming(uuid_a(), "Alice".into(), "overflow".into(), 999, false);
         let msgs: Vec<_> = s.thread_messages(uuid_a()).collect();
         assert_eq!(msgs.len(), CAP);
         assert_eq!(msgs[0].body, "m1");
@@ -252,7 +272,7 @@ mod tests {
     fn eviction_applies_to_outgoing_pushes_too() {
         let mut s = store();
         for i in 0..CAP as u64 {
-            s.push_incoming(uuid_a(), "Alice".into(), format!("m{}", i), 100 + i);
+            s.push_incoming(uuid_a(), "Alice".into(), format!("m{}", i), 100 + i, false);
         }
         s.push_outgoing_pending(uuid_b(), "reply".into(), 999);
         assert_eq!(s.thread_messages(uuid_a()).count() + s.thread_messages(uuid_b()).count(), CAP);
@@ -288,7 +308,7 @@ mod tests {
     #[test]
     fn send_status_match_ignores_incoming_rows_with_same_timestamp() {
         let mut s = store();
-        s.push_incoming(uuid_a(), "Alice".into(), "in".into(), 500);
+        s.push_incoming(uuid_a(), "Alice".into(), "in".into(), 500, false);
         assert!(!s.mark_send_delivered(500));
         assert_eq!(s.thread_messages(uuid_a()).next().unwrap().status, SendStatus::Sent);
     }
@@ -310,9 +330,9 @@ mod tests {
     #[test]
     fn mark_thread_read_clears_unread_for_that_thread_only() {
         let mut s = store();
-        s.push_incoming(uuid_a(), "Alice".into(), "a1".into(), 100);
-        s.push_incoming(uuid_a(), "Alice".into(), "a2".into(), 200);
-        s.push_incoming(uuid_b(), "Bob".into(), "b1".into(), 300);
+        s.push_incoming(uuid_a(), "Alice".into(), "a1".into(), 100, false);
+        s.push_incoming(uuid_a(), "Alice".into(), "a2".into(), 200, false);
+        s.push_incoming(uuid_b(), "Bob".into(), "b1".into(), 300, false);
         assert_eq!(s.total_unread(), 3);
         s.mark_thread_read(uuid_a());
         assert_eq!(s.total_unread(), 1);
@@ -323,7 +343,7 @@ mod tests {
     #[test]
     fn mark_thread_read_idempotent() {
         let mut s = store();
-        s.push_incoming(uuid_a(), "Alice".into(), "a1".into(), 100);
+        s.push_incoming(uuid_a(), "Alice".into(), "a1".into(), 100, false);
         s.mark_thread_read(uuid_a());
         s.mark_thread_read(uuid_a());
         assert_eq!(s.total_unread(), 0);
@@ -333,7 +353,7 @@ mod tests {
     fn resolve_author_labels_rewrites_uuid_shaped_labels_only() {
         let mut s = store();
         let raw = uuid_a().to_string(); // dashed 36-char form
-        s.push_incoming(uuid_a(), raw, "hi".into(), 100);
+        s.push_incoming(uuid_a(), raw, "hi".into(), 100, false);
         s.push_outgoing_pending(uuid_a(), "yo".into(), 200);
         assert!(s.resolve_author_labels(uuid_a(), "Alice"));
         let msgs: Vec<_> = s.thread_messages(uuid_a()).collect();
@@ -345,7 +365,7 @@ mod tests {
     #[test]
     fn resolve_author_labels_no_op_on_named_labels() {
         let mut s = store();
-        s.push_incoming(uuid_a(), "Alice".into(), "hi".into(), 100);
+        s.push_incoming(uuid_a(), "Alice".into(), "hi".into(), 100, false);
         assert!(!s.resolve_author_labels(uuid_a(), "Alicia"));
         assert_eq!(s.thread_messages(uuid_a()).next().unwrap().author_label, "Alice");
     }
@@ -353,11 +373,22 @@ mod tests {
     #[test]
     fn clear_wipes_messages_and_dialogues() {
         let mut s = store();
-        s.push_incoming(uuid_a(), "Alice".into(), "hi".into(), 100);
+        s.push_incoming(uuid_a(), "Alice".into(), "hi".into(), 100, false);
         s.clear();
         assert!(s.dialogues().is_empty());
         assert_eq!(s.thread_messages(uuid_a()).count(), 0);
         assert_eq!(s.total_unread(), 0);
+    }
+
+    #[test]
+    fn push_incoming_group_tags_summary() {
+        let mut s = store();
+        s.push_incoming(uuid_a(), "Bob".into(), "party is off".into(), 100, true);
+        s.push_incoming(uuid_b(), "Alice".into(), "hi".into(), 200, false);
+        let group = s.dialogues().iter().find(|d| d.uuid == uuid_a()).unwrap();
+        let dm = s.dialogues().iter().find(|d| d.uuid == uuid_b()).unwrap();
+        assert!(group.is_group);
+        assert!(!dm.is_group);
     }
 
     #[test]
@@ -372,6 +403,7 @@ mod tests {
                 outgoing: false,
                 status: SendStatus::Sent,
                 read: false,
+                group: false,
             })
             .collect();
         s.seed(rows);
@@ -383,8 +415,8 @@ mod tests {
     #[test]
     fn dialogues_sorted_newest_first_across_threads() {
         let mut s = store();
-        s.push_incoming(uuid_a(), "Alice".into(), "old".into(), 100);
-        s.push_incoming(uuid_b(), "Bob".into(), "new".into(), 900);
+        s.push_incoming(uuid_a(), "Alice".into(), "old".into(), 100, false);
+        s.push_incoming(uuid_b(), "Bob".into(), "new".into(), 900, false);
         assert_eq!(s.dialogues()[0].uuid, uuid_b());
         assert_eq!(s.dialogues()[1].uuid, uuid_a());
     }

@@ -573,7 +573,11 @@ impl App {
             let unread_marker = if d.unread_count > 0 { '*' } else { ' ' };
             let timestamp = crate::dialogue::brief_relative(d.last_msg_ts, now_ms);
 
-            let name_short = crate::dialogue::ellipsize(&d.display_name, 24);
+            // Group threads are labeled so a room never masquerades
+            // as a 1:1 (display_name is the last speaker's name).
+            let name =
+                if d.is_group { format!("[group] {}", d.display_name) } else { d.display_name.clone() };
+            let name_short = crate::dialogue::ellipsize(&name, 24);
             // First line: focus, name, right-padded timestamp.
             writeln!(out, "{} {:<24} {:>6}", focus_marker, name_short, timestamp)
                 .map_err(|e| format!("home row name: {}", e))?;
@@ -632,13 +636,12 @@ impl App {
     /// that is rendered to the framebuffer; no body or label leaves
     /// the screen surface.
     fn write_thread(&self, out: &mut String, uuid: &Uuid) -> Result<(), String> {
-        let header = self
-            .store
-            .dialogues()
-            .iter()
-            .find(|d| d.uuid == *uuid)
+        let summary = self.store.dialogues().iter().find(|d| d.uuid == *uuid);
+        let is_group = summary.is_some_and(|d| d.is_group);
+        let name = summary
             .map(|d| d.display_name.clone())
             .unwrap_or_else(|| format!("uuid:{:.8}", uuid.simple().to_string()));
+        let header = if is_group { format!("[group] {}", name) } else { name };
         writeln!(out, "{}", header).map_err(|e| format!("thread hdr: {}", e))?;
         writeln!(out, "{}", "-".repeat(45)).map_err(|e| format!("thread rule: {}", e))?;
 
@@ -669,6 +672,17 @@ impl App {
             }
         }
         writeln!(out, "{}", "-".repeat(45)).map_err(|e| format!("thread foot rule: {}", e))?;
+        if is_group {
+            // Reply-block: xas's send path can only address a single
+            // contact, so a "reply" here would go out as a private
+            // 1:1 DM to whichever member last spoke. Refuse loudly
+            // rather than mis-deliver (send_compose enforces this;
+            // the line here explains it).
+            writeln!(out, "Group chat: reply not supported yet")
+                .map_err(|e| format!("thread group note: {}", e))?;
+            write!(out, "Enter/Esc Back  F4 Settings").map_err(|e| format!("thread hint: {}", e))?;
+            return Ok(());
+        }
         // Compose input. Cursor glyph is the trailing `_`; if the
         // buffer is wider than the visible width the ellipsizer
         // shows only the leading slice — there is no horizontal
@@ -801,21 +815,26 @@ fn seed_mock_messages_if_requested(app: &mut App) {
     let bob = Uuid::from_u128(0x0b0b_bbbbbb_cccccc_dddddd_eeeeee_002);
     let dad = Uuid::from_u128(0xdad0_cccccc_dddddd_eeeeee_ffffff_003);
     let unknown = Uuid::from_u128(0x9999_dddddd_eeeeee_ffffff_111111_004);
+    // Pseudo-thread uuid a GV2 group would file under (derived from
+    // a mock master key the same way handle_worker_event does it).
+    let party = Uuid::new_v5(&Uuid::NAMESPACE_OID, &[0x42u8; 32]);
 
-    let mocks: &[(Uuid, &str, &str, u64, bool, SendStatus)] = &[
-        (alice, "Alice", "sure, meet at 6", 2 * 60_000, false, SendStatus::Sent),
-        (alice, "Alice", "I'll bring drinks", 1 * 60_000, false, SendStatus::Sent),
-        (alice, "Alice", "actually make it 6:30", 30_000, false, SendStatus::Sent),
-        (bob, "Bob", "did you get the file?", 12 * 60_000, false, SendStatus::Sent),
-        (bob, "You", "yes, on my way", 11 * 60_000, true, SendStatus::Delivered),
-        (bob, "Bob", "thanks!", 5 * 60_000, false, SendStatus::Sent),
-        (dad, "Dad", "lunch sunday?", 25 * 60 * 60_000, false, SendStatus::Sent),
-        (dad, "You", "On my way", 24 * 60 * 60_000, true, SendStatus::Delivered),
-        (unknown, "+14155550199", "Your Uber has arrived", 3 * 60 * 60_000, false, SendStatus::Sent),
-        (unknown, "+14155550199", "Your driver is waiting", 2 * 60 * 60_000, false, SendStatus::Sent),
+    let mocks: &[(Uuid, &str, &str, u64, bool, SendStatus, bool)] = &[
+        (alice, "Alice", "sure, meet at 6", 2 * 60_000, false, SendStatus::Sent, false),
+        (alice, "Alice", "I'll bring drinks", 1 * 60_000, false, SendStatus::Sent, false),
+        (alice, "Alice", "actually make it 6:30", 30_000, false, SendStatus::Sent, false),
+        (bob, "Bob", "did you get the file?", 12 * 60_000, false, SendStatus::Sent, false),
+        (bob, "You", "yes, on my way", 11 * 60_000, true, SendStatus::Delivered, false),
+        (bob, "Bob", "thanks!", 5 * 60_000, false, SendStatus::Sent, false),
+        (dad, "Dad", "lunch sunday?", 25 * 60 * 60_000, false, SendStatus::Sent, false),
+        (dad, "You", "On my way", 24 * 60 * 60_000, true, SendStatus::Delivered, false),
+        (unknown, "+14155550199", "Your Uber has arrived", 3 * 60 * 60_000, false, SendStatus::Sent, false),
+        (unknown, "+14155550199", "Your driver is waiting", 2 * 60 * 60_000, false, SendStatus::Sent, false),
+        (party, "Bob", "the party is off", 8 * 60_000, false, SendStatus::Sent, true),
+        (party, "Carol", "aw, next week then?", 7 * 60_000, false, SendStatus::Sent, true),
     ];
 
-    app.store.seed(mocks.iter().map(|(uuid, label, body, age_ms, outgoing, status)| {
+    app.store.seed(mocks.iter().map(|(uuid, label, body, age_ms, outgoing, status, group)| {
         ThreadMessage {
             uuid: *uuid,
             author_label: label.to_string(),
@@ -824,6 +843,7 @@ fn seed_mock_messages_if_requested(app: &mut App) {
             outgoing: *outgoing,
             status: *status,
             read: *outgoing, // outgoing always read; incoming starts unread
+            group: *group,
         }
     }));
     // Mark linked + jump straight into Home so the demo lands on the
@@ -854,6 +874,16 @@ fn unix_now_ms() -> u64 {
 /// only varies the UART log line ("send" vs "F1 send"). Caller
 /// guarantees the compose buffer is non-empty.
 fn send_compose(app: &mut App, cmd_tx: &Sender<Cmd>, recipient_uuid: Uuid, trigger: &str) {
+    // Group reply-block. The send path addresses exactly one
+    // contact (`Thread::Contact` in the worker); "replying" to a
+    // group thread would deliver a private 1:1 DM to a single
+    // member while the user believes they addressed the room.
+    // Refuse and say so — never silently drop, never mis-deliver.
+    if app.store.is_group_thread(recipient_uuid) {
+        log::info!("xas/gam_app: {} blocked — group thread, 1:1 send would misdeliver", trigger);
+        app.last_status = "Group reply not supported yet".to_string();
+        return;
+    }
     let body = std::mem::take(&mut app.compose_buffer);
     let send_ts = unix_now_ms();
     let recipient_str = recipient_uuid.to_string();
@@ -1596,23 +1626,40 @@ fn handle_worker_event(
             app.screen = Screen::Linked { kind: LinkedKind::Failure };
             app.last_status = msg;
         }
-        Event::Message { sender, sender_phone, sender_name, body, timestamp } => {
+        Event::Message { sender, sender_phone, sender_name, body, timestamp, group_master_key } => {
             // Pretty label preference: name → phone → UUID. The
             // contacts store typically has both name and phone for
             // peers who've been synced from the linked phone; only
             // first-sight peers fall through to UUID.
             let author_label =
                 sender_name.clone().or_else(|| sender_phone.clone()).unwrap_or_else(|| sender.clone());
-            log::info!("xas/gam_app: inbound message from {} ({} bytes)", author_label, body.len());
+            log::info!(
+                "xas/gam_app: inbound message from {} ({} bytes) group={}",
+                author_label,
+                body.len(),
+                group_master_key.is_some(),
+            );
             // ACI from the worker is a canonical UUID string.
             // Fall back to the nil UUID if parse fails (defensive
             // — practically shouldn't happen since the worker only
             // surfaces senders it recognized).
-            let uuid = Uuid::parse_str(&sender).unwrap_or_else(|_| {
+            let sender_uuid = Uuid::parse_str(&sender).unwrap_or_else(|_| {
                 log::warn!("xas/gam_app: sender {:?} doesn't parse as UUID; using nil", sender);
                 Uuid::nil()
             });
-            app.store.push_incoming(uuid, author_label, body, timestamp);
+            // Misfile guard: a group message must NOT land in the
+            // sender's private 1:1 thread. File it under a
+            // pseudo-thread UUID derived deterministically from the
+            // GV2 master key (v5/SHA-1; no collision risk with real
+            // contact ACIs in practice), keeping the Uuid thread-key
+            // shape until real ThreadKey typing lands with the
+            // gam_app split. The message row is group-tagged so the
+            // UI labels the thread and blocks compose into it.
+            let (uuid, group) = match &group_master_key {
+                Some(key) => (Uuid::new_v5(&Uuid::NAMESPACE_OID, key), true),
+                None => (sender_uuid, false),
+            };
+            app.store.push_incoming(uuid, author_label, body, timestamp, group);
             // Physical cue; a missed vibe must not affect delivery.
             app.llio.vibe(llio::VibePattern::Double).ok();
         }
