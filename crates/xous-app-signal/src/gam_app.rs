@@ -1639,18 +1639,13 @@ fn handle_worker_event(
             app.last_status = msg;
         }
         Event::StaleStoreDetected => {
-            // The worker refused Cmd::LinkDevice: the store still
-            // holds account state from a previous link, and linking
-            // over it re-inherits stale sessions and orphaned kyber
-            // records. The worker never wipes on the link path (the
-            // implicit link-time wipe hung a device — fa1c37b);
-            // instead, explain and park the menu cursor on the
-            // existing 'Wipe settings' entry so the explicit,
-            // duration-warned wipe flow is one keypress away.
-            log::warn!("xas/gam_app: StaleStoreDetected — link refused, routing to Wipe settings");
+            // The worker refused Cmd::LinkDevice: the store still holds
+            // account state from a previous link. The modal names the
+            // remedy; the cursor is deliberately left where it was, so
+            // reaching a destructive wipe still takes navigation.
+            log::warn!("xas/gam_app: StaleStoreDetected — link refused");
             app.linking_in_progress = false;
             app.screen = Screen::Menu;
-            app.selected = MenuItem::WipeSettings;
             if let Ok(modals) = modals::Modals::new(modals_xns) {
                 let _ = modals.show_notification(
                     "Settings from a previous\n\
