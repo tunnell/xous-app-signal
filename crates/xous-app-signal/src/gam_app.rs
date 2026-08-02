@@ -187,7 +187,9 @@ enum MenuItem {
     About,
     Help,
     /// Pre-link escape hatch for a stale store. Same `Cmd::Logout`
-    /// wipe as Settings -> Logout post-link.
+    /// wipe as Settings -> Logout post-link. Also where
+    /// `Event::StaleStoreDetected` parks the cursor after the
+    /// worker refuses a link over leftover account state.
     WipeSettings,
 }
 
@@ -1629,6 +1631,31 @@ fn handle_worker_event(
             app.screen = Screen::Linked { kind: LinkedKind::Failure };
             app.last_status = msg;
         }
+        Event::StaleStoreDetected => {
+            // The worker refused Cmd::LinkDevice: the store still
+            // holds account state from a previous link, and linking
+            // over it re-inherits stale sessions and orphaned kyber
+            // records. The worker never wipes on the link path (the
+            // implicit link-time wipe hung a device — fa1c37b);
+            // instead, explain and park the menu cursor on the
+            // existing 'Wipe settings' entry so the explicit,
+            // duration-warned wipe flow is one keypress away.
+            log::warn!("xas/gam_app: StaleStoreDetected — link refused, routing to Wipe settings");
+            app.linking_in_progress = false;
+            app.screen = Screen::Menu;
+            app.selected = MenuItem::WipeSettings;
+            if let Ok(modals) = modals::Modals::new(modals_xns) {
+                let _ = modals.show_notification(
+                    "Settings from a previous\n\
+                     link are still stored.\n\
+                     Linking over them causes\n\
+                     session errors.\n\n\
+                     Run 'Wipe settings',\n\
+                     then Link again.",
+                    None,
+                );
+            }
+        }
         Event::Message { sender, sender_phone, sender_name, body, timestamp, group_master_key } => {
             // Pretty label preference: name → phone → UUID. The
             // contacts store typically has both name and phone for
@@ -1905,8 +1932,8 @@ fn check_internet(xns: &xous_names::XousNames) -> Result<(), String> {
 /// Kick off the link flow. Synchronous part only: prompts for a
 /// device name, sends `Cmd::LinkDevice`, sets [`Screen::Linking`],
 /// and returns. All async results (`LinkUrl`, `LinkComplete`,
-/// `LinkError`) flow through the forwarder thread and land in
-/// [`handle_worker_event`].
+/// `LinkError`, `StaleStoreDetected`) flow through the forwarder
+/// thread and land in [`handle_worker_event`].
 ///
 /// # Threading model
 ///
