@@ -2,9 +2,9 @@
 
 xas releases are pinned to specific snapshots of `tunnell/xous-core` so a
 given xas version always builds against the same kernel + services state.
-Each release gets its own `xas-vX.Y` branch on xous-core; that branch is
-**frozen** after the release ships and never updated again. Future xas
-releases create new `xas-vX.Y+1` branches — they don't reuse old ones.
+Each release gets its own `xas-vX.Y` tag on xous-core. A tag does not
+move, so the pin cannot drift after the release ships. Later releases
+add `xas-vX.Y+1`; old tags are never deleted or repointed.
 
 ## Pre-flight
 

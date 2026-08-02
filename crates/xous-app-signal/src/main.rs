@@ -18,8 +18,8 @@
 //! 4. Hand the cmd/event channels to the UI and run.
 //! 5. The UI sends [`Cmd::Shutdown`] on quit; the worker drains and emits `Event::ShuttingDown`.
 //!
-//! See `docs/ARCHITECTURE.md` for the full data-flow walkthrough and
-//! `docs/UI.md` for the UI design.
+//! See `docs/ARCHITECTURE.md` for the full data-flow walkthrough;
+//! `gam_app.rs`'s module docs describe the screens.
 
 mod dialogue;
 mod gam_app;
