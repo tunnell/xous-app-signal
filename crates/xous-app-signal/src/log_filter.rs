@@ -5,6 +5,10 @@
 //! identifiers at info level puts them on the UART and we cannot stop
 //! it at the call site. This installs the same log-server transport
 //! behind a target filter instead.
+//!
+//! The filtered lines are diagnostically useful — websocket frame
+//! counters are how a duplicate connection gets spotted — so
+//! `verbose-upstream-logs` turns the filter off for debugging.
 
 #[cfg(target_os = "xous")]
 use core::fmt::Write as _;
@@ -67,6 +71,9 @@ fn copy_bounded(dest: &mut [u8], src: &[u8]) -> u32 {
 #[cfg(target_os = "xous")]
 impl log::Log for FilteredLogger {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
+        if cfg!(feature = "verbose-upstream-logs") {
+            return true;
+        }
         !(metadata.level() >= log::Level::Info && muffled(metadata.target()))
     }
 
