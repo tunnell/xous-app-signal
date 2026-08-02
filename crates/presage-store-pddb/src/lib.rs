@@ -187,8 +187,8 @@ pub trait KvBackend: Send + Sync + fmt::Debug {
 /// shared state. A consequence: every live clone (held by `Manager`,
 /// stashed in the worker dispatcher, captured in spawned tasks)
 /// extends the lifetime of the cached `SessionRecord` bytes, which
-/// libsignal-protocol does not zeroize on Drop today (PS.sec-B in
-/// `~/REFACTOR_NOTES.md`). `xous_signal_worker::manager_task` drops
+/// libsignal-protocol does not zeroize on Drop today.
+/// `xous_signal_worker::manager_task` drops
 /// the Manager when its op channel closes; the cache is gone only
 /// once the last clone has been dropped.
 ///

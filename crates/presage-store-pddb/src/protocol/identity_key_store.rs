@@ -40,7 +40,7 @@
 //! `PrivateKey`), but the transient `bytes` local here lives in a
 //! plain `Vec<u8>`. Logging the `bytes` value, including via
 //! `tracing::debug!(?bytes)` on this function's body, would leak the
-//! key. **MUST NOT happen.** See REFACTOR_NOTES sec-A.
+//! key. **MUST NOT happen.**
 //!
 //! Peer identity public keys are not secret-equivalent on their own,
 //! but the (address, identity-key) mapping is privacy-relevant: it

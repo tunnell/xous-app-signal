@@ -41,7 +41,7 @@
 //! not implement `Drop`-time zeroization for its internal protobuf
 //! buffers (see libsignal-protocol's `SessionRecord` source). The
 //! `Vec<u8>` slices passed to `serialize` / `deserialize` likewise
-//! leak. See REFACTOR_NOTES sec-B.
+//! leak.
 //!
 //! Bound on data loss: a power-cut between ratchet step and flush
 //! leaves session state slightly behind the peer's view. libsignal

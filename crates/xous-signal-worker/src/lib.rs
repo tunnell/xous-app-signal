@@ -206,8 +206,8 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
         //
         // LOGGING: the success arm below emits `device_name`, `aci`,
         // and `phone` to the log pipeline at info level. All three
-        // are Signal account identifiers (PII). See REFACTOR_NOTES
-        // for the log-discipline audit item.
+        // are Signal account identifiers (PII) — a known
+        // log-discipline audit item.
         log::info!("worker: attempting load_registered from PDDB");
         let mut linked_attempts = 0;
         loop {
@@ -612,8 +612,7 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
 /// The provisioning URL forwarded through `Event::LinkUrl` is
 /// short-lived but high-value — see that variant's `# Security`
 /// section. This function currently logs the URL at `log::info!`
-/// inside the `forwarder` closure; that is the audit finding called
-/// out in `xous-signal-worker` REFACTOR_NOTES.
+/// inside the `forwarder` closure; that is a known audit finding.
 ///
 /// # Logging
 ///
@@ -783,7 +782,7 @@ fn spawn_manager_task(
 /// stays alive as long as *any* clone exists — see
 /// `presage_store_pddb::PddbStore` Clone semantics in the docstring
 /// of that type. libsignal's `SessionRecord` does **not** derive
-/// `Zeroize` upstream (PS.sec-B in `~/REFACTOR_NOTES.md`), so an
+/// `Zeroize` upstream, so an
 /// extended `Manager` / `PddbStore` lifetime extends the post-Drop
 /// memory-disclosure window for ratchet state. The receive loop
 /// flushes sessions on `Received::QueueEmpty`; future code paths
@@ -852,8 +851,8 @@ fn spawn_manager_task(
 /// Emits message kinds and per-stream-item progress markers at
 /// `log::info!` (`worker:`, `worker/send:`, `worker/profile:`
 /// prefixes). Does not log message bodies. ACI UUIDs and contact
-/// names are logged at info level — see REFACTOR_NOTES for the
-/// log-discipline audit item.
+/// names are logged at info level — a known log-discipline
+/// audit item.
 async fn manager_task(
     mut manager: Manager<PddbStore, Registered>,
     store: PddbStore,
@@ -911,7 +910,7 @@ async fn manager_task(
     // SECURITY: the profile_key bytes (32 bytes per entry) are
     // secret-derived material from the sender. Treated as opaque
     // here and passed to `ProfileKey::create` without copying; never
-    // logged. See REFACTOR_NOTES for the open item on wrapping in
+    // logged. A future hardening item would wrap it in
     // `Zeroizing` for defense-in-depth.
     let mut pending_profile_fetches: Vec<(presage::libsignal_service::prelude::Uuid, [u8; 32])> = Vec::new();
     let mut fetched_or_failed: std::collections::HashSet<presage::libsignal_service::prelude::Uuid> =
@@ -1129,7 +1128,7 @@ async fn manager_task(
                 // `HttpTransport` wrapping; "403 Forbidden" is the
                 // stable terminator (RFC 7231) in the formatter. A
                 // typed approach would require cross-crate enums
-                // plumbed through `ServiceError`; see REFACTOR_NOTES.
+                // plumbed through `ServiceError`.
                 if matches!(prev_close, Some(4401)) && err_str.contains("403 Forbidden") {
                     consecutive_reauth_403s = consecutive_reauth_403s.saturating_add(1);
                     log::warn!(
@@ -1372,8 +1371,7 @@ async fn manager_task(
 /// Emits the body-kind enum-variant name (`NullMessage`,
 /// `DataMessage`, `SynchronizeMessage`, ...) at `log::info!`. Does
 /// not emit the body text. Sender ACI is *not* logged here, but the
-/// upstream contact resolution and profile-fetch code does — see
-/// REFACTOR_NOTES.
+/// upstream contact resolution and profile-fetch code does.
 async fn process_received(
     item: presage::model::messages::Received,
     store: &PddbStore,
@@ -1694,16 +1692,16 @@ async fn handle_resolve_username(
 /// `Manager`'s session state inconsistent. The alternative — let
 /// the panic propagate and kill `manager_task` — would force every
 /// subsequent send to surface "manager task died." Both outcomes
-/// are bad; this path picks the recoverable one. See REFACTOR_NOTES
-/// for the open item to remove panics from the libsignal send path
-/// rather than continue catching them.
+/// are bad; this path picks the recoverable one. A future item
+/// would remove panics from the libsignal send path rather than
+/// continue catching them.
 ///
 /// # Logging
 ///
 /// Emits `body_len` only (never `body`). Emits the recipient string
 /// verbatim (UUID or e164) and the parsed `Uuid` of the resolved
-/// recipient — both are PII-relevant. See REFACTOR_NOTES for the
-/// log-discipline audit item.
+/// recipient — both are PII-relevant — a known log-discipline
+/// audit item.
 ///
 /// # rv32 / 16 MiB constraint
 ///
