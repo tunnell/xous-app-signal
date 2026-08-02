@@ -27,7 +27,6 @@
 //! The `Vec<u8>` envelopes in the bundle do not zero on drop. Per
 //! call, we read the whole bundle, mutate, and write it back; each
 //! step allocates a fresh `Vec<u8>` of the JSON-encoded bundle;
-//! zeroizing it on drop is a future hardening step.
 //!
 //! # Encoding
 //!

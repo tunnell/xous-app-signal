@@ -142,7 +142,6 @@ mod tests {
 
     #[test]
     fn does_not_muffle_our_own_crates() {
-        // `presage_store_pddb` shares a prefix with `presage` but is ours.
         assert!(!muffled("presage_store_pddb"));
         assert!(!muffled("presage_store_pddb::backend_pddb"));
         assert!(!muffled("xas::gam_app"));

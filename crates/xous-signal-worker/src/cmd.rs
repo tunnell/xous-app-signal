@@ -116,8 +116,7 @@ pub enum Cmd {
     /// # Logging
     ///
     /// The worker emits `body_len` (length only, never the body
-    /// itself) to its log pipeline. `recipient` is logged in full — a
-    /// known logging-discipline issue covering recipient/ACI emission.
+    /// itself) to its log pipeline. `recipient` is logged in full.
     SendMessage { recipient: String, body: String, timestamp: u64 },
 
     /// Read account-identity info from the loaded Manager and
@@ -173,10 +172,8 @@ pub enum Cmd {
     /// downstream the PDDB free-list does **not** zero pages on
     /// dictionary delete. Acquiring the flash post-wipe
     /// can therefore recover ciphertext that the API surface
-    /// presents as gone. A future refactor to surface partial-wipe
-    /// success per dictionary depends on this clear-semantics
-    /// contract; the secure-erase opcode the PDDB team would expose
-    /// is the deeper fix.
+    /// presents as gone. A secure-erase opcode from the PDDB
+    /// side would be the deeper fix.
     ///
     /// This does **not** remove the device from the primary phone's
     /// Linked Devices list — that requires `unlink_secondary`,
@@ -276,8 +273,8 @@ pub enum Event {
     /// - Render directly to the user's display only; do not stage it through any in-memory buffer that may be
     ///   later dumped.
     ///
-    /// A known audit item covers the current UART emission of this
-    /// URL inside `handle_link_device`.
+    /// `handle_link_device` emits it only under the default-off
+    /// `link-uri-uart` feature.
     LinkUrl(String),
 
     /// Linking succeeded. The worker has just transitioned to

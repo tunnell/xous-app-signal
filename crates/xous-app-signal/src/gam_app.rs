@@ -954,8 +954,7 @@ fn looks_like_signal_username(s: &str) -> bool {
 /// `Cmd::Logout` and lets the forwarder + [`handle_worker_event`]
 /// pick up the resulting `Event::LoggedOut` (or, on partial
 /// failure, a warning log line from the worker followed by
-/// `Event::LoggedOut` anyway; surfacing partial wipes more
-/// strongly is a tracked improvement).
+/// `Event::LoggedOut` anyway; surfacing partial wipes more).
 ///
 /// # Security
 ///
@@ -1609,10 +1608,9 @@ fn handle_worker_event(
         Event::LinkUrl(url) => {
             // LOGGING / SECURITY: the URL is the link credential
             // during its window — anyone with UART access can replay
-            // it to pair their own device against the pending request
-            // Full URL only
-            // under the default-off `link-uri-uart` feature; the
-            // exact "link URL = " text is grepped by
+            // it to pair their own device against the pending request.
+            // Full URL only under the default-off `link-uri-uart`
+            // feature; the exact "link URL = " text is grepped by
             // tests/hosted/test_link_qr.sh.
             #[cfg(feature = "link-uri-uart")]
             log::info!("xas/gam_app: link URL = {}", url);

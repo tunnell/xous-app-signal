@@ -42,9 +42,8 @@ impl Store for PddbStore {
     ///
     /// `xous_signal_worker::Cmd::Logout` is the production caller;
     /// the worker treats `Err` from this method as non-fatal (logs a
-    /// warning, emits `Event::LoggedOut` anyway). A future refactor
-    /// to surface partial-wipe outcomes per dictionary depends on the
-    /// per-dict failure contract documented under `# Errors` below.
+    /// warning, emits `Event::LoggedOut` anyway). Per-dict failure
+    /// semantics are under `# Errors` below.
     ///
     /// # Errors
     ///

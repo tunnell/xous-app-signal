@@ -68,7 +68,7 @@
 //! a thread of N messages all matching the range, this allocates N
 //! `Content` instances plus their backing `Vec<u8>` clones. The
 //! caller decides cardinality; presage callers typically use bounded
-//! ranges. A streaming variant could avoid copying the full range.
+//! ranges.
 
 use std::ops::{Bound, RangeBounds};
 
