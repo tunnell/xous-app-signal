@@ -1606,7 +1606,12 @@ fn handle_worker_event(
             }
         }
         Event::LinkComplete { device_name, aci, phone } => {
-            log::info!("xas/gam_app: LinkComplete device={} aci={} phone={}", device_name, aci, phone);
+            log::info!(
+                "xas/gam_app: LinkComplete device={} aci={} phone={}",
+                device_name,
+                presage_store_pddb::log_id(&aci),
+                presage_store_pddb::log_id(&phone)
+            );
             app.linked = true;
             app.linking_in_progress = false;
             app.screen = Screen::Linked { kind: LinkedKind::Success };
