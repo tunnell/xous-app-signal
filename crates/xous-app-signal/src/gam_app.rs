@@ -1243,6 +1243,14 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
                     let new_state = gam::FocusState::convert_focus_change(new_state_code);
                     log::info!("xas/gam_app: focus change -> {:?}", new_state);
                     if matches!(new_state, gam::FocusState::Foreground) {
+                        // Startup `load_registered` expires before the PDDB is
+                        // unlocked; foreground is the first point it is not.
+                        if !app.linked && app.account_aci.is_none() {
+                            log::info!("xas/gam_app: foreground while unlinked — querying account state");
+                            if let Err(e) = cmd_tx.send_blocking(Cmd::GetAccountInfo) {
+                                log::warn!("xas/gam_app: Cmd::GetAccountInfo send err: {:?}", e);
+                            }
+                        }
                         if let Err(e) = app.render() {
                             log::warn!("xas/gam_app: render after focus: {}", e);
                         }
@@ -1732,16 +1740,26 @@ fn handle_worker_event(
             log::info!(
                 "xas/gam_app: AccountInfo OK device={} aci={} phone={}",
                 info.device_name,
-                info.aci,
-                info.phone,
+                presage_store_pddb::log_id(&info.aci),
+                presage_store_pddb::log_id(&info.phone),
             );
             app.account_device_name = Some(info.device_name);
             app.account_aci = Some(info.aci);
             app.account_phone = Some(info.phone);
-            // If we're currently rendering the Profile screen,
-            // refresh so the placeholder "(not loaded)" flips to
-            // the real values immediately.
-            if matches!(app.screen, Screen::Profile) {
+            if !app.linked {
+                // A registered account in the store means linked, even if this
+                // boot never saw LinkComplete. Without this the UI stays on the
+                // pre-link Menu, whose only actions are a link the worker will
+                // refuse and a destructive wipe.
+                log::info!("xas/gam_app: account found on an unlinked UI — resuming linked state");
+                app.linked = true;
+                app.screen = Screen::Home;
+                app.home_focus = 0;
+                if let Err(e) = cmd_tx.send_blocking(Cmd::StartReceive) {
+                    log::warn!("xas/gam_app: Cmd::StartReceive send err: {:?}", e);
+                }
+                let _ = app.render();
+            } else if matches!(app.screen, Screen::Profile) {
                 let _ = app.render();
             }
         }
