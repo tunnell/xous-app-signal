@@ -234,9 +234,11 @@ We are **required** to license any derivative works of
 ## Contributing — including AI-assisted contributions
 
 Contributions are welcome via pull request against the `dev`
-branch. See [`tests/README.md`](tests/README.md) for the
-branch convention and what release-cycle gates a PR has to
-pass before it can land in `main`.
+branch. See [CONTRIBUTING.md](CONTRIBUTING.md) for how issues,
+PRs, and commit messages should read, and
+[`tests/README.md`](tests/README.md) for the branch convention
+and what release-cycle gates a PR has to pass before it can land
+in `main`.
 
 **AI-assisted contributions are explicitly welcome**, on one
 condition: **disclose them**. AI coding agents have been used
@@ -250,9 +252,12 @@ Concretely:
   the PR description. A short note is fine — "drafted with an AI
   agent and reviewed line-by-line" or similar. No need to name
   the specific tool.
+- Record the assistance in the commit as a trailer, exactly
+  `Assisted-by: coding agent`. Don't name the model or vendor —
+  that reads as advertising and dates badly, while the fact a
+  tool was involved is the part a reviewer can act on.
 - The author of the commit is still you. AI agents are tools,
-  not co-authors. Don't add AI-attribution trailers to commit
-  messages.
+  not co-authors, so no `Co-Authored-By` for them.
 - Apply the same review discipline you'd apply to any code: the
   PR is your work in the sense that you're vouching for it.
   Read every line you submit.
