@@ -303,6 +303,9 @@ struct App {
     /// [`handle_username_resolve_result`] so a stale response after
     /// the user navigated away is dropped silently.
     username_lookup_in_progress: bool,
+    /// Username being resolved, kept so the thread can be labelled with
+    /// what the user typed instead of a UUID prefix.
+    username_lookup_pending: Option<String>,
 }
 
 impl App {
@@ -325,6 +328,7 @@ impl App {
         // guard and open a Thread screen (or clobber the re-link
         // banner) on an unlinked app.
         self.username_lookup_in_progress = false;
+        self.username_lookup_pending = None;
         self.account_device_name = None;
         self.account_aci = None;
         self.account_phone = None;
@@ -515,12 +519,12 @@ impl App {
     /// or we are linked but the fields have not arrived, say so.
     fn identity_line(&self) -> String {
         if self.account_query_pending {
-            return "(loading)".to_string();
+            return "(loading linked account…)".to_string();
         }
         match (self.linked, self.account_phone.as_deref(), self.account_device_name.as_deref()) {
             (true, Some(phone), Some(name)) => format!("{}  ({})", phone, name),
             (true, Some(phone), None) => phone.to_string(),
-            (true, None, _) => "(loading)".to_string(),
+            (true, None, _) => "(loading linked account…)".to_string(),
             (false, _, _) => "(unlinked)".to_string(),
         }
     }
@@ -1076,7 +1080,7 @@ fn drive_new_chat(app: &mut App, cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::
             return;
         }
     };
-    let raw = match modals.alert_builder("New chat — UUID or name.000").field(None, None).build() {
+    let raw = match modals.alert_builder("New chat — username (name.000)").field(None, None).build() {
         Ok(payloads) => payloads.first().as_str().trim().to_string(),
         Err(e) => {
             log::info!("xas/gam_app: F1 new chat cancelled / err: {:?}", e);
@@ -1107,6 +1111,7 @@ fn drive_new_chat(app: &mut App, cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::
             return;
         }
         app.username_lookup_in_progress = true;
+        app.username_lookup_pending = Some(raw.clone());
         // Brief visual feedback. The Event::UsernameResolveResult
         // arrives via the forwarder and is handled by
         // handle_username_resolve_result, which transitions to
@@ -1123,16 +1128,16 @@ fn drive_new_chat(app: &mut App, cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::
         // on libsignal-service (see docs/FORKS.md, CDSI rule).
         log::info!("xas/gam_app: F1 phone lookup not supported (CDSI disabled)");
         let _ = modals.show_notification(
-            "Phone-number lookup needs\n\
-             CDSI which isn't enabled\n\
-             in this build. Use a UUID\n\
-             or username instead.",
+            "Phone numbers are not\n\
+             supported. Ask for their\n\
+             username instead\n\
+             (looks like name.000).",
             None,
         );
         return;
     }
     log::info!("xas/gam_app: F1 unrecognized input {:?}", raw);
-    let _ = modals.show_notification("Not recognized as a\nUUID or username.\nFormat: name.NNN", None);
+    let _ = modals.show_notification("Not a username.\nFormat: name.000", None);
 }
 
 /// Run the GAM-rendered UI loop.
@@ -1234,6 +1239,7 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
         account_phone: None,
         account_query_pending: false,
         username_lookup_in_progress: false,
+        username_lookup_pending: None,
     };
     seed_mock_messages_if_requested(&mut app);
     app.render().ok();
@@ -1879,7 +1885,13 @@ fn handle_username_resolve_result(app: &mut App, result: Result<Option<Uuid>, St
     app.username_lookup_in_progress = false;
     match result {
         Ok(Some(uuid)) => {
-            log::info!("xas/gam_app: username resolved to {}", uuid);
+            log::info!("xas/gam_app: username resolved to {}", presage_store_pddb::log_id(&uuid.to_string()));
+            // Label the thread with the username the user typed. Without
+            // this the row falls back to a UUID prefix — the one
+            // identifier they never entered and cannot recognise.
+            if let Some(name) = app.username_lookup_pending.take() {
+                app.store.resolve_author_labels(uuid, &name);
+            }
             app.screen = Screen::Thread { uuid };
             let _ = app.render();
         }
