@@ -148,6 +148,13 @@ fn thread_dict_name(thread: &Thread) -> String {
 /// gives us `list_keys` in arrival order without parsing.
 fn message_key(timestamp: u64) -> String { format!("{timestamp:016x}") }
 
+/// Upstream 4a139867a made `Metadata` timestamps `DateTime<Utc>`; the
+/// on-disk envelope keeps u64 millis (existing records stay readable).
+fn timestamp_from_millis(ms: u64) -> Result<chrono::DateTime<chrono::Utc>, Error> {
+    chrono::DateTime::from_timestamp_millis(ms as i64)
+        .ok_or_else(|| Error::Decode(format!("timestamp out of range: {ms}")))
+}
+
 // --- Message storage envelope ---
 
 /// On-disk wrapper for a single message. The body is libsignal's
@@ -170,6 +177,12 @@ struct StoredMessage {
     sender_device: u32,
     server_guid: Option<String>,
     timestamp: u64,
+    /// Milliseconds. `None` for records written before the upstream
+    /// `Metadata::server_timestamp` split (4a139867a); those fall back
+    /// to `timestamp` on read, mirroring presage-store-sqlite's
+    /// `server_ts.unwrap_or(ts)`.
+    #[serde(default)]
+    server_timestamp: Option<u64>,
     needs_receipt: bool,
     unidentified_sender: bool,
     was_plaintext: bool,
@@ -186,7 +199,8 @@ impl StoredMessage {
             destination: metadata.destination.service_id_string(),
             sender_device,
             server_guid: metadata.server_guid.map(|u| u.to_string()),
-            timestamp: metadata.timestamp,
+            timestamp: metadata.timestamp.timestamp_millis() as u64,
+            server_timestamp: Some(metadata.server_timestamp.timestamp_millis() as u64),
             needs_receipt: metadata.needs_receipt,
             unidentified_sender: metadata.unidentified_sender,
             was_plaintext: metadata.was_plaintext,
@@ -211,7 +225,8 @@ impl StoredMessage {
             destination,
             sender_device,
             server_guid,
-            timestamp: self.timestamp,
+            timestamp: timestamp_from_millis(self.timestamp)?,
+            server_timestamp: timestamp_from_millis(self.server_timestamp.unwrap_or(self.timestamp))?,
             needs_receipt: self.needs_receipt,
             unidentified_sender: self.unidentified_sender,
             was_plaintext: self.was_plaintext,
@@ -420,7 +435,7 @@ impl ContentsStore for PddbStore {
 
     async fn save_message(&self, thread: &Thread, message: Content) -> Result<(), Error> {
         let dict = thread_dict_name(thread);
-        let key = message_key(message.metadata.timestamp);
+        let key = message_key(message.metadata.timestamp.timestamp_millis() as u64);
         let stored = StoredMessage::from_content(message);
         backend_put_json(&*self.backend, &dict, &key, &stored)
     }
@@ -473,6 +488,22 @@ impl ContentsStore for PddbStore {
             })
             .collect();
         Ok(items.into_iter())
+    }
+
+    async fn thread_for_sender_and_timestamp(
+        &self,
+        _sender: &ServiceId,
+        _timestamp: u64,
+    ) -> Result<Option<Thread>, Error> {
+        // New in upstream 22251cc2d; only caller is the
+        // delete-for-self sync-message path, which warn-logs and
+        // ignores the request on `Ok(None)`. The PDDB layout has no
+        // sender+timestamp -> thread reverse index (thread dict names
+        // are one-way hashes), so a real implementation needs a new
+        // index dict. Until then: delete-for-self is a no-op, same
+        // net behavior as v0.3 (whose presage base predates the
+        // feature entirely).
+        Ok(None)
     }
 
     async fn clear_thread(&mut self, thread: &Thread) -> Result<(), Error> {

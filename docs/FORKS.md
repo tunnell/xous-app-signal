@@ -13,8 +13,8 @@ hand-regenerated `diff -ruN` blobs, now it is plain git history).
 
 | Crate | Upstream base | Fork repo + branch | Pinned rev | Delta |
 |---|---|---|---|---|
-| `presage` | [whisperfish/presage](https://github.com/whisperfish/presage) `600c4ed` | [tunnell/presage](https://github.com/tunnell/presage) `xous-600c4ed` | `7b63a451f4089011830302538c854d6860f74ecc` | [compare](https://github.com/whisperfish/presage/compare/600c4ed...tunnell:presage:xous-600c4ed) — 3 commits: `presage::runtime` LocalExecutor module + tokio removal; ws-task adaptation + `last_identified_close_code()`; PNI `service_id_string()` cipher fix |
-| `libsignal-service` | [whisperfish/libsignal-service-rs](https://github.com/whisperfish/libsignal-service-rs) `782c0d6` | [tunnell/libsignal-service-rs](https://github.com/tunnell/libsignal-service-rs) `xous-782c0d6` | `96bcdf8eb69bd25d3f9770295535222540b6f491` | [compare](https://github.com/whisperfish/libsignal-service-rs/compare/782c0d6...tunnell:libsignal-service-rs:xous-782c0d6) — 7 commits: `HttpClient`/`WebSocketChannels` transport trait; `ws()` -> `(ws, task)` + keepalive tolerance (`MAX_OUTSTANDING_KEEPALIVES = 3`); `last_close_code()` accessor; manifest; backup5 in the provisioning QR URL; link/device capability sync (`usernameChangeSyncMessage` — clears the 2026-07 HTTP 409 on `PUT /v1/devices/link`); slow-flash prekey replenish mitigation (batch 25 + per-key yield — stops the regeneration storm; idempotent re-upload deferred, upstream #462) |
+| `presage` | [whisperfish/presage](https://github.com/whisperfish/presage) `4c671ea47` | [tunnell/presage](https://github.com/tunnell/presage) `xas-0.94.4` | `e0d988df52207c0402d63d6fbe5ab9dc2b870c11` | [compare](https://github.com/whisperfish/presage/compare/4c671ea47...tunnell:presage:xas-0.94.4) — 4 commits: `presage::runtime` LocalExecutor module + tokio removal; ws-task adaptation + `last_identified_close_code()`; PNI `service_id_string()` cipher fix; rebase follow-up (new upstream AEP-path spawn site off tokio) |
+| `libsignal-service` | [whisperfish/libsignal-service-rs](https://github.com/whisperfish/libsignal-service-rs) `f449930` | [tunnell/libsignal-service-rs](https://github.com/tunnell/libsignal-service-rs) `xas-0.94.4` | `e36db40b4af555f9b6caafc83956a0c5cfdf0c10` | [compare](https://github.com/whisperfish/libsignal-service-rs/compare/f449930...tunnell:libsignal-service-rs:xas-0.94.4) — 7 commits: `HttpClient`/`WebSocketChannels` transport trait; `ws()` -> `(ws, task)` + keepalive tolerance (`MAX_OUTSTANDING_KEEPALIVES = 3`); remaining-modules http-types conversion; backup5 in the provisioning QR URL; slow-flash prekey replenish mitigation (batch 25 + per-key yield — stops the regeneration storm; idempotent re-upload deferred, upstream #462); comment tightening; rebase follow-ups (http types on post-782c0d6 upstream modules). Base is libsignal 0.94.4. The old hand-ported capability patch (`usernameChangeSyncMessage`, the 2026-07 link-409 fix) is **dropped** — upstream `fd481655d` + `e6f9a1efb` carry it on this base. Also gained over the old base: `UnhandledResponseCode` body capture (`dc0720a`), capability parity, and AEP linking |
 | `curve25519-dalek` (+ `-derive`) | [betrusted-io/curve25519-dalek](https://github.com/betrusted-io/curve25519-dalek) main `16e087ab9` (4.1.2) | [tunnell/curve25519-dalek](https://github.com/tunnell/curve25519-dalek) `xous-signal-4.1.3` | `0cac8fc8239e73ea740ff720c7f93b486618b77d` | [compare](https://github.com/betrusted-io/curve25519-dalek/compare/16e087ab9...tunnell:curve25519-dalek:xous-signal-4.1.3) — version bump 4.1.2 -> 4.1.3 (matches zkgroup's `curve25519-dalek = "4.1.3"`); `src/lizard/` port from [signalapp/curve25519-dalek](https://github.com/signalapp/curve25519-dalek) tag `signal-curve25519-4.1.3` |
 | `getrandom` | n/a (in-repo package, no fork) | [betrusted-io/xous-core](https://github.com/betrusted-io/xous-core) in-repo path `imports/getrandom` (not a branch) | `2005a801c917753175d3826446ce1352c119e020` | none — consumed as-is at a fixed rev (the betrusted-io/sigchat / dabao-base-app pattern) |
 
@@ -52,11 +52,11 @@ against them. To audit a delta, open the compare URL or run
 1. `git fetch upstream` in the fork; review what moved
    (`git log <current-base>..upstream/main`).
 2. To adopt a new base: rebase the commit stack onto the new
-   upstream pin and push it as a **new branch**
-   `xous-<newbase-short-sha>` (dalek keeps its
-   `xous-signal-<version>` naming). **Never force-push** an
-   existing `xous-*` branch — pinned revs in released xas
-   Cargo.locks must stay fetchable forever.
+   upstream pin and push it as a **new branch**. The presage +
+   libsignal-service pair is named `xas-<libsignal-version>` (both
+   at `xas-0.94.4` today); dalek keeps its `xous-signal-<version>`
+   naming. **Never force-push** an existing fork branch — pinned
+   revs in released xas Cargo.locks must stay fetchable forever.
 3. Update the `[patch]` revs in the workspace `Cargo.toml` (presage
    + libsignal-service as a pair), regenerate `Cargo.lock`, update
    the matrix above, and run the full verification gate (hosted

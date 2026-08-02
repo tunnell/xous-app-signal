@@ -59,6 +59,9 @@
 //! `RegistrationData`-derived facts (e.g. the user's UUID); the bytes
 //! themselves never leave PDDB except into the caller's owned types.
 
+use core::str::FromStr;
+
+use presage::libsignal_service::libsignal_account_keys::AccountEntropyPool;
 use presage::libsignal_service::prelude::MasterKey;
 use presage::libsignal_service::protocol::{IdentityKeyPair, SenderCertificate};
 use presage::manager::RegistrationData;
@@ -77,6 +80,7 @@ const KEY_ACI_IDENTITY_KEY_PAIR: &str = "aci_identity_key_pair";
 const KEY_PNI_IDENTITY_KEY_PAIR: &str = "pni_identity_key_pair";
 const KEY_SENDER_CERTIFICATE: &str = "sender_certificate";
 const KEY_MASTER_KEY: &str = "master_key";
+const KEY_ACCOUNT_ENTROPY_POOL: &str = "account_entropy_pool";
 
 impl StateStore for PddbStore {
     type StateStoreError = Error;
@@ -144,6 +148,31 @@ impl StateStore for PddbStore {
         match master_key {
             Some(k) => self.backend.put(DICT, KEY_MASTER_KEY, &k.inner)?,
             None => self.backend.delete(DICT, KEY_MASTER_KEY)?,
+        }
+        Ok(())
+    }
+
+    // Account entropy pool (AEP). Same sensitivity tier as the master
+    // key — the AEP derives the storage-service master key (and, with
+    // backups, the backup keys). Stored as the canonical base-32-ish
+    // string form, matching presage-store-sqlite's kv row.
+    async fn fetch_account_entropy_pool(&self) -> Result<Option<AccountEntropyPool>, Error> {
+        match self.backend.get(DICT, KEY_ACCOUNT_ENTROPY_POOL)? {
+            Some(bytes) => {
+                let s = core::str::from_utf8(&bytes)
+                    .map_err(|e| Error::Decode(format!("account entropy pool utf8: {e}")))?;
+                AccountEntropyPool::from_str(s)
+                    .map(Some)
+                    .map_err(|e| Error::Decode(format!("account entropy pool: {e}")))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn store_account_entropy_pool(&self, aep: Option<&AccountEntropyPool>) -> Result<(), Error> {
+        match aep {
+            Some(aep) => self.backend.put(DICT, KEY_ACCOUNT_ENTROPY_POOL, aep.to_string().as_bytes())?,
+            None => self.backend.delete(DICT, KEY_ACCOUNT_ENTROPY_POOL)?,
         }
         Ok(())
     }

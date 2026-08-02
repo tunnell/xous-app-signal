@@ -1181,6 +1181,7 @@ mod tests {
                 body: Some(format!("hello-{ts}")),
                 ..Default::default()
             });
+            let ts = chrono::DateTime::from_timestamp_millis(ts as i64).unwrap();
             Content {
                 metadata: Metadata {
                     sender,
@@ -1188,6 +1189,7 @@ mod tests {
                     sender_device: DeviceId::try_from(1u32).unwrap(),
                     server_guid: None,
                     timestamp: ts,
+                    server_timestamp: ts,
                     needs_receipt: false,
                     unidentified_sender: false,
                     was_plaintext: false,
@@ -1196,6 +1198,10 @@ mod tests {
             }
         }
 
+        /// Metadata timestamps are DateTime<Utc> since upstream
+        /// 4a139867a; assertions compare unix-ms.
+        fn ms(dt: chrono::DateTime<chrono::Utc>) -> u64 { dt.timestamp_millis() as u64 }
+
         block_on(async {
             for ts in [100u64, 200, 300] {
                 store.save_message(&thread, build_content(ServiceId::Aci(aci), ts)).await.unwrap();
@@ -1203,17 +1209,17 @@ mod tests {
 
             // Single-message lookup.
             let msg = store.message(&thread, 200).await.unwrap().unwrap();
-            assert_eq!(msg.metadata.timestamp, 200);
+            assert_eq!(ms(msg.metadata.timestamp), 200);
 
             // Range query: 150..=250 → just 200.
             let msgs: Vec<_> = store.messages(&thread, 150u64..=250).await.unwrap().collect();
             assert_eq!(msgs.len(), 1);
-            assert_eq!(msgs.into_iter().next().unwrap().unwrap().metadata.timestamp, 200);
+            assert_eq!(ms(msgs.into_iter().next().unwrap().unwrap().metadata.timestamp), 200);
 
             // Range unbounded: all three, sorted.
             let msgs: Vec<_> = store.messages(&thread, ..).await.unwrap().collect();
             assert_eq!(msgs.len(), 3);
-            let timestamps: Vec<u64> = msgs.into_iter().map(|r| r.unwrap().metadata.timestamp).collect();
+            let timestamps: Vec<u64> = msgs.into_iter().map(|r| ms(r.unwrap().metadata.timestamp)).collect();
             assert_eq!(timestamps, vec![100, 200, 300]);
 
             // Delete one.
