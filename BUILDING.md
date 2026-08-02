@@ -174,10 +174,10 @@ git clone https://github.com/tunnell/xous-app-signal.git
 # CrateSpec (step 3.2).
 #
 # Released xas versions build against a pinned snapshot of this
-# branch, published as a TAG: the v0.2 pin is the `xas-v0.2` tag
-# (the 2026-07 branch cleanup deleted the old frozen `xas-v0.2`
-# and floating `xas` branches; the tag preserves the v0.2 state).
-# To rebuild released v0.2, clone with `-b xas-v0.2` instead — git
+# branch, published as a TAG: v0.4 pins `xas-v0.4`, and every
+# earlier release has its own (the 2026-07 branch cleanup deleted
+# the old frozen branches; the tags preserve those states).
+# To rebuild a released version, clone with `-b xas-v0.4` instead — git
 # accepts a tag there and leaves you on a detached HEAD, which is
 # expected. For dev-branch xas (this doc), use `xas-integration`:
 #
@@ -721,7 +721,7 @@ without it.
 **Branch selection in xous-core matters.** Hardware builds need
 the xous-core checkout on a branch whose `apps/manifest.json`
 registers xas (`tunnell/xous-core@xas-integration` is the
-canonical branch; released versions pin tags such as `xas-v0.2` —
+canonical branch; released versions pin tags such as `xas-v0.4` —
 see RELEASING.md). Building against upstream `dev` (or any
 branch that doesn't register xas) will silently produce an
 image that bundles the xas binary but where the launcher menu
@@ -968,7 +968,7 @@ grep -F 'MAX_OUTSTANDING_KEEPALIVES: usize = 3' \
 # In xous-core:
 git branch --show-current   # 'xas-integration' for dev builds
 # (release-tag clones sit on a detached HEAD: the command above
-#  prints nothing — use `git describe --tags`, expect 'xas-v0.2')
+#  prints nothing — use `git describe --tags`, expect 'xas-v0.4')
 
 # Confirm the byte-1 mirror is actually in respond_with_error
 # (effective equivalent of upstream PR betrusted-io/xous-core#877):
