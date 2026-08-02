@@ -169,7 +169,13 @@ say so plainly. rustls merged one whose entire body was: "It is a
 logic error to verify a signature with an unidentified key. This is a
 structural robustness improvement, with no runtime effect."
 
-Vulnerabilities go to [SECURITY.md](SECURITY.md), not to a PR.
+Vulnerabilities do not go in a PR. Use GitHub's private
+vulnerability reporting on this repository (Security → Report a
+vulnerability); if that is unavailable, open an issue saying only
+"security contact requested" and nothing else. Never put
+reproduction details, captured traffic, or account identifiers in a
+public issue — a PCAP of real Signal traffic carries phone numbers
+and ACIs.
 
 ## AI-assisted work
 
@@ -237,5 +243,4 @@ that is expected, not a bug.
 
 CI must be green before merge, `rustfmt` included; it runs under
 nightly, matching `rustfmt.toml`. See [BUILDING.md](BUILDING.md) for
-the build, [SECURITY.md](SECURITY.md) for what to do with a
-vulnerability instead of opening a PR.
+the build.

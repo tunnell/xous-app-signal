@@ -40,7 +40,7 @@ PR at <https://github.com/tunnell/xous-app-signal>.
 - Hard failures of this shape are addressed in the current build:
   the vendored `libsignal-service-rs` tolerates in-flight
   keepalives (`MAX_OUTSTANDING_KEEPALIVES = 3`) and the pinned
-  `xas-v0.2` xous-core carries the recv-encoding fix (upstream
+  `xas-integration` xous-core carries the recv-encoding fix (upstream
   betrusted-io/xous-core#877, since merged). If you still see it,
   you're probably on an older xous-core — see BUILDING.md's
   troubleshooting table.
@@ -135,8 +135,7 @@ PR at <https://github.com/tunnell/xous-app-signal>.
 - The pinned xous-core carries a CNAME-chain fix for the Xous DNS
   parser (`xous-core/services/dns/src/main.rs`, commit
   `43dcb4a59`). If you're on an older xous-core, switch to the
-  pinned `xas-v0.2` branch from BUILDING.md step 1 (or a newer
-  `xas`-family branch).
+  `xas-integration` branch from BUILDING.md step 1.
 - If `net ping 1.1.1.1` succeeds but `net ping chat.signal.org`
   fails, your DNS resolver is misconfigured (or you're on an
   xous-core build that predates the CNAME fix). Check

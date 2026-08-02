@@ -139,15 +139,14 @@ keepalive-tolerance PR (whisperfish/libsignal-service-rs#431)
 was **closed unmerged** and its fix is carried on the
 rev-pinned `libsignal-service-rs` fork branch instead (see
 `docs/FORKS.md` and the README's Upstream patches section for
-links and status). The forks below remain the canonical source: the pinned
-branch also carries fixes that are in no upstream release — the
-DNS CNAME-chain fix, the `services/net` reaper fix, and the
-`apps/manifest.json` registration for xas.
+links and status). The pinned branch also carries fixes that are
+in no upstream release — the DNS CNAME-chain fix, the
+`services/net` reaper fix, and the `apps/manifest.json`
+registration for xas.
 
 The forks below are the published source of truth — pull `main`
-for the latest released code; pull `dev` if you want the
-in-progress branch. (See `tests/README.md` for the
-`main` vs `dev` convention.)
+for the latest released code, `dev` for the in-progress branch.
+(See `tests/README.md` for the `main` vs `dev` convention.)
 
 `~/code/xas/` below is just an example — any parent directory
 works. What matters is the *layout*: `xous-app-signal/` and
@@ -537,21 +536,11 @@ window, X11 window search and `XSendEvent` injection silently find
 nothing (hit live 2026-07-31); a human at the real keyboard is
 unaffected. `xvfb-run` paths are pure X11 and immune.
 
-This step depends on `xdotool` and `xvfb` (Debian/Ubuntu:
-`apt install xdotool xvfb`; Arch: `pacman -S xdotool
-xorg-server-xvfb`). They're listed in the hosted-path
-prerequisites, but flagging here too — a reader who skipped
-the prerequisites because
-they have a real `$DISPLAY` may not realize the script itself
-needs `xdotool` regardless.
+This step needs `xdotool` and `xvfb` even where `$DISPLAY` is
+real — see the hosted-path prerequisites.
 
-The script sets `XAS_BYPASS_PREFLIGHT=1` before launching xas.
-Hosted has no real WF200 radio; `wlan_status()` returns `Unknown`,
-which the production no-internet preflight (`gam_app::check_internet`)
-treats as failure and routes Link → `Screen::NoInternet`. The env
-var is the documented escape hatch — production code still runs
-the preflight on hardware, but hosted tests opt out so the link
-flow can proceed.
+The script sets `XAS_BYPASS_PREFLIGHT=1` itself — see the
+no-internet preflight note in the hosted build step.
 
 ```sh
 cd ~/code/xas/xous-app-signal
