@@ -102,7 +102,7 @@ or a roadmap item (planned but not yet built).
 
 ### Things handled by upstream code (not xas's own logic)
 
-xas leverages the Signal Protocol implementation in
+xas uses the Signal Protocol implementation in
 [`signalapp/libsignal`](https://github.com/signalapp/libsignal)
 (via [`libsignal-service-rs`](https://github.com/whisperfish/libsignal-service-rs)
 and [`presage`](https://github.com/whisperfish/presage)). Cryptographic
@@ -129,24 +129,6 @@ UI).
   hardware-test workflow: build, flash, watch UART (read this
   BEFORE running any flash command — its "Brick prevention"
   section is non-negotiable)
-
----
-
-## Building and testing
-
-End-to-end build instructions for both the **hosted-mode**
-emulator (Linux x86_64, no hardware needed) and the **Precursor
-hardware** path live in [`BUILDING.md`](BUILDING.md). It's
-written to be followed cold — clone, set up toolchain, build,
-run, link to a Signal account.
-
-For testing, see [`tests/README.md`](tests/README.md), which
-compares the four available approaches (unit tests / hosted /
-Renode / Precursor) with a pros-cons table so you can pick the
-right one for the change at hand. Hardware-test scripts (build,
-flash, watch UART) and the brick-prevention rules live in
-[`tests/precursor/README.md`](tests/precursor/README.md) — read
-it before running any flash command.
 
 ---
 
@@ -185,8 +167,6 @@ Separately, a batch of maintainer PRs is open at
 [#918](https://github.com/betrusted-io/xous-core/pull/918) and
 eight pddb `std::fs` fixes #910–#917 — which came out of xas
 testing but stand on their own.
-
----
 
 ---
 
@@ -240,29 +220,9 @@ PRs, and commit messages should read, and
 and what release-cycle gates a PR has to pass before it can land
 in `main`.
 
-**AI-assisted contributions are explicitly welcome**, on one
-condition: **disclose them**. AI coding agents have been used
-in this codebase's development, and the project is honest about
-that — both because end-user verifiability is a stated value and
-because reviewers benefit from knowing where to look harder.
-
-Concretely:
-
-- If you used an AI agent to help write the diff, mention it in
-  the PR description. A short note is fine — "drafted with an AI
-  agent and reviewed line-by-line" or similar. No need to name
-  the specific tool.
-- Record the assistance in the commit as a trailer, exactly
-  `Assisted-by: coding agent`. Don't name the model or vendor —
-  that reads as advertising and dates badly, while the fact a
-  tool was involved is the part a reviewer can act on.
-- The author of the commit is still you. AI agents are tools,
-  not co-authors, so no `Co-Authored-By` for them.
-- Apply the same review discipline you'd apply to any code: the
-  PR is your work in the sense that you're vouching for it.
-  Read every line you submit.
-
-The reason for the disclosure norm is alignment with the
-project's threat model: users of this client need to be able to
-audit it. Knowing which sections were AI-assisted lets reviewers
-weight their attention.
+AI-assisted contributions are welcome if you disclose them: the
+`Assisted-by: coding agent` trailer, why it isn't a model name,
+and what you're still vouching for are in
+[CONTRIBUTING.md](CONTRIBUTING.md). Users of this client need to
+be able to audit it, and knowing where a tool was involved tells
+a reviewer where to look harder.
