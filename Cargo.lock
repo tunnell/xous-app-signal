@@ -954,7 +954,6 @@ dependencies = [
  "qrcode",
  "rkyv 0.8.16",
  "sha2",
- "subtle",
  "trng",
  "tts-frontend",
  "utralib",
@@ -1600,7 +1599,7 @@ dependencies = [
 [[package]]
 name = "libsignal-account-keys"
 version = "0.1.0"
-source = "git+https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45dba3ebc17127b5c6b76ce02886350524"
+source = "git+https://github.com/signalapp/libsignal?tag=v0.94.4#46d867c986f66201e34e7ae20ce423eec742bf3f"
 dependencies = [
  "argon2",
  "derive_more",
@@ -1623,7 +1622,7 @@ dependencies = [
 [[package]]
 name = "libsignal-core"
 version = "0.1.0"
-source = "git+https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45dba3ebc17127b5c6b76ce02886350524"
+source = "git+https://github.com/signalapp/libsignal?tag=v0.94.4#46d867c986f66201e34e7ae20ce423eec742bf3f"
 dependencies = [
  "curve25519-dalek",
  "derive_more",
@@ -1641,8 +1640,8 @@ dependencies = [
 
 [[package]]
 name = "libsignal-debug"
-version = "0.91.0"
-source = "git+https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45dba3ebc17127b5c6b76ce02886350524"
+version = "0.94.4"
+source = "git+https://github.com/signalapp/libsignal?tag=v0.94.4#46d867c986f66201e34e7ae20ce423eec742bf3f"
 dependencies = [
  "cfg-if",
 ]
@@ -1650,7 +1649,7 @@ dependencies = [
 [[package]]
 name = "libsignal-protocol"
 version = "0.1.0"
-source = "git+https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45dba3ebc17127b5c6b76ce02886350524"
+source = "git+https://github.com/signalapp/libsignal?tag=v0.94.4#46d867c986f66201e34e7ae20ce423eec742bf3f"
 dependencies = [
  "aes",
  "aes-gcm-siv",
@@ -1672,8 +1671,8 @@ dependencies = [
  "libsignal-core",
  "libsignal-debug",
  "log",
- "prost 0.14.3",
- "prost-build 0.14.3",
+ "prost",
+ "prost-build",
  "rand 0.9.4",
  "rayon",
  "serde",
@@ -1689,7 +1688,7 @@ dependencies = [
 [[package]]
 name = "libsignal-service"
 version = "0.1.0"
-source = "git+https://github.com/tunnell/libsignal-service-rs?rev=96bcdf8eb69bd25d3f9770295535222540b6f491#96bcdf8eb69bd25d3f9770295535222540b6f491"
+source = "git+https://github.com/tunnell/libsignal-service-rs?rev=e36db40b4af555f9b6caafc83956a0c5cfdf0c10#e36db40b4af555f9b6caafc83956a0c5cfdf0c10"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -1708,11 +1707,12 @@ dependencies = [
  "hkdf",
  "hmac",
  "http",
+ "libsignal-account-keys",
  "libsignal-core",
  "libsignal-protocol",
  "phonenumber",
- "prost 0.13.5",
- "prost-build 0.13.5",
+ "prost",
+ "prost-build",
  "rand 0.9.4",
  "rand_core 0.6.4",
  "serde",
@@ -2102,16 +2102,6 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "petgraph"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3672b37090dbd86368a4145bc067582552b29c27377cad4e0a306c97f9bd7772"
-dependencies = [
- "fixedbitset",
- "indexmap",
-]
-
-[[package]]
-name = "petgraph"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8701b58ea97060d5e5b155d383a69952a60943f0e6dfe30b04c287beb0b27455"
@@ -2182,7 +2172,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 [[package]]
 name = "poksho"
 version = "0.7.0"
-source = "git+https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45dba3ebc17127b5c6b76ce02886350524"
+source = "git+https://github.com/signalapp/libsignal?tag=v0.94.4#46d867c986f66201e34e7ae20ce423eec742bf3f"
 dependencies = [
  "curve25519-dalek",
  "hmac",
@@ -2245,12 +2235,13 @@ version = "0.1.0"
 [[package]]
 name = "presage"
 version = "0.8.0-dev"
-source = "git+https://github.com/tunnell/presage?rev=7b63a451f4089011830302538c854d6860f74ecc#7b63a451f4089011830302538c854d6860f74ecc"
+source = "git+https://github.com/tunnell/presage?rev=e0d988df52207c0402d63d6fbe5ab9dc2b870c11#e0d988df52207c0402d63d6fbe5ab9dc2b870c11"
 dependencies = [
  "async-executor",
  "async-lock",
  "base64 0.22.1",
  "bytes",
+ "chrono",
  "derive_more",
  "futures",
  "futures-timer",
@@ -2276,7 +2267,7 @@ dependencies = [
  "futures-lite",
  "phonenumber",
  "presage",
- "prost 0.13.5",
+ "prost",
  "rand 0.9.4",
  "serde",
  "serde_json",
@@ -2338,42 +2329,12 @@ dependencies = [
 
 [[package]]
 name = "prost"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2796faa41db3ec313a31f7624d9286acf277b52de526150b7e69f3debf891ee5"
-dependencies = [
- "bytes",
- "prost-derive 0.13.5",
-]
-
-[[package]]
-name = "prost"
 version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2ea70524a2f82d518bce41317d0fae74151505651af45faf1ffbd6fd33f0568"
 dependencies = [
  "bytes",
- "prost-derive 0.14.3",
-]
-
-[[package]]
-name = "prost-build"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
-dependencies = [
- "heck",
- "itertools",
- "log",
- "multimap",
- "once_cell",
- "petgraph 0.7.1",
- "prettyplease",
- "prost 0.13.5",
- "prost-types 0.13.5",
- "regex",
- "syn 2.0.117",
- "tempfile",
+ "prost-derive",
 ]
 
 [[package]]
@@ -2386,26 +2347,13 @@ dependencies = [
  "itertools",
  "log",
  "multimap",
- "petgraph 0.8.3",
+ "petgraph",
  "prettyplease",
- "prost 0.14.3",
- "prost-types 0.14.3",
+ "prost",
+ "prost-types",
  "regex",
  "syn 2.0.117",
  "tempfile",
-]
-
-[[package]]
-name = "prost-derive"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
-dependencies = [
- "anyhow",
- "itertools",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -2423,20 +2371,11 @@ dependencies = [
 
 [[package]]
 name = "prost-types"
-version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52c2c1bf36ddb1a1c396b3601a3cec27c2462e45f07c386894ec3ccf5332bd16"
-dependencies = [
- "prost 0.13.5",
-]
-
-[[package]]
-name = "prost-types"
 version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8991c4cbdb8bc5b11f0b074ffe286c30e523de90fee5ba8132f1399f23cb3dd7"
 dependencies = [
- "prost 0.14.3",
+ "prost",
 ]
 
 [[package]]
@@ -3043,7 +2982,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "signal-crypto"
 version = "0.1.0"
-source = "git+https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45dba3ebc17127b5c6b76ce02886350524"
+source = "git+https://github.com/signalapp/libsignal?tag=v0.94.4#46d867c986f66201e34e7ae20ce423eec742bf3f"
 dependencies = [
  "aes",
  "cbc",
@@ -3127,8 +3066,8 @@ dependencies = [
  "libcrux-ml-kem",
  "log",
  "num_enum",
- "prost 0.14.3",
- "prost-build 0.14.3",
+ "prost",
+ "prost-build",
  "rand 0.9.4",
  "rand_core 0.9.5",
  "sha2",
@@ -3493,7 +3432,7 @@ dependencies = [
 [[package]]
 name = "usernames"
 version = "0.1.0"
-source = "git+https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45dba3ebc17127b5c6b76ce02886350524"
+source = "git+https://github.com/signalapp/libsignal?tag=v0.94.4#46d867c986f66201e34e7ae20ce423eec742bf3f"
 dependencies = [
  "curve25519-dalek",
  "displaydoc",
@@ -3501,8 +3440,8 @@ dependencies = [
  "hmac",
  "log",
  "poksho",
- "prost 0.14.3",
- "prost-build 0.14.3",
+ "prost",
+ "prost-build",
  "rand 0.9.4",
  "sha2",
  "signal-crypto",
@@ -4443,7 +4382,7 @@ dependencies = [
 [[package]]
 name = "zkcredential"
 version = "0.1.0"
-source = "git+https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45dba3ebc17127b5c6b76ce02886350524"
+source = "git+https://github.com/signalapp/libsignal?tag=v0.94.4#46d867c986f66201e34e7ae20ce423eec742bf3f"
 dependencies = [
  "cfg-if",
  "curve25519-dalek",
@@ -4461,7 +4400,7 @@ dependencies = [
 [[package]]
 name = "zkgroup"
 version = "0.9.0"
-source = "git+https://github.com/signalapp/libsignal?tag=v0.91.0#8418be45dba3ebc17127b5c6b76ce02886350524"
+source = "git+https://github.com/signalapp/libsignal?tag=v0.94.4#46d867c986f66201e34e7ae20ce423eec742bf3f"
 dependencies = [
  "aes",
  "aes-gcm-siv",

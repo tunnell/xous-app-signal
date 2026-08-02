@@ -59,11 +59,12 @@ async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["serde"] }
 
 # `ContentBody` serialization — protobuf round-trip via prost, matching
-# presage-store-sled's ContentProto pattern. Pinned to 0.13 to match
-# libsignal-service-rs's `prost = "0.13"`; 0.14 would compile but
-# `presage::proto::Content` would only impl `prost_0_13::Message`, so
-# `encode_to_vec`/`decode` wouldn't resolve.
-prost = "0.13"
+# presage-store-sled's ContentProto pattern. Pinned to 0.14 to match
+# libsignal-service-rs's `prost = "0.14"` (bumped upstream between
+# 782c0d6 and f449930); on a version mismatch `presage::proto::Content`
+# only impls the other prost's `Message`, so `encode_to_vec`/`decode`
+# wouldn't resolve.
+prost = "0.14"
 
 # `IdentityKeyStore` logs unrecognized-identity TOFU events through
 # `tracing`. Already a transitive dep through presage /

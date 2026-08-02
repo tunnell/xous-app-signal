@@ -93,8 +93,8 @@ rev = "5f86cb10bebd521a45fb3abb06995200aeda2948"
 # maintenance cadence are in docs/FORKS.md.
 #
 #   crate                repo                                 branch            rev
-#   presage              github.com/tunnell/presage           xous-600c4ed      7b63a45
-#   libsignal-service    github.com/tunnell/libsignal-service-rs  xous-782c0d6  96bcdf8
+#   presage              github.com/tunnell/presage           xas-0.94.4        e0d988d
+#   libsignal-service    github.com/tunnell/libsignal-service-rs  xas-0.94.4    e36db40
 #   curve25519-dalek(+derive)  github.com/tunnell/curve25519-dalek  xous-signal-4.1.3  0cac8fc
 #   getrandom            github.com/betrusted-io/xous-core (imports/getrandom)  n/a  2005a80
 #
@@ -144,21 +144,25 @@ curve25519-dalek = { git = "https://github.com/tunnell/curve25519-dalek", rev = 
 curve25519-dalek-derive = { git = "https://github.com/tunnell/curve25519-dalek", rev = "0cac8fc8239e73ea740ff720c7f93b486618b77d" }
 
 # libsignal-service: tunnell fork of whisperfish/libsignal-service-rs
-# (branch xous-782c0d6 = upstream 782c0d6 + 4 commits: transport trait,
-# ws()->(ws, task) + keepalive tolerance, last_close_code accessor,
-# manifest). This is where the transport patches live. NOTE: the fork
-# keeps upstream's `default = ["cdsi"]` (CDSI pulls boring-sys/BoringSSL,
-# no rv32 target) — every consumer must set `default-features = false`
-# (xous-net-bridge and the presage fork both do).
+# (branch xas-0.94.4 = upstream f449930 + our stack: transport trait,
+# ws()->(ws, task) + keepalive tolerance, remaining-modules http-types
+# conversion, backup5 link-QR capability, slow-flash prekey mitigation).
+# libsignal 0.94.4 base; drops the old hand-ported capability patch —
+# upstream carries it now. This is where the transport patches live.
+# NOTE: the fork keeps upstream's `default = ["cdsi"]` (CDSI pulls
+# boring-sys/BoringSSL, no rv32 target) — every consumer must set
+# `default-features = false` (xous-net-bridge and the presage fork both
+# do).
 [patch."https://github.com/whisperfish/libsignal-service-rs"]
-libsignal-service = { git = "https://github.com/tunnell/libsignal-service-rs", rev = "96bcdf8eb69bd25d3f9770295535222540b6f491" }
+libsignal-service = { git = "https://github.com/tunnell/libsignal-service-rs", rev = "e36db40b4af555f9b6caafc83956a0c5cfdf0c10" }
 
-# presage: tunnell fork of whisperfish/presage (branch xous-600c4ed =
-# upstream 600c4ed + 3 commits). This is where the tokio-removal
-# patches live (presage::runtime LocalExecutor module, spawn_detached,
-# ws-task adaptation, PNI cipher fix).
+# presage: tunnell fork of whisperfish/presage (branch xas-0.94.4 =
+# upstream 4c671ea47 + our stack: presage::runtime LocalExecutor module +
+# tokio removal, ws-task adaptation + last_close_code accessor, PNI
+# cipher fix). Coupled to the libsignal-service rev above — upstream
+# 4c671ea47 pins ls-rs f449930, the mutually-coherent pair.
 [patch."https://github.com/whisperfish/presage"]
-presage = { git = "https://github.com/tunnell/presage", rev = "7b63a451f4089011830302538c854d6860f74ecc" }
+presage = { git = "https://github.com/tunnell/presage", rev = "e0d988df52207c0402d63d6fbe5ab9dc2b870c11" }
 
 # Cross-compiling rustls/ring for rv32 pulls in `getrandom`, whose
 # upstream crate doesn't recognize Xous as a target. xous-core has a

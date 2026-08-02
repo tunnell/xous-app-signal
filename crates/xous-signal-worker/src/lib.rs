@@ -1386,6 +1386,7 @@ async fn process_received(
             Received::Content(_) => "Content",
             Received::QueueEmpty => "QueueEmpty",
             Received::Contacts => "Contacts",
+            Received::DecryptionError(_) => "DecryptionError",
         }
     );
     match item {
@@ -1463,7 +1464,9 @@ async fn process_received(
             }
             let sender_sid = content.metadata.sender.clone();
             let sender = sender_sid.service_id_string();
-            let timestamp = content.metadata.timestamp;
+            // Upstream 4a139867a made Metadata timestamps DateTime<Utc>;
+            // the worker event API stays unix-ms u64.
+            let timestamp = content.metadata.timestamp.timestamp_millis() as u64;
 
             // Resolve display info from the contacts store. Empty if the
             // sender isn't yet known (peer hasn't been synced from the
@@ -1521,6 +1524,20 @@ async fn process_received(
         }
         Received::Contacts => {
             tracing::debug!("contact-sync batch absorbed by store");
+            true
+        }
+        Received::DecryptionError(sender) => {
+            // New in presage 4c671ea47 (#428): the receive stream now
+            // surfaces envelope/decryption failures instead of
+            // swallowing them. Upstream's intent is UI surfacing or
+            // automatic session reset; neither exists in xas yet, so
+            // log the fact (service id only — no message material)
+            // and keep the loop alive, which matches the pre-#428
+            // behavior of skipping the failed envelope.
+            tracing::warn!(
+                sender = sender.service_id_string(),
+                "decryption error surfaced by receive stream; envelope skipped"
+            );
             true
         }
     }
