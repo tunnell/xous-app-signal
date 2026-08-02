@@ -7,6 +7,18 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# `link-uri-uart` logs the full sgnl:// provisioning URL during
+#   linking. The URL is the link credential for its ~60 s window —
+#   anyone with UART access can replay it to pair their own device —
+#   so default builds log only its length. Enable for the
+#   signal-cli-pairing pipeline and tests/hosted/test_link_qr.sh,
+#   which grep the URL line.
+# `verbose-pii` restores full identifiers (ACI UUIDs, e164 numbers)
+#   in log lines; default builds emit the redacted form.
+link-uri-uart = []
+verbose-pii = ["presage-store-pddb/verbose-pii"]
+
 [dependencies]
 # The Manager state machine + storage trait.
 presage = { git = "https://github.com/whisperfish/presage", rev = "600c4ed" }

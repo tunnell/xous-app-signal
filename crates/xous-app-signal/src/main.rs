@@ -18,11 +18,12 @@
 //! 4. Hand the cmd/event channels to the UI and run.
 //! 5. The UI sends [`Cmd::Shutdown`] on quit; the worker drains and emits `Event::ShuttingDown`.
 //!
-//! See `docs/ARCHITECTURE.md` for the full data-flow walkthrough and
-//! `docs/UI.md` for the UI design.
+//! See `docs/ARCHITECTURE.md` for the full data-flow walkthrough;
+//! `gam_app.rs`'s module docs describe the screens.
 
 mod dialogue;
 mod gam_app;
+mod log_filter;
 mod store;
 
 use async_channel::bounded;
@@ -752,4 +753,8 @@ fn probe_send_batch() {
 /// not panic — subsequent `log::*!` calls become no-ops, matching
 /// the surface of a binary that never installed a logger.
 #[cfg(target_os = "xous")]
-fn init_logger() { let _ = xous_api_log::init_wait(); }
+fn init_logger() {
+    if crate::log_filter::init().is_err() {
+        let _ = xous_api_log::init_wait();
+    }
+}

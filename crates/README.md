@@ -48,11 +48,11 @@ crates for three concrete reasons:
 runtime architecture (worker thread, async channel bridge,
 GAM UI loop). The crates here map to its sections roughly as:
 
-- **§2 The big picture** + **§4/§5 inbound/outbound walkthroughs**
+- **The big picture** and the **inbound/outbound walkthroughs**
   → `xous-signal-worker` (the worker thread + Cmd/Event surface
   the walkthroughs trace through)
-- **§6 Where state lives** → `presage-store-pddb` + `xous-pddb-ipc`
-- **§8 ws_pump in detail** → `xous-net-bridge`
+- **Where state lives** → `presage-store-pddb` + `xous-pddb-ipc`
+- **ws_pump in detail** → `xous-net-bridge`
 - The GAM render path the walkthroughs end at →
   `xous-app-signal/src/gam_app.rs` (QR modal via the upstream
   `modals` client)

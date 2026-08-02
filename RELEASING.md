@@ -2,9 +2,9 @@
 
 xas releases are pinned to specific snapshots of `tunnell/xous-core` so a
 given xas version always builds against the same kernel + services state.
-Each release gets its own `xas-vX.Y` branch on xous-core; that branch is
-**frozen** after the release ships and never updated again. Future xas
-releases create new `xas-vX.Y+1` branches — they don't reuse old ones.
+Each release gets its own `xas-vX.Y` tag on xous-core. A tag does not
+move, so the pin cannot drift after the release ships. Later releases
+add `xas-vX.Y+1`; old tags are never deleted or repointed.
 
 ## Pre-flight
 
@@ -46,7 +46,8 @@ releases create new `xas-vX.Y+1` branches — they don't reuse old ones.
    ```sh
    cd path/to/xous-app-signal
    # Edit Cargo.toml: bump [workspace.package] version to "X.Y.0"
-   # Edit BUILDING.md §1 and the §3-intro "Branch selection" note if
+   # Edit BUILDING.md step 1 and the "Branch selection" note at
+   # the top of the hardware path if
    # the release-pin tag they mention needs bumping (dev builds keep
    # pointing at the xas-integration branch).
    cargo metadata --format-version 1 >/dev/null   # regen Cargo.lock
@@ -79,21 +80,14 @@ releases create new `xas-vX.Y+1` branches — they don't reuse old ones.
    git push origin vX.Y
    ```
 
-8. **Sync `main` to `dev`.** `main` tracks the latest released commit;
-   `dev` is active development. After tagging, fast-forward `main` to
-   the tagged commit:
+8. **Move `main` to the release.** `main` carries merge commits from
+   past releases, so it is not a fast-forward of `dev` — open a PR
+   from `dev` to `main` and merge it:
 
    ```sh
-   cd path/to/xous-app-signal
-   git checkout main
-   git pull --ff-only
-   git merge --ff-only vX.Y
-   git push origin main
+   gh pr create --base main --head dev --title "release: xas vX.Y"
+   gh pr merge --merge
    ```
-
-   This must be a fast-forward. If it isn't, something landed on `main`
-   that isn't on `dev` — stop and investigate before forcing.
-
 9. **Create the GitHub Release.** The git tag alone is not enough; GitHub
    surfaces releases as a separate first-class concept on the Releases
    tab. Without an explicit Release entry, the tag exists but doesn't

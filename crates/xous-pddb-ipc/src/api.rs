@@ -468,8 +468,7 @@ pub struct PddbKeyList {
 /// sync per entry). Typical Signal session-send batches stay well
 /// under the cap; multi-recipient group sends are the workload most
 /// likely to trip it. Splitting an oversized buffered batch into
-/// multiple `write_batch` calls of size <= cap is a tracked refactor
-/// item (see `presage-store-pddb` perf-A / W8) and would preserve the
+/// multiple `write_batch` calls of size <= cap would preserve the
 /// one-sync-per-batch saving when N > 1.
 pub const MAX_PDDB_WRITE_BATCH_LEN: usize = 3800;
 
@@ -505,8 +504,7 @@ pub const MAX_PDDB_WRITE_BATCH_LEN: usize = 3800;
 /// `data` may carry secret bytes (libsignal session bytes, message
 /// ciphertext); the buffer is page-lent to the server and dropped
 /// after the IPC returns. Drop of the surrounding `Buffer` releases
-/// the page without explicit zeroization — see workspace recommendation
-/// W4 in `~/REFACTOR_NOTES.md`. This is unchanged from the
+/// the page without explicit zeroization. This is unchanged from the
 /// streaming-write path through [`PddbBuf`].
 ///
 /// Not atomic across entries: if the server fails entry N, entries
@@ -566,8 +564,7 @@ pub const PDDB_BUF_DATA_LEN: usize = 4072;
 /// caller-supplied bytes on write. The buffer is allocated by
 /// `xous_ipc::Buffer::new(4096)` inside [`crate::client::KeyHandle`]
 /// and reused across reads/writes; on Drop, the backing page is
-/// returned to the kernel without explicit zeroization. See
-/// workspace recommendation W4 in `~/REFACTOR_NOTES.md`.
+/// returned to the kernel without explicit zeroization.
 ///
 /// No constant-time guarantee is required: the bytes here are
 /// either (a) already-MAC'd / already-encrypted ciphertext from

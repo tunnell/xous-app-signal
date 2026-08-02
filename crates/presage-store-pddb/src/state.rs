@@ -39,7 +39,7 @@
 //! All read/write paths return / accept `Vec<u8>` that do not zero
 //! on drop. The `MasterKey` and the `password` field inside
 //! `RegistrationData` are the values most worth wrapping in
-//! `secrecy::SecretBox`; see REFACTOR_NOTES sec-D.
+//! `secrecy::SecretBox`.
 //!
 //! Serialization choices:
 //!
@@ -66,8 +66,9 @@ use presage::store::StateStore;
 
 use crate::{Error, PddbStore, backend_get_json, backend_put_json};
 
-/// PDDB dictionary that holds all `StateStore` keys.
-const DICT: &str = "signal.state";
+/// PDDB dictionary that holds all `StateStore` keys. `pub(crate)`
+/// so [`crate::PddbStore::has_account_state`] can probe it.
+pub(crate) const DICT: &str = "signal.state";
 
 /// One key per `StateStore` field. The keys are short, opaque strings —
 /// pddbcli readers will see them with their data when dumping the dict.

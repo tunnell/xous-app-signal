@@ -22,7 +22,7 @@
 //! zero-on-free, so freed pages may still hold ciphertext on disk
 //! until the next write reuses the page. Treat `clear` as durable
 //! forget against a future cold reader of PDDB, not as a
-//! cryptographic erase. See REFACTOR_NOTES sec-C.
+//! cryptographic erase.
 
 use presage::store::{ContentsStore, StateStore, Store};
 
@@ -42,9 +42,8 @@ impl Store for PddbStore {
     ///
     /// `xous_signal_worker::Cmd::Logout` is the production caller;
     /// the worker treats `Err` from this method as non-fatal (logs a
-    /// warning, emits `Event::LoggedOut` anyway). The W-W.7 refactor
-    /// to surface partial-wipe outcomes per dictionary depends on the
-    /// per-dict failure contract documented under `# Errors` below.
+    /// warning, emits `Event::LoggedOut` anyway). Per-dict failure
+    /// semantics are under `# Errors` below.
     ///
     /// # Errors
     ///
@@ -61,7 +60,7 @@ impl Store for PddbStore {
     /// dict has been deleted successfully, so on partial failure
     /// they retain the pre-`clear` state and a subsequent
     /// `flush_sessions` could re-persist sessions whose
-    /// protocol-dict was already wiped. See REFACTOR_NOTES sec-E.
+    /// protocol-dict was already wiped.
     async fn clear(&mut self) -> Result<(), <Self as StateStore>::StateStoreError> {
         // Wipe registration data + identity keypairs + sender cert +
         // master key.

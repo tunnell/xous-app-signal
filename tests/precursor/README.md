@@ -77,7 +77,7 @@ multi-hour user-assisted operation. The rules:
   the locked/loader state (1209:5bf0), no buttons needed (verified
   2026-07-31). If the device can't boot: hold the left-side button
   while plugging in USB, or left-side button + paperclip reset
-  (BUILDING.md §4)
+  (the BUILDING.md troubleshooting table)
 
 **For the Pi rig path (recommended):**
 - A Raspberry Pi 4B with the betrusted debug HAT, wired to your
@@ -209,7 +209,8 @@ step requires a 25-minute flash:
    `wlan off` → `wlan on` → `ssid scan`; first time on a network
    also `wlan setssid <ssid>` → `wlan setpass <pass>` → `wlan save`;
    then `wlan status` until Connected; 2.4 GHz networks only — see
-   BUILDING.md §3.4) → open xas → exercise the feature you're
+   the first-time setup in BUILDING.md) → open xas → exercise the
+   feature you're
    testing.
 
 7. **Analyze the UART log.** If reproducing a bug, diff against
@@ -282,8 +283,9 @@ your test design around what UART can show.
   long sessions — `ssh "$PI_HOST" 'vcgencmd measure_temp'` to
   check.
 
-- **iSerial can be empty in loader mode.** BUILDING.md §3.2's
-  `lsusb -v | grep iSerial` trick returns nothing on some PVT2
+- **iSerial can be empty in loader mode.** The
+  `lsusb -v | grep iSerial` trick in BUILDING.md (step 3.2)
+  returns nothing on some PVT2
   units. `python3 tests/precursor/read_gitrev.py` (run on the host
   that has the USB connection) reads the active gateware version
   over USB without touching flash — use it to pick the

@@ -90,9 +90,13 @@ base64 = "0.22"
 # `pddb-backend` selects the real `PddbBackend` from `backend_pddb.rs`,
 #   which wraps `xous_pddb_ipc::PddbClient` for both hosted and rv32
 #   targets.
+# `verbose-pii` restores full identifiers (peer ACI UUIDs as PDDB key
+#   names, e164 numbers, contact labels) in log lines for ops triage.
+#   Default builds emit the redacted form from `redact::log_id`.
 default = []
 mock-backend = []
 pddb-backend = []
+verbose-pii = []
 
 [dev-dependencies]
 # `RegistrationData` construction in tests needs a few presage / libsignal

@@ -24,9 +24,9 @@ Xous-specific glue.
 
 Smartphones are the primary target for surveillance of journalists and human-rights workers. The [Pegasus Project](https://forbiddenstories.org/about-the-pegasus-project/) — coordinated by Forbidden Stories with forensic support from [Amnesty International's Security Lab](https://securitylab.amnesty.org/case-study-the-pegasus-project/) — documented commercial spyware on devices belonging to journalists, activists, and dissidents in [over 50 countries](https://www.eff.org/deeplinks/2026/04/digital-hopes-real-power-how-arab-spring-fueled-global-surveillance-boom). Zero-click exploits like [BLASTPASS](https://securitylab.amnesty.org/latest/2023/12/india-damning-new-forensic-investigation-reveals-repeated-use-of-pegasus-spyware-to-target-high-profile-journalists/) install spyware without the target tapping anything. End-to-end encryption in apps like Signal is necessary but insufficient when the host operating system itself is compromised — once Pegasus is on the phone, [it can read messages and turn on the microphone and camera regardless of which app you used](https://forbiddenstories.org/about-the-pegasus-project/).
 
-[Precursor](https://www.crowdsupply.com/sutajio-kosagi/precursor) is an open-hardware mobile device built around the principle of [evidence-based trust](https://www.bunniestudios.com/blog/2022/precursor-from-boot-to-root/): every layer from the FPGA bitstream up through the [Xous microkernel](https://betrusted.io/) is inspectable and reproducible, and Precursor [generates and seals its own keys](https://www.bunniestudios.com/blog/?p=5979) without relying on factory secrets. Until now most Precursor applications have focused on credential storage (password managers, FIDO/U2F, cryptocurrency wallets). This project fills the missing piece — a hardened **communications** device — by porting Signal's secondary-device protocol to Xous so that messages a journalist or activist sends from their pocket are protected by hardware they can audit themselves.
+[Precursor](https://www.crowdsupply.com/sutajio-kosagi/precursor) is an open-hardware mobile device built around the principle of [evidence-based trust](https://www.bunniestudios.com/blog/2022/precursor-from-boot-to-root/): every layer from the FPGA bitstream up through the [Xous microkernel](https://betrusted.io/) is inspectable and reproducible, and Precursor [generates and seals its own keys](https://www.bunniestudios.com/blog/?p=5979) without relying on factory secrets. Until now most Precursor applications have focused on credential storage (password managers, FIDO/U2F, cryptocurrency wallets). This project fills the missing piece — **communications** — by porting Signal's secondary-device protocol to Xous so that messages a journalist or activist sends from their pocket are protected by hardware they can audit themselves.
 
-**Short-term goal**: a hardened communications device for journalists and activists who already have access to Precursor.
+**Short-term goal**: a communications device journalists and activists who already have a Precursor can audit end to end.
 
 **Long-term goal**: a cheaper successor (the [Betrusted](https://betrusted.io/) ASIC currently in development) that puts this same threat model in reach of users in the Global South, where surveillance pressure is highest and where activists and journalists [most often lack resources to recover from compromise](https://www.amnesty.org/en/latest/news/2024/12/serbia-authorities-using-spyware-and-cellebrite-forensic-extraction-tools-to-hack-journalists-and-activists/).
 
@@ -102,7 +102,7 @@ or a roadmap item (planned but not yet built).
 
 ### Things handled by upstream code (not xas's own logic)
 
-xas leverages the Signal Protocol implementation in
+xas uses the Signal Protocol implementation in
 [`signalapp/libsignal`](https://github.com/signalapp/libsignal)
 (via [`libsignal-service-rs`](https://github.com/whisperfish/libsignal-service-rs)
 and [`presage`](https://github.com/whisperfish/presage)). Cryptographic
@@ -129,24 +129,6 @@ UI).
   hardware-test workflow: build, flash, watch UART (read this
   BEFORE running any flash command — its "Brick prevention"
   section is non-negotiable)
-
----
-
-## Building and testing
-
-End-to-end build instructions for both the **hosted-mode**
-emulator (Linux x86_64, no hardware needed) and the **Precursor
-hardware** path live in [`BUILDING.md`](BUILDING.md). It's
-written to be followed cold — clone, set up toolchain, build,
-run, link to a Signal account.
-
-For testing, see [`tests/README.md`](tests/README.md), which
-compares the four available approaches (unit tests / hosted /
-Renode / Precursor) with a pros-cons table so you can pick the
-right one for the change at hand. Hardware-test scripts (build,
-flash, watch UART) and the brick-prevention rules live in
-[`tests/precursor/README.md`](tests/precursor/README.md) — read
-it before running any flash command.
 
 ---
 
@@ -185,8 +167,6 @@ Separately, a batch of maintainer PRs is open at
 [#918](https://github.com/betrusted-io/xous-core/pull/918) and
 eight pddb `std::fs` fixes #910–#917 — which came out of xas
 testing but stand on their own.
-
----
 
 ---
 
@@ -234,30 +214,15 @@ We are **required** to license any derivative works of
 ## Contributing — including AI-assisted contributions
 
 Contributions are welcome via pull request against the `dev`
-branch. See [`tests/README.md`](tests/README.md) for the
-branch convention and what release-cycle gates a PR has to
-pass before it can land in `main`.
+branch. See [CONTRIBUTING.md](CONTRIBUTING.md) for how issues,
+PRs, and commit messages should read, and
+[`tests/README.md`](tests/README.md) for the branch convention
+and what release-cycle gates a PR has to pass before it can land
+in `main`.
 
-**AI-assisted contributions are explicitly welcome**, on one
-condition: **disclose them**. AI coding agents have been used
-in this codebase's development, and the project is honest about
-that — both because end-user verifiability is a stated value and
-because reviewers benefit from knowing where to look harder.
-
-Concretely:
-
-- If you used an AI agent to help write the diff, mention it in
-  the PR description. A short note is fine — "drafted with an AI
-  agent and reviewed line-by-line" or similar. No need to name
-  the specific tool.
-- The author of the commit is still you. AI agents are tools,
-  not co-authors. Don't add AI-attribution trailers to commit
-  messages.
-- Apply the same review discipline you'd apply to any code: the
-  PR is your work in the sense that you're vouching for it.
-  Read every line you submit.
-
-The reason for the disclosure norm is alignment with the
-project's threat model: users of this client need to be able to
-audit it. Knowing which sections were AI-assisted lets reviewers
-weight their attention.
+AI-assisted contributions are welcome if you disclose them: the
+`Assisted-by: coding agent` trailer, why it isn't a model name,
+and what you're still vouching for are in
+[CONTRIBUTING.md](CONTRIBUTING.md). Users of this client need to
+be able to audit it, and knowing where a tool was involved tells
+a reviewer where to look harder.

@@ -69,6 +69,7 @@ mod error;
 mod protocol;
 #[cfg(feature = "pddb-backend")]
 mod put_truncate_smoke;
+mod redact;
 mod state;
 mod store;
 
@@ -80,6 +81,7 @@ pub use error::Error;
 pub use protocol::{IdentityType, PddbProtocolStore};
 #[cfg(feature = "pddb-backend")]
 pub use put_truncate_smoke::{SmokeResult, smoke_put_truncates};
+pub use redact::{log_id, redact_id};
 
 /// Internal KV abstraction used by all `PddbStore` trait impls.
 ///
@@ -185,8 +187,8 @@ pub trait KvBackend: Send + Sync + fmt::Debug {
 /// shared state. A consequence: every live clone (held by `Manager`,
 /// stashed in the worker dispatcher, captured in spawned tasks)
 /// extends the lifetime of the cached `SessionRecord` bytes, which
-/// libsignal-protocol does not zeroize on Drop today (PS.sec-B in
-/// `~/REFACTOR_NOTES.md`). `xous_signal_worker::manager_task` drops
+/// libsignal-protocol does not zeroize on Drop today.
+/// `xous_signal_worker::manager_task` drops
 /// the Manager when its op channel closes; the cache is gone only
 /// once the last clone has been dropped.
 ///
@@ -370,6 +372,51 @@ impl PddbStore {
     /// has an open batch.
     pub fn is_send_batching(&self) -> bool {
         self.buffering.as_deref().map(|b| b.is_batching()).unwrap_or(false)
+    }
+
+    /// Return `true` if the store still holds account state — any
+    /// key in `signal.state` or in any protocol dict (both ACI and
+    /// PNI). An empty or never-written store returns `false`.
+    ///
+    /// This is the pre-link stale-store probe: the xas worker calls
+    /// it before starting `Manager::link_secondary_device`, because
+    /// linking on top of leftover protocol dicts re-inherits stale
+    /// sessions and orphaned kyber records. The probe is read-only —
+    /// wiping stays with the user-driven `Store::clear` path (the
+    /// implicit link-time wipe was reverted after it hung a device).
+    ///
+    /// Contents dicts (contacts, groups, profiles) are deliberately
+    /// not probed: they are not protocol-hazardous, and any store
+    /// that has them also has `signal.state` or protocol keys unless
+    /// a wipe already removed those first.
+    ///
+    /// # Errors
+    ///
+    /// Infallible by design: a backend error on any probe is logged
+    /// and treated as "no keys" (fail-open), so a flaky or
+    /// not-yet-mounted PDDB cannot lock the user out of linking —
+    /// the link itself will surface the real error.
+    pub fn has_account_state(&self) -> bool {
+        let mut dicts = vec![state::DICT.to_string()];
+        for identity in [IdentityType::Aci, IdentityType::Pni] {
+            dicts.push(protocol::dict_session(identity));
+            dicts.push(protocol::dict_identity(identity));
+            dicts.push(protocol::dict_prekey_bundle(identity));
+            dicts.push(protocol::dict_signed_prekey(identity));
+            dicts.push(protocol::dict_kyber_prekey(identity));
+            dicts.push(protocol::dict_kyber_meta(identity));
+            dicts.push(protocol::dict_sender_key(identity));
+        }
+        for dict in dicts {
+            match self.backend.list_keys(&dict) {
+                Ok(keys) if !keys.is_empty() => return true,
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!("has_account_state: list_keys({}) failed ({}); treating as empty", dict, e)
+                }
+            }
+        }
+        false
     }
 
     /// Number of entries currently in the session cache (any state —
@@ -665,6 +712,40 @@ mod tests {
             assert!(store.load_registration_data().await.unwrap().is_none());
             assert!(store.fetch_master_key().await.unwrap().is_none());
         });
+    }
+
+    /// Pre-link guard predicate: a never-written store must not
+    /// trip it (a genuine first link must not be blocked).
+    #[test]
+    fn empty_store_has_no_account_state() {
+        let store = PddbStore::with_mock_backend();
+        assert!(!store.has_account_state());
+    }
+
+    /// Registration data alone trips the predicate, and a full
+    /// `Store::clear` (the wipe the guard routes the user to)
+    /// resets it.
+    #[test]
+    fn registration_counts_as_account_state_until_cleared() {
+        let mut store = PddbStore::with_mock_backend();
+        block_on(async {
+            store.save_registration_data(&fixture_registration()).await.unwrap();
+            assert!(store.has_account_state());
+
+            store.clear().await.unwrap();
+            assert!(!store.has_account_state());
+        });
+    }
+
+    /// Leftover protocol keys trip the predicate even with no
+    /// registration data — the post-fa1c37b hazard is exactly a
+    /// store whose registration was cleared (presage clears it on
+    /// link entry) but whose session/kyber dicts survived.
+    #[test]
+    fn protocol_keys_count_as_account_state() {
+        let store = PddbStore::with_mock_backend();
+        store.backend.put(&protocol::dict_kyber_prekey(IdentityType::Aci), "17", &[0u8; 4]).unwrap();
+        assert!(store.has_account_state());
     }
 
     #[test]

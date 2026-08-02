@@ -187,7 +187,9 @@ enum MenuItem {
     About,
     Help,
     /// Pre-link escape hatch for a stale store. Same `Cmd::Logout`
-    /// wipe as Settings -> Logout post-link.
+    /// wipe as Settings -> Logout post-link. Also where
+    /// `Event::StaleStoreDetected` parks the cursor after the
+    /// worker refuses a link over leftover account state.
     WipeSettings,
 }
 
@@ -292,12 +294,18 @@ struct App {
     ///
     /// PII. Same logging discipline as `account_device_name`.
     account_phone: Option<String>,
+    /// A `Cmd::GetAccountInfo` is in flight. Distinguishes "not linked"
+    /// from "do not know yet", which the header must not conflate.
+    account_query_pending: bool,
     /// `true` between `Cmd::ResolveUsername` send and the
     /// corresponding `Event::UsernameResolveResult`. Suppresses
     /// concurrent lookups and gates
     /// [`handle_username_resolve_result`] so a stale response after
     /// the user navigated away is dropped silently.
     username_lookup_in_progress: bool,
+    /// Username being resolved, kept so the thread can be labelled with
+    /// what the user typed instead of a UUID prefix.
+    username_lookup_pending: Option<String>,
 }
 
 impl App {
@@ -320,6 +328,7 @@ impl App {
         // guard and open a Thread screen (or clobber the re-link
         // banner) on an unlinked app.
         self.username_lookup_in_progress = false;
+        self.username_lookup_pending = None;
         self.account_device_name = None;
         self.account_aci = None;
         self.account_phone = None;
@@ -337,12 +346,7 @@ impl App {
         } else {
             // Pre-link Menu IS the landing screen. The typed-'yes'
             // modal, not the cursor position, guards the wipe.
-            [
-                Some(MenuItem::Link),
-                Some(MenuItem::About),
-                Some(MenuItem::Help),
-                Some(MenuItem::WipeSettings),
-            ]
+            [Some(MenuItem::Link), Some(MenuItem::About), Some(MenuItem::Help), Some(MenuItem::WipeSettings)]
         }
     }
 
@@ -509,9 +513,25 @@ impl App {
         Ok(())
     }
 
+    /// Which account this device is acting as, for the screen headers.
+    /// `(unlinked)` is a claim, not a default: it is shown only once a
+    /// lookup has actually come back saying so. While one is in flight,
+    /// or we are linked but the fields have not arrived, say so.
+    fn identity_line(&self) -> String {
+        if self.account_query_pending {
+            return "(loading linked account…)".to_string();
+        }
+        match (self.linked, self.account_phone.as_deref(), self.account_device_name.as_deref()) {
+            (true, Some(phone), Some(name)) => format!("{}  ({})", phone, name),
+            (true, Some(phone), None) => phone.to_string(),
+            (true, None, _) => "(loading linked account…)".to_string(),
+            (false, _, _) => "(unlinked)".to_string(),
+        }
+    }
+
     fn write_menu(&self, out: &mut String) -> Result<(), String> {
         let header = if self.linked { "Signal — linked" } else { "xas — Signal client" };
-        write!(out, "{}\n\n", header).map_err(|e| format!("hdr: {}", e))?;
+        write!(out, "{}\n{}\n\n", header, self.identity_line()).map_err(|e| format!("hdr: {}", e))?;
         for maybe in self.menu_items() {
             if let Some(item) = maybe {
                 let mark = if item == self.selected { ">" } else { " " };
@@ -555,6 +575,7 @@ impl App {
         } else {
             writeln!(out, "xas").map_err(|e| format!("home hdr: {}", e))?;
         }
+        writeln!(out, "{}", self.identity_line()).map_err(|e| format!("home ident: {}", e))?;
         writeln!(out, "{}", "-".repeat(45)).map_err(|e| format!("home rule: {}", e))?;
 
         if self.store.dialogues().is_empty() {
@@ -578,7 +599,11 @@ impl App {
             let unread_marker = if d.unread_count > 0 { '*' } else { ' ' };
             let timestamp = crate::dialogue::brief_relative(d.last_msg_ts, now_ms);
 
-            let name_short = crate::dialogue::ellipsize(&d.display_name, 24);
+            // Group threads are labeled so a room never masquerades
+            // as a 1:1 (display_name is the last speaker's name).
+            let name =
+                if d.is_group { format!("[group] {}", d.display_name) } else { d.display_name.clone() };
+            let name_short = crate::dialogue::ellipsize(&name, 24);
             // First line: focus, name, right-padded timestamp.
             writeln!(out, "{} {:<24} {:>6}", focus_marker, name_short, timestamp)
                 .map_err(|e| format!("home row name: {}", e))?;
@@ -637,13 +662,12 @@ impl App {
     /// that is rendered to the framebuffer; no body or label leaves
     /// the screen surface.
     fn write_thread(&self, out: &mut String, uuid: &Uuid) -> Result<(), String> {
-        let header = self
-            .store
-            .dialogues()
-            .iter()
-            .find(|d| d.uuid == *uuid)
+        let summary = self.store.dialogues().iter().find(|d| d.uuid == *uuid);
+        let is_group = summary.is_some_and(|d| d.is_group);
+        let name = summary
             .map(|d| d.display_name.clone())
             .unwrap_or_else(|| format!("uuid:{:.8}", uuid.simple().to_string()));
+        let header = if is_group { format!("[group] {}", name) } else { name };
         writeln!(out, "{}", header).map_err(|e| format!("thread hdr: {}", e))?;
         writeln!(out, "{}", "-".repeat(45)).map_err(|e| format!("thread rule: {}", e))?;
 
@@ -674,6 +698,17 @@ impl App {
             }
         }
         writeln!(out, "{}", "-".repeat(45)).map_err(|e| format!("thread foot rule: {}", e))?;
+        if is_group {
+            // Reply-block: xas's send path can only address a single
+            // contact, so a "reply" here would go out as a private
+            // 1:1 DM to whichever member last spoke. Refuse loudly
+            // rather than mis-deliver (send_compose enforces this;
+            // the line here explains it).
+            writeln!(out, "Group chat: reply not supported yet")
+                .map_err(|e| format!("thread group note: {}", e))?;
+            write!(out, "Enter/Esc Back  F4 Settings").map_err(|e| format!("thread hint: {}", e))?;
+            return Ok(());
+        }
         // Compose input. Cursor glyph is the trailing `_`; if the
         // buffer is wider than the visible width the ellipsizer
         // shows only the leading slice — there is no horizontal
@@ -806,21 +841,26 @@ fn seed_mock_messages_if_requested(app: &mut App) {
     let bob = Uuid::from_u128(0x0b0b_bbbbbb_cccccc_dddddd_eeeeee_002);
     let dad = Uuid::from_u128(0xdad0_cccccc_dddddd_eeeeee_ffffff_003);
     let unknown = Uuid::from_u128(0x9999_dddddd_eeeeee_ffffff_111111_004);
+    // Pseudo-thread uuid a GV2 group would file under (derived from
+    // a mock master key the same way handle_worker_event does it).
+    let party = Uuid::new_v5(&Uuid::NAMESPACE_OID, &[0x42u8; 32]);
 
-    let mocks: &[(Uuid, &str, &str, u64, bool, SendStatus)] = &[
-        (alice, "Alice", "sure, meet at 6", 2 * 60_000, false, SendStatus::Sent),
-        (alice, "Alice", "I'll bring drinks", 1 * 60_000, false, SendStatus::Sent),
-        (alice, "Alice", "actually make it 6:30", 30_000, false, SendStatus::Sent),
-        (bob, "Bob", "did you get the file?", 12 * 60_000, false, SendStatus::Sent),
-        (bob, "You", "yes, on my way", 11 * 60_000, true, SendStatus::Delivered),
-        (bob, "Bob", "thanks!", 5 * 60_000, false, SendStatus::Sent),
-        (dad, "Dad", "lunch sunday?", 25 * 60 * 60_000, false, SendStatus::Sent),
-        (dad, "You", "On my way", 24 * 60 * 60_000, true, SendStatus::Delivered),
-        (unknown, "+14155550199", "Your Uber has arrived", 3 * 60 * 60_000, false, SendStatus::Sent),
-        (unknown, "+14155550199", "Your driver is waiting", 2 * 60 * 60_000, false, SendStatus::Sent),
+    let mocks: &[(Uuid, &str, &str, u64, bool, SendStatus, bool)] = &[
+        (alice, "Alice", "sure, meet at 6", 2 * 60_000, false, SendStatus::Sent, false),
+        (alice, "Alice", "I'll bring drinks", 1 * 60_000, false, SendStatus::Sent, false),
+        (alice, "Alice", "actually make it 6:30", 30_000, false, SendStatus::Sent, false),
+        (bob, "Bob", "did you get the file?", 12 * 60_000, false, SendStatus::Sent, false),
+        (bob, "You", "yes, on my way", 11 * 60_000, true, SendStatus::Delivered, false),
+        (bob, "Bob", "thanks!", 5 * 60_000, false, SendStatus::Sent, false),
+        (dad, "Dad", "lunch sunday?", 25 * 60 * 60_000, false, SendStatus::Sent, false),
+        (dad, "You", "On my way", 24 * 60 * 60_000, true, SendStatus::Delivered, false),
+        (unknown, "+14155550199", "Your Uber has arrived", 3 * 60 * 60_000, false, SendStatus::Sent, false),
+        (unknown, "+14155550199", "Your driver is waiting", 2 * 60 * 60_000, false, SendStatus::Sent, false),
+        (party, "Bob", "the party is off", 8 * 60_000, false, SendStatus::Sent, true),
+        (party, "Carol", "aw, next week then?", 7 * 60_000, false, SendStatus::Sent, true),
     ];
 
-    app.store.seed(mocks.iter().map(|(uuid, label, body, age_ms, outgoing, status)| {
+    app.store.seed(mocks.iter().map(|(uuid, label, body, age_ms, outgoing, status, group)| {
         ThreadMessage {
             uuid: *uuid,
             author_label: label.to_string(),
@@ -829,6 +869,7 @@ fn seed_mock_messages_if_requested(app: &mut App) {
             outgoing: *outgoing,
             status: *status,
             read: *outgoing, // outgoing always read; incoming starts unread
+            group: *group,
         }
     }));
     // Mark linked + jump straight into Home so the demo lands on the
@@ -859,6 +900,16 @@ fn unix_now_ms() -> u64 {
 /// only varies the UART log line ("send" vs "F1 send"). Caller
 /// guarantees the compose buffer is non-empty.
 fn send_compose(app: &mut App, cmd_tx: &Sender<Cmd>, recipient_uuid: Uuid, trigger: &str) {
+    // Group reply-block. The send path addresses exactly one
+    // contact (`Thread::Contact` in the worker); "replying" to a
+    // group thread would deliver a private 1:1 DM to a single
+    // member while the user believes they addressed the room.
+    // Refuse and say so — never silently drop, never mis-deliver.
+    if app.store.is_group_thread(recipient_uuid) {
+        log::info!("xas/gam_app: {} blocked — group thread, 1:1 send would misdeliver", trigger);
+        app.last_status = "Group reply not supported yet".to_string();
+        return;
+    }
     let body = std::mem::take(&mut app.compose_buffer);
     let send_ts = unix_now_ms();
     let recipient_str = recipient_uuid.to_string();
@@ -903,9 +954,7 @@ fn looks_like_signal_username(s: &str) -> bool {
 /// `Cmd::Logout` and lets the forwarder + [`handle_worker_event`]
 /// pick up the resulting `Event::LoggedOut` (or, on partial
 /// failure, a warning log line from the worker followed by
-/// `Event::LoggedOut` anyway — see workspace REFACTOR_NOTES
-/// W-W.7 for a tracked improvement that would surface partial
-/// wipes more strongly).
+/// `Event::LoggedOut` anyway; surfacing partial wipes more).
 ///
 /// # Security
 ///
@@ -959,7 +1008,12 @@ fn drive_wipe_settings(app: &mut App, cmd_tx: &Sender<Cmd>, modals_xns: &xous_na
         log::warn!("xas/gam_app: Cmd::Logout (wipe) send err: {:?}", e);
         app.screen = Screen::Menu;
         app.render().ok();
-        let _ = modals.show_notification("Wipe failed:\nworker not reachable.\nThe app may need a restart.", None);
+        let _ = modals.show_notification(
+            "Wipe failed:\n\
+             worker not reachable.\n\
+             The app may need a restart.",
+            None,
+        );
     }
 }
 
@@ -988,8 +1042,12 @@ fn drive_logout(cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::XousNames) {
     log::info!("xas/gam_app: Logout confirmed; sending Cmd::Logout");
     if let Err(e) = cmd_tx.send_blocking(Cmd::Logout) {
         log::warn!("xas/gam_app: Cmd::Logout send err: {:?}", e);
-        let _ = modals
-            .show_notification("Logout failed:\nworker not reachable.\nThe app may need a restart.", None);
+        let _ = modals.show_notification(
+            "Logout failed:\n\
+             worker not reachable.\n\
+             The app may need a restart.",
+            None,
+        );
     }
     // Don't transition here; wait for Event::LoggedOut to arrive via
     // the forwarder, where handle_worker_event will reset App state.
@@ -1021,7 +1079,7 @@ fn drive_new_chat(app: &mut App, cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::
             return;
         }
     };
-    let raw = match modals.alert_builder("New chat — UUID or name.000").field(None, None).build() {
+    let raw = match modals.alert_builder("New chat — username (name.000)").field(None, None).build() {
         Ok(payloads) => payloads.first().as_str().trim().to_string(),
         Err(e) => {
             log::info!("xas/gam_app: F1 new chat cancelled / err: {:?}", e);
@@ -1052,6 +1110,7 @@ fn drive_new_chat(app: &mut App, cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::
             return;
         }
         app.username_lookup_in_progress = true;
+        app.username_lookup_pending = Some(raw.clone());
         // Brief visual feedback. The Event::UsernameResolveResult
         // arrives via the forwarder and is handled by
         // handle_username_resolve_result, which transitions to
@@ -1068,16 +1127,16 @@ fn drive_new_chat(app: &mut App, cmd_tx: &Sender<Cmd>, modals_xns: &xous_names::
         // on libsignal-service (see docs/FORKS.md, CDSI rule).
         log::info!("xas/gam_app: F1 phone lookup not supported (CDSI disabled)");
         let _ = modals.show_notification(
-            "Phone-number lookup needs\n\
-             CDSI which isn't enabled\n\
-             in this build. Use a UUID\n\
-             or username instead.",
+            "Phone numbers are not\n\
+             supported. Ask for their\n\
+             username instead\n\
+             (looks like name.000).",
             None,
         );
         return;
     }
     log::info!("xas/gam_app: F1 unrecognized input {:?}", raw);
-    let _ = modals.show_notification("Not recognized as a\nUUID or username.\nFormat: name.NNN", None);
+    let _ = modals.show_notification("Not a username.\nFormat: name.000", None);
 }
 
 /// Run the GAM-rendered UI loop.
@@ -1177,7 +1236,9 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
         account_device_name: None,
         account_aci: None,
         account_phone: None,
+        account_query_pending: false,
         username_lookup_in_progress: false,
+        username_lookup_pending: None,
     };
     seed_mock_messages_if_requested(&mut app);
     app.render().ok();
@@ -1208,6 +1269,15 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
                     let new_state = gam::FocusState::convert_focus_change(new_state_code);
                     log::info!("xas/gam_app: focus change -> {:?}", new_state);
                     if matches!(new_state, gam::FocusState::Foreground) {
+                        // Startup `load_registered` expires before the PDDB is
+                        // unlocked; foreground is the first point it is not.
+                        if !app.linked && app.account_aci.is_none() {
+                            log::info!("xas/gam_app: foreground while unlinked — querying account state");
+                            match cmd_tx.send_blocking(Cmd::GetAccountInfo) {
+                                Ok(()) => app.account_query_pending = true,
+                                Err(e) => log::warn!("xas/gam_app: Cmd::GetAccountInfo send err: {:?}", e),
+                            }
+                        }
                         if let Err(e) = app.render() {
                             log::warn!("xas/gam_app: render after focus: {}", e);
                         }
@@ -1454,8 +1524,9 @@ fn handle_keys(
                             log::info!(
                                 "xas/gam_app: Profile entry, account info not loaded — sending Cmd::GetAccountInfo"
                             );
-                            if let Err(e) = cmd_tx.send_blocking(Cmd::GetAccountInfo) {
-                                log::warn!("xas/gam_app: Cmd::GetAccountInfo send err: {:?}", e);
+                            match cmd_tx.send_blocking(Cmd::GetAccountInfo) {
+                                Ok(()) => app.account_query_pending = true,
+                                Err(e) => log::warn!("xas/gam_app: Cmd::GetAccountInfo send err: {:?}", e),
                             }
                         }
                         app.screen = Screen::Profile;
@@ -1535,14 +1606,16 @@ fn handle_worker_event(
 ) {
     match event {
         Event::LinkUrl(url) => {
-            // LOGGING / SECURITY: the URL below is the link
-            // credential during its window. Logging it at info level
-            // is the same finding as W-W.1 in `~/REFACTOR_NOTES.md`
-            // (originally flagged at the worker emit site); A.2
-            // tracks the UI-side cross-reference. Anyone with UART
-            // access during the link window can replay this URL to
-            // pair their own device against the pending request.
+            // LOGGING / SECURITY: the URL is the link credential
+            // during its window — anyone with UART access can replay
+            // it to pair their own device against the pending request.
+            // Full URL only under the default-off `link-uri-uart`
+            // feature; the exact "link URL = " text is grepped by
+            // tests/hosted/test_link_qr.sh.
+            #[cfg(feature = "link-uri-uart")]
             log::info!("xas/gam_app: link URL = {}", url);
+            #[cfg(not(feature = "link-uri-uart"))]
+            log::info!("xas/gam_app: link URL received ({} bytes)", url.len());
             // Open the QR modal. show_notification blocks until the
             // user dismisses it — meanwhile the worker keeps the
             // provisioning WS alive waiting for the encrypted
@@ -1560,7 +1633,12 @@ fn handle_worker_event(
             }
         }
         Event::LinkComplete { device_name, aci, phone } => {
-            log::info!("xas/gam_app: LinkComplete device={} aci={} phone={}", device_name, aci, phone);
+            log::info!(
+                "xas/gam_app: LinkComplete device={} aci={} phone={}",
+                device_name,
+                presage_store_pddb::log_id(&aci),
+                presage_store_pddb::log_id(&phone)
+            );
             app.linked = true;
             app.linking_in_progress = false;
             app.screen = Screen::Linked { kind: LinkedKind::Success };
@@ -1592,23 +1670,60 @@ fn handle_worker_event(
             app.screen = Screen::Linked { kind: LinkedKind::Failure };
             app.last_status = msg;
         }
-        Event::Message { sender, sender_phone, sender_name, body, timestamp } => {
+        Event::StaleStoreDetected => {
+            // The worker refused Cmd::LinkDevice: the store still holds
+            // account state from a previous link. The modal names the
+            // remedy; the cursor is deliberately left where it was, so
+            // reaching a destructive wipe still takes navigation.
+            log::warn!("xas/gam_app: StaleStoreDetected — link refused");
+            app.linking_in_progress = false;
+            app.screen = Screen::Menu;
+            if let Ok(modals) = modals::Modals::new(modals_xns) {
+                let _ = modals.show_notification(
+                    "Settings from a previous\n\
+                     link are still stored.\n\
+                     Linking over them causes\n\
+                     session errors.\n\n\
+                     Run 'Wipe settings',\n\
+                     then Link again.",
+                    None,
+                );
+            }
+        }
+        Event::Message { sender, sender_phone, sender_name, body, timestamp, group_master_key } => {
             // Pretty label preference: name → phone → UUID. The
             // contacts store typically has both name and phone for
             // peers who've been synced from the linked phone; only
             // first-sight peers fall through to UUID.
             let author_label =
                 sender_name.clone().or_else(|| sender_phone.clone()).unwrap_or_else(|| sender.clone());
-            log::info!("xas/gam_app: inbound message from {} ({} bytes)", author_label, body.len());
+            log::info!(
+                "xas/gam_app: inbound message from {} ({} bytes) group={}",
+                presage_store_pddb::log_id(&author_label),
+                body.len(),
+                group_master_key.is_some(),
+            );
             // ACI from the worker is a canonical UUID string.
             // Fall back to the nil UUID if parse fails (defensive
             // — practically shouldn't happen since the worker only
             // surfaces senders it recognized).
-            let uuid = Uuid::parse_str(&sender).unwrap_or_else(|_| {
+            let sender_uuid = Uuid::parse_str(&sender).unwrap_or_else(|_| {
                 log::warn!("xas/gam_app: sender {:?} doesn't parse as UUID; using nil", sender);
                 Uuid::nil()
             });
-            app.store.push_incoming(uuid, author_label, body, timestamp);
+            // Misfile guard: a group message must NOT land in the
+            // sender's private 1:1 thread. File it under a
+            // pseudo-thread UUID derived deterministically from the
+            // GV2 master key (v5/SHA-1; no collision risk with real
+            // contact ACIs in practice), keeping the Uuid thread-key
+            // shape until real ThreadKey typing lands with the
+            // gam_app split. The message row is group-tagged so the
+            // UI labels the thread and blocks compose into it.
+            let (uuid, group) = match &group_master_key {
+                Some(key) => (Uuid::new_v5(&Uuid::NAMESPACE_OID, key), true),
+                None => (sender_uuid, false),
+            };
+            app.store.push_incoming(uuid, author_label, body, timestamp, group);
             // Physical cue; a missed vibe must not affect delivery.
             app.llio.vibe(llio::VibePattern::Double).ok();
         }
@@ -1649,23 +1764,35 @@ fn handle_worker_event(
             app.last_status = "worker shutdown".to_string();
         }
         Event::AccountInfo(Ok(info)) => {
+            app.account_query_pending = false;
             log::info!(
                 "xas/gam_app: AccountInfo OK device={} aci={} phone={}",
                 info.device_name,
-                info.aci,
-                info.phone,
+                presage_store_pddb::log_id(&info.aci),
+                presage_store_pddb::log_id(&info.phone),
             );
             app.account_device_name = Some(info.device_name);
             app.account_aci = Some(info.aci);
             app.account_phone = Some(info.phone);
-            // If we're currently rendering the Profile screen,
-            // refresh so the placeholder "(not loaded)" flips to
-            // the real values immediately.
-            if matches!(app.screen, Screen::Profile) {
+            if !app.linked {
+                // A registered account in the store means linked, even if this
+                // boot never saw LinkComplete. Without this the UI stays on the
+                // pre-link Menu, whose only actions are a link the worker will
+                // refuse and a destructive wipe.
+                log::info!("xas/gam_app: account found on an unlinked UI — resuming linked state");
+                app.linked = true;
+                app.screen = Screen::Home;
+                app.home_focus = 0;
+                if let Err(e) = cmd_tx.send_blocking(Cmd::StartReceive) {
+                    log::warn!("xas/gam_app: Cmd::StartReceive send err: {:?}", e);
+                }
+                let _ = app.render();
+            } else if matches!(app.screen, Screen::Profile) {
                 let _ = app.render();
             }
         }
         Event::AccountInfo(Err(reason)) => {
+            app.account_query_pending = false;
             log::warn!("xas/gam_app: AccountInfo Err: {}", reason);
             // Leave account_* fields as-is. Profile screen will
             // continue to show "(not loaded)" placeholders. Not
@@ -1756,7 +1883,13 @@ fn handle_username_resolve_result(app: &mut App, result: Result<Option<Uuid>, St
     app.username_lookup_in_progress = false;
     match result {
         Ok(Some(uuid)) => {
-            log::info!("xas/gam_app: username resolved to {}", uuid);
+            log::info!("xas/gam_app: username resolved to {}", presage_store_pddb::log_id(&uuid.to_string()));
+            // Label the thread with the username the user typed. Without
+            // this the row falls back to a UUID prefix — the one
+            // identifier they never entered and cannot recognise.
+            if let Some(name) = app.username_lookup_pending.take() {
+                app.store.resolve_author_labels(uuid, &name);
+            }
             app.screen = Screen::Thread { uuid };
             let _ = app.render();
         }
@@ -1851,8 +1984,8 @@ fn check_internet(xns: &xous_names::XousNames) -> Result<(), String> {
 /// Kick off the link flow. Synchronous part only: prompts for a
 /// device name, sends `Cmd::LinkDevice`, sets [`Screen::Linking`],
 /// and returns. All async results (`LinkUrl`, `LinkComplete`,
-/// `LinkError`) flow through the forwarder thread and land in
-/// [`handle_worker_event`].
+/// `LinkError`, `StaleStoreDetected`) flow through the forwarder
+/// thread and land in [`handle_worker_event`].
 ///
 /// # Threading model
 ///

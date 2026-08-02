@@ -40,7 +40,7 @@
 //! `PrivateKey`), but the transient `bytes` local here lives in a
 //! plain `Vec<u8>`. Logging the `bytes` value, including via
 //! `tracing::debug!(?bytes)` on this function's body, would leak the
-//! key. **MUST NOT happen.** See REFACTOR_NOTES sec-A.
+//! key. **MUST NOT happen.**
 //!
 //! Peer identity public keys are not secret-equivalent on their own,
 //! but the (address, identity-key) mapping is privacy-relevant: it
@@ -48,11 +48,12 @@
 //!
 //! # Logging
 //!
-//! `is_trusted_identity` calls `tracing::warn!(?address, "trusting
-//! new identity (TOFU)")`. The address is the libsignal
-//! `ProtocolAddress` (UUID + device id) — non-private-key material —
-//! and matches presage-store-sqlite's behaviour. No identity bytes
-//! are logged.
+//! `is_trusted_identity` warns on trust-on-first-use. The peer's
+//! `ProtocolAddress` name is an ACI UUID, so it goes through
+//! [`crate::redact::log_id`] — last four characters by default, full
+//! under `verbose-pii`. presage-store-sqlite logs it whole; we do not,
+//! because here the log is a UART anyone with a debug cable can read.
+//! No identity bytes are logged.
 
 use async_trait::async_trait;
 use presage::libsignal_service::protocol::{
@@ -138,7 +139,11 @@ impl IdentityKeyStore for PddbProtocolStore {
                 Ok(matches!(self.store.trust_new_identities, presage::model::identity::OnNewIdentity::Trust))
             }
             None => {
-                warn!(?address, "trusting new identity (TOFU)");
+                warn!(
+                    peer = %crate::redact::log_id(address.name()),
+                    device = ?address.device_id(),
+                    "trusting new identity (TOFU)"
+                );
                 Ok(true)
             }
         }

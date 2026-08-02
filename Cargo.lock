@@ -2267,7 +2267,7 @@ dependencies = [
 
 [[package]]
 name = "presage-store-pddb"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2997,6 +2997,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
+
+[[package]]
 name = "sha2"
 version = "0.10.8"
 source = "git+https://github.com/betrusted-io/hashes.git?branch=sha2-v0.10.8-xous#161da48eb94ba61108634b240a1f30f185779a37"
@@ -3534,6 +3540,7 @@ dependencies = [
  "getrandom 0.4.2",
  "js-sys",
  "serde_core",
+ "sha1_smol",
  "wasm-bindgen",
 ]
 
@@ -4182,7 +4189,7 @@ dependencies = [
 
 [[package]]
 name = "xous-app-signal"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-channel",
  "blitstr2",
@@ -4236,7 +4243,7 @@ dependencies = [
 
 [[package]]
 name = "xous-net-bridge"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -4257,7 +4264,7 @@ dependencies = [
 
 [[package]]
 name = "xous-pddb-ipc"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "bitfield",
  "log",
@@ -4277,7 +4284,7 @@ checksum = "906500be0c4ed13afc3c8743e4d40337bfbe08e7dadfa216c39907aaa06cc8c2"
 
 [[package]]
 name = "xous-signal-worker"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-channel",
  "async-executor",

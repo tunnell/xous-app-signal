@@ -52,6 +52,10 @@ pub enum Cmd {
     /// for subsequent receive/send calls*. On failure it emits
     /// [`Event::LinkError`] and the worker stays unregistered.
     ///
+    /// Refused with [`Event::StaleStoreDetected`] (no link started)
+    /// when the store still holds account state from a previous
+    /// link — see that variant for the rationale.
+    ///
     /// # Trust boundary
     ///
     /// Triggers the only path that writes identity and root keys to
@@ -112,9 +116,7 @@ pub enum Cmd {
     /// # Logging
     ///
     /// The worker emits `body_len` (length only, never the body
-    /// itself) to its log pipeline. `recipient` is logged in full —
-    /// see `xous-signal-worker` REFACTOR_NOTES for the logging-discipline
-    /// audit item covering recipient/ACI emission.
+    /// itself) to its log pipeline. `recipient` is logged in full.
     SendMessage { recipient: String, body: String, timestamp: u64 },
 
     /// Read account-identity info from the loaded Manager and
@@ -164,16 +166,14 @@ pub enum Cmd {
     /// operator currently has.
     ///
     /// `presage_store_pddb`'s `Store::clear` is not atomic across
-    /// dictionaries (see `presage-store-pddb/src/store.rs::clear`
-    /// and `~/REFACTOR_NOTES.md` PS.sec-E): a mid-clear error leaves
+    /// dictionaries (see `presage-store-pddb/src/store.rs::clear`):
+    /// a mid-clear error leaves
     /// `session_cache` and `session_dirty` partially populated, and
     /// downstream the PDDB free-list does **not** zero pages on
-    /// dictionary delete (PS.sec-C). Acquiring the flash post-wipe
+    /// dictionary delete. Acquiring the flash post-wipe
     /// can therefore recover ciphertext that the API surface
-    /// presents as gone. The W-W.7 refactor to surface partial-wipe
-    /// success per dictionary depends on this clear-semantics
-    /// contract; the secure-erase opcode the PDDB team would expose
-    /// is the deeper fix.
+    /// presents as gone. A secure-erase opcode from the PDDB
+    /// side would be the deeper fix.
     ///
     /// This does **not** remove the device from the primary phone's
     /// Linked Devices list — that requires `unlink_secondary`,
@@ -273,9 +273,8 @@ pub enum Event {
     /// - Render directly to the user's display only; do not stage it through any in-memory buffer that may be
     ///   later dumped.
     ///
-    /// See `xous-signal-worker` REFACTOR_NOTES for the audit item
-    /// covering the current UART emission of this URL inside
-    /// `handle_link_device`.
+    /// `handle_link_device` emits it only under the default-off
+    /// `link-uri-uart` feature.
     LinkUrl(String),
 
     /// Linking succeeded. The worker has just transitioned to
@@ -312,6 +311,18 @@ pub enum Event {
     /// rejecting the link request. String-typed because the IPC
     /// boundary forces stringification (same shape as `Whoami`).
     LinkError(String),
+
+    /// The worker refused a [`Cmd::LinkDevice`] because the store
+    /// still holds account state from a previous link
+    /// (`PddbStore::has_account_state`). Linking over a stale store
+    /// re-inherits stale sessions and orphaned kyber records; the
+    /// implicit link-time wipe that used to prevent this (3680fe2)
+    /// hung a device and was reverted (fa1c37b), so the worker never
+    /// wipes on this path — it emits this event and the UI routes
+    /// the user to the explicit Wipe settings flow instead. No link
+    /// was started; a fresh `Cmd::LinkDevice` after a wipe proceeds
+    /// normally.
+    StaleStoreDetected,
 
     /// Reply to `Cmd::GetAccountInfo`. Carries the same fields as
     /// `LinkComplete` but fires on demand rather than tied to the
@@ -353,8 +364,7 @@ pub enum Event {
     /// 2. The string MUST NOT be logged or persisted outside the PDDB-backed `Store`. The worker itself logs
     ///    only the variant kind and `body_len`, never the body.
     /// 3. The string lives in RAM only — `Drop` of this struct deallocates without zeroizing. Defense in
-    ///    depth would require a `Zeroizing<String>` wrapper here; out of scope for the channel surface but
-    ///    flagged in REFACTOR_NOTES.
+    ///    depth would require a `Zeroizing<String>` wrapper here; out of scope for the channel surface.
     Message {
         /// `service_id_string()` of the sender — the thread key the
         /// UI groups conversations by. libsignal-authenticated; see
@@ -380,6 +390,21 @@ pub enum Event {
         /// Server timestamp (UNIX millis), matches what `Content`
         /// carries.
         timestamp: u64,
+        /// `Some(master_key)` when the DataMessage carried a
+        /// `GroupContextV2` — this is a group message, NOT a 1:1
+        /// message from `sender`. The bytes are the GV2 master key
+        /// (normally 32) used only as a stable opaque thread
+        /// discriminator; group name/member resolution stays with
+        /// presage until real group support lands. `None` for plain
+        /// 1:1 traffic, including sync-sent transcripts of 1:1
+        /// sends.
+        ///
+        /// # Security
+        ///
+        /// The GV2 master key derives the group's zkgroup secrets;
+        /// treat like `body` — never log, never persist outside the
+        /// PDDB-backed store (presage already keeps it there).
+        group_master_key: Option<Vec<u8>>,
     },
 
     /// Receive loop hit a fatal error and unwound. The

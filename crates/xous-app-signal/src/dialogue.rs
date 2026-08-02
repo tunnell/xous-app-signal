@@ -67,6 +67,10 @@ pub struct ThreadMessage {
     /// the messages) or the user invokes "Mark all read". Drives the
     /// `unread_count` aggregation in `rebuild_summaries`.
     pub read: bool,
+    /// True if this message carried GV2 group context — it belongs
+    /// to a group conversation, not a private 1:1 with its author.
+    /// Drives the `[group]` UI label and the group reply-block.
+    pub group: bool,
 }
 
 /// Aggregated per-conversation view. One per UUID. Built by
@@ -92,6 +96,13 @@ pub struct DialogueSummary {
     /// state an unread incoming message can be in). Outgoing messages
     /// never increment this.
     pub unread_count: u32,
+    /// True if any message in this conversation is group-tagged.
+    /// Group messages file under a pseudo-thread UUID derived from
+    /// the group's master key (see `gam_app`), so in practice the
+    /// whole thread is either group or 1:1. Drives the `[group]`
+    /// label and blocks the compose path (a "reply" would go out
+    /// as a private 1:1 DM to one member).
+    pub is_group: bool,
 }
 
 /// Group `messages` by UUID, sorted by `last_msg_ts` descending.
@@ -113,7 +124,10 @@ pub fn rebuild_summaries(messages: &[ThreadMessage]) -> Vec<DialogueSummary> {
             last_msg_outgoing: false,
             last_msg_status: SendStatus::Sent,
             unread_count: 0,
+            is_group: false,
         });
+
+        entry.is_group |= m.group;
 
         // Prefer the author label of any incoming message — that's the
         // contact's name. Outgoing messages have author_label == "You",
@@ -230,6 +244,7 @@ mod tests {
             outgoing: false,
             status: SendStatus::Sent,
             read: false,
+            group: false,
         }
     }
 
@@ -242,6 +257,7 @@ mod tests {
             outgoing: true,
             status,
             read: true,
+            group: false,
         }
     }
 
@@ -432,6 +448,30 @@ mod tests {
         let v = rebuild_summaries(&msgs);
         assert_eq!(v.len(), 2);
         assert!(v.iter().all(|d| d.unread_count == 0));
+    }
+
+    #[test]
+    fn rebuild_group_tag_propagates_to_summary() {
+        let mut m = incoming(uuid_a(), 100, "party is off", "Bob");
+        m.group = true;
+        let v = rebuild_summaries(&[m]);
+        assert!(v[0].is_group);
+    }
+
+    #[test]
+    fn rebuild_plain_thread_is_not_group() {
+        let msgs = vec![incoming(uuid_a(), 100, "hello", "Alice")];
+        assert!(!rebuild_summaries(&msgs)[0].is_group);
+    }
+
+    #[test]
+    fn rebuild_group_tag_is_sticky_across_messages() {
+        let mut first = incoming(uuid_a(), 100, "one", "Bob");
+        first.group = true;
+        let second = incoming(uuid_a(), 200, "two", "Bob");
+        let v = rebuild_summaries(&[first, second]);
+        assert_eq!(v.len(), 1);
+        assert!(v[0].is_group);
     }
 
     #[test]

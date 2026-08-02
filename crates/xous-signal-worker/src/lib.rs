@@ -206,8 +206,8 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
         //
         // LOGGING: the success arm below emits `device_name`, `aci`,
         // and `phone` to the log pipeline at info level. All three
-        // are Signal account identifiers (PII). See REFACTOR_NOTES
-        // for the log-discipline audit item.
+        // are Signal account identifiers (PII) — a known
+        // log-discipline audit item.
         log::info!("worker: attempting load_registered from PDDB");
         let mut linked_attempts = 0;
         loop {
@@ -272,6 +272,26 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
                 }
                 Ok(Cmd::LinkDevice { device_name }) => {
                     log::info!("worker: Cmd::LinkDevice received");
+                    // Pre-link stale-store guard. Linking on top of
+                    // leftover account state re-inherits stale
+                    // sessions and orphaned kyber records (the
+                    // prekey-storm seed). Do NOT wipe here — the
+                    // implicit link-time wipe (3680fe2) hung a
+                    // device and was reverted (fa1c37b). Detect,
+                    // refuse, and let the UI route the user to the
+                    // explicit Wipe settings flow. Probe errors
+                    // fail open inside `has_account_state`, so a
+                    // flaky PDDB cannot block a genuine first link.
+                    if store.has_account_state() {
+                        log::warn!("worker: link refused — store holds prior account state; wipe first");
+                        if event_tx.send(Event::StaleStoreDetected).await.is_err() {
+                            tracing::warn!(
+                                "event channel dropped while sending StaleStoreDetected; shutting down"
+                            );
+                            break;
+                        }
+                        continue;
+                    }
                     use futures::FutureExt;
                     use futures::future::{self, Either};
                     use futures::pin_mut;
@@ -591,15 +611,14 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
 ///
 /// The provisioning URL forwarded through `Event::LinkUrl` is
 /// short-lived but high-value — see that variant's `# Security`
-/// section. This function currently logs the URL at `log::info!`
-/// inside the `forwarder` closure; that is the audit finding called
-/// out in `xous-signal-worker` REFACTOR_NOTES.
+/// section.
 ///
 /// # Logging
 ///
-/// Emits the provisioning URL (`log::info!` "URL received from
-/// libsignal: {}") and the user-chosen `device_name` to the log
-/// pipeline. Both are security-relevant; see REFACTOR_NOTES.
+/// Emits the provisioning URL to the log pipeline only under the
+/// default-off `link-uri-uart` feature (the URL is the link
+/// credential for its window); default builds log its length. The
+/// user-chosen `device_name` is still logged.
 async fn handle_link_device(
     store: PddbStore,
     event_tx: Sender<Event>,
@@ -616,7 +635,13 @@ async fn handle_link_device(
     let forwarder = async move {
         match url_rx.await {
             Ok(url) => {
+                // The exact "URL received from libsignal:" text is
+                // grepped by tests/hosted/test_link_qr.sh — keep it
+                // stable under the feature.
+                #[cfg(feature = "link-uri-uart")]
                 log::info!("worker/link: URL received from libsignal: {}", url);
+                #[cfg(not(feature = "link-uri-uart"))]
+                log::info!("worker/link: link URL received ({} bytes)", url.as_str().len());
                 if let Err(e) = event_tx_for_url.send(Event::LinkUrl(url.to_string())).await {
                     log::warn!("worker/link: event_tx send LinkUrl failed: {:?}", e);
                 }
@@ -756,7 +781,7 @@ fn spawn_manager_task(
 /// stays alive as long as *any* clone exists — see
 /// `presage_store_pddb::PddbStore` Clone semantics in the docstring
 /// of that type. libsignal's `SessionRecord` does **not** derive
-/// `Zeroize` upstream (PS.sec-B in `~/REFACTOR_NOTES.md`), so an
+/// `Zeroize` upstream, so an
 /// extended `Manager` / `PddbStore` lifetime extends the post-Drop
 /// memory-disclosure window for ratchet state. The receive loop
 /// flushes sessions on `Received::QueueEmpty`; future code paths
@@ -825,8 +850,8 @@ fn spawn_manager_task(
 /// Emits message kinds and per-stream-item progress markers at
 /// `log::info!` (`worker:`, `worker/send:`, `worker/profile:`
 /// prefixes). Does not log message bodies. ACI UUIDs and contact
-/// names are logged at info level — see REFACTOR_NOTES for the
-/// log-discipline audit item.
+/// names are logged at info level — a known log-discipline
+/// audit item.
 async fn manager_task(
     mut manager: Manager<PddbStore, Registered>,
     store: PddbStore,
@@ -884,8 +909,7 @@ async fn manager_task(
     // SECURITY: the profile_key bytes (32 bytes per entry) are
     // secret-derived material from the sender. Treated as opaque
     // here and passed to `ProfileKey::create` without copying; never
-    // logged. See REFACTOR_NOTES for the open item on wrapping in
-    // `Zeroizing` for defense-in-depth.
+    // logged. Not wrapped in `Zeroizing`.
     let mut pending_profile_fetches: Vec<(presage::libsignal_service::prelude::Uuid, [u8; 32])> = Vec::new();
     let mut fetched_or_failed: std::collections::HashSet<presage::libsignal_service::prelude::Uuid> =
         std::collections::HashSet::new();
@@ -1102,7 +1126,7 @@ async fn manager_task(
                 // `HttpTransport` wrapping; "403 Forbidden" is the
                 // stable terminator (RFC 7231) in the formatter. A
                 // typed approach would require cross-crate enums
-                // plumbed through `ServiceError`; see REFACTOR_NOTES.
+                // plumbed through `ServiceError`.
                 if matches!(prev_close, Some(4401)) && err_str.contains("403 Forbidden") {
                     consecutive_reauth_403s = consecutive_reauth_403s.saturating_add(1);
                     log::warn!(
@@ -1345,8 +1369,7 @@ async fn manager_task(
 /// Emits the body-kind enum-variant name (`NullMessage`,
 /// `DataMessage`, `SynchronizeMessage`, ...) at `log::info!`. Does
 /// not emit the body text. Sender ACI is *not* logged here, but the
-/// upstream contact resolution and profile-fetch code does — see
-/// REFACTOR_NOTES.
+/// upstream contact resolution and profile-fetch code does.
 async fn process_received(
     item: presage::model::messages::Received,
     store: &PddbStore,
@@ -1413,14 +1436,26 @@ async fn process_received(
             // Sync/receipt/typing messages have already been
             // absorbed by the store machinery presage runs
             // internally; they don't need UI display.
-            let body = match &content.body {
-                ContentBody::DataMessage(dm) => dm.body.clone().unwrap_or_default(),
-                ContentBody::SynchronizeMessage(sm) => sm
-                    .sent
-                    .as_ref()
-                    .and_then(|s| s.message.as_ref())
-                    .and_then(|dm| dm.body.clone())
-                    .unwrap_or_default(),
+            // `group_master_key`: group-context detection (misfile
+            // guard). A DataMessage with `group_v2` belongs to a GV2
+            // group thread, not to `sender`'s 1:1 thread; the same
+            // check runs on the sync-sent transcript's inner
+            // DataMessage so a group message sent from the linked
+            // phone tags identically — and a 1:1 transcript (no
+            // `group_v2`) stays untagged. Presence of the context
+            // is the group signal even if `master_key` is absent
+            // (defensive default to an empty key).
+            let group_of = |dm: &presage::libsignal_service::content::DataMessage| {
+                dm.group_v2.as_ref().map(|g| g.master_key.clone().unwrap_or_default())
+            };
+            let (body, group_master_key) = match &content.body {
+                ContentBody::DataMessage(dm) => (dm.body.clone().unwrap_or_default(), group_of(dm)),
+                ContentBody::SynchronizeMessage(sm) => {
+                    match sm.sent.as_ref().and_then(|s| s.message.as_ref()) {
+                        Some(dm) => (dm.body.clone().unwrap_or_default(), group_of(dm)),
+                        None => (String::new(), None),
+                    }
+                }
                 _ => return true, // EditMessage / Typing / Call — skip
             };
             if body.is_empty() {
@@ -1470,7 +1505,10 @@ async fn process_received(
                 }
             }
 
-            event_tx.send(Event::Message { sender, sender_phone, sender_name, body, timestamp }).await.is_ok()
+            event_tx
+                .send(Event::Message { sender, sender_phone, sender_name, body, timestamp, group_master_key })
+                .await
+                .is_ok()
         }
         Received::QueueEmpty => {
             // Flush dirty sessions in batched chunks at
@@ -1652,16 +1690,14 @@ async fn handle_resolve_username(
 /// `Manager`'s session state inconsistent. The alternative — let
 /// the panic propagate and kill `manager_task` — would force every
 /// subsequent send to surface "manager task died." Both outcomes
-/// are bad; this path picks the recoverable one. See REFACTOR_NOTES
-/// for the open item to remove panics from the libsignal send path
-/// rather than continue catching them.
+/// are bad; this path picks the recoverable one.
 ///
 /// # Logging
 ///
 /// Emits `body_len` only (never `body`). Emits the recipient string
 /// verbatim (UUID or e164) and the parsed `Uuid` of the resolved
-/// recipient — both are PII-relevant. See REFACTOR_NOTES for the
-/// log-discipline audit item.
+/// recipient — both are PII-relevant — a known log-discipline
+/// audit item.
 ///
 /// # rv32 / 16 MiB constraint
 ///
@@ -1728,7 +1764,7 @@ async fn handle_send(
             }
         }
         let Some(uuid) = matched else {
-            log::warn!("worker/send: no contact matched e164={}", target);
+            log::warn!("worker/send: no contact matched e164={}", presage_store_pddb::log_id(target));
             let _ = event_tx
                 .send(Event::SendError {
                     reason: format!(
@@ -2161,6 +2197,44 @@ mod tests {
         handle.join().unwrap();
     }
 
+    /// A store that still holds account state from a previous link
+    /// refuses `Cmd::LinkDevice` with `Event::StaleStoreDetected`
+    /// and starts no link — and never wipes (fa1c37b). The empty-
+    /// store negative (a genuine first link must not trip the
+    /// guard) is covered by presage-store-pddb's
+    /// `empty_store_has_no_account_state`; exercising it here would
+    /// start a real link attempt against the network.
+    #[test]
+    fn link_device_refused_on_stale_store() {
+        use std::sync::Arc;
+
+        use presage_store_pddb::{KvBackend, MockBackend};
+
+        let backend = Arc::new(MockBackend::new());
+        // Leftover kyber record with no registration data — the
+        // exact post-fa1c37b hazard shape (presage clears the
+        // registration on link entry; protocol dicts survive).
+        backend.put("signal.protocol.aci.kyber_prekey", "17", &[0u8; 4]).unwrap();
+
+        let (cmd_tx, cmd_rx) = async_channel::bounded(CHAN_CAP);
+        let (event_tx, event_rx) = async_channel::bounded(CHAN_CAP);
+        let handle = run_signal_worker(PddbStore::new(backend), cmd_rx, event_tx);
+
+        cmd_tx.send_blocking(Cmd::LinkDevice { device_name: "test".to_string() }).unwrap();
+        match event_rx.recv_blocking().unwrap() {
+            Event::StaleStoreDetected => {}
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        // The refusal leaves the worker alive and the store intact.
+        cmd_tx.send_blocking(Cmd::Hello).unwrap();
+        assert!(matches!(event_rx.recv_blocking().unwrap(), Event::Pong));
+
+        cmd_tx.send_blocking(Cmd::Shutdown).unwrap();
+        let _ = event_rx.recv_blocking();
+        handle.join().unwrap();
+    }
+
     /// Dropping the cmd-channel sender (without sending Shutdown) is
     /// the implicit teardown path. The worker exits when its `recv`
     /// returns `Err(RecvError)`.
@@ -2174,5 +2248,133 @@ mod tests {
         // drops. Don't assert on the value — just confirm the join.
         let _ = event_rx.recv_blocking();
         handle.join().unwrap();
+    }
+
+    // ---- group misfile guard: process_received tagging ----
+    //
+    // These drive the real `process_received` path with constructed
+    // `Received::Content` values (mock store, no Manager needed) and
+    // assert the `group_master_key` tag on the emitted
+    // `Event::Message` — including the sync-sent transcript cases,
+    // where a 1:1 transcript must NOT be group-tagged.
+
+    use presage::libsignal_service::content::{
+        Content, ContentBody, DataMessage, GroupContextV2, Metadata, SyncMessage, sync_message,
+    };
+    use presage::libsignal_service::protocol::{Aci, ServiceId};
+
+    const MASTER_KEY: [u8; 32] = [7u8; 32];
+
+    fn test_metadata() -> Metadata {
+        use presage::libsignal_service::prelude::Uuid;
+        let sender = ServiceId::Aci(Aci::from(Uuid::from_u128(0x1111_2222_3333_4444_5555_0001)));
+        let destination = ServiceId::Aci(Aci::from(Uuid::from_u128(0xaaaa_bbbb_cccc_dddd_eeee_0002)));
+        Metadata {
+            sender,
+            destination,
+            sender_device: 1u32.try_into().unwrap(),
+            timestamp: 1_700_000_000_000,
+            needs_receipt: false,
+            unidentified_sender: false,
+            was_plaintext: false,
+            server_guid: None,
+        }
+    }
+
+    fn data_message(body: &str, group: bool) -> DataMessage {
+        DataMessage {
+            body: Some(body.to_string()),
+            group_v2: group.then(|| GroupContextV2 {
+                master_key: Some(MASTER_KEY.to_vec()),
+                revision: Some(1),
+                group_change: None,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// Run one `Received::Content` through `process_received` and
+    /// return the events it emitted.
+    fn process_one(body: ContentBody) -> Vec<Event> {
+        let store = PddbStore::with_mock_backend();
+        let (event_tx, event_rx) = async_channel::bounded::<Event>(8);
+        let content = Content::from_body(body, test_metadata());
+        let mut fetches = Vec::new();
+        let mut pending = std::collections::HashMap::new();
+        let keep_going = futures::executor::block_on(super::process_received(
+            presage::model::messages::Received::Content(Box::new(content)),
+            &store,
+            &event_tx,
+            &mut fetches,
+            &mut pending,
+        ));
+        assert!(keep_going);
+        let mut events = Vec::new();
+        while let Ok(e) = event_rx.try_recv() {
+            events.push(e);
+        }
+        events
+    }
+
+    #[test]
+    fn inbound_group_data_message_is_group_tagged() {
+        let events = process_one(ContentBody::DataMessage(data_message("the party is off", true)));
+        match events.as_slice() {
+            [Event::Message { body, group_master_key, .. }] => {
+                assert_eq!(body, "the party is off");
+                assert_eq!(group_master_key.as_deref(), Some(&MASTER_KEY[..]));
+            }
+            other => panic!("unexpected events: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inbound_one_to_one_data_message_is_not_group_tagged() {
+        let events = process_one(ContentBody::DataMessage(data_message("hi", false)));
+        match events.as_slice() {
+            [Event::Message { group_master_key: None, .. }] => {}
+            other => panic!("unexpected events: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sync_sent_group_transcript_is_group_tagged() {
+        // A group message sent from the linked phone arrives as a
+        // sync-sent transcript; it must tag with the same master key
+        // so it files into the group thread, not a 1:1.
+        let sm = SyncMessage {
+            sent: Some(sync_message::Sent {
+                message: Some(data_message("sent to the room", true)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let events = process_one(ContentBody::SynchronizeMessage(sm));
+        match events.as_slice() {
+            [Event::Message { group_master_key, .. }] => {
+                assert_eq!(group_master_key.as_deref(), Some(&MASTER_KEY[..]));
+            }
+            other => panic!("unexpected events: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sync_sent_one_to_one_transcript_is_not_mistagged() {
+        // The other direction of the same guard: a 1:1 transcript
+        // must NOT come out group-tagged.
+        let sm = SyncMessage {
+            sent: Some(sync_message::Sent {
+                message: Some(data_message("just for you", false)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let events = process_one(ContentBody::SynchronizeMessage(sm));
+        match events.as_slice() {
+            [Event::Message { group_master_key: None, body, .. }] => {
+                assert_eq!(body, "just for you");
+            }
+            other => panic!("unexpected events: {other:?}"),
+        }
     }
 }
