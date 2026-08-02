@@ -506,9 +506,21 @@ impl App {
         Ok(())
     }
 
+    /// Which account this device is acting as, for the screen headers.
+    /// `(unlinked)` is a claim about the UI's own state, so it must not
+    /// be shown while account fields are still arriving.
+    fn identity_line(&self) -> String {
+        match (self.linked, self.account_phone.as_deref(), self.account_device_name.as_deref()) {
+            (true, Some(phone), Some(name)) => format!("{}  ({})", phone, name),
+            (true, Some(phone), None) => phone.to_string(),
+            (true, None, _) => String::new(),
+            (false, _, _) => "(unlinked)".to_string(),
+        }
+    }
+
     fn write_menu(&self, out: &mut String) -> Result<(), String> {
         let header = if self.linked { "Signal — linked" } else { "xas — Signal client" };
-        write!(out, "{}\n\n", header).map_err(|e| format!("hdr: {}", e))?;
+        write!(out, "{}\n{}\n\n", header, self.identity_line()).map_err(|e| format!("hdr: {}", e))?;
         for maybe in self.menu_items() {
             if let Some(item) = maybe {
                 let mark = if item == self.selected { ">" } else { " " };
@@ -552,6 +564,7 @@ impl App {
         } else {
             writeln!(out, "xas").map_err(|e| format!("home hdr: {}", e))?;
         }
+        writeln!(out, "{}", self.identity_line()).map_err(|e| format!("home ident: {}", e))?;
         writeln!(out, "{}", "-".repeat(45)).map_err(|e| format!("home rule: {}", e))?;
 
         if self.store.dialogues().is_empty() {
