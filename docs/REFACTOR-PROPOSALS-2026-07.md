@@ -49,11 +49,11 @@ Facts that changed the plan (all verified against GitHub 2026-07-06):
   documented in the commit; diffs + vendor/README.md regenerated,
   curve25519-dalek baseline pinned (`16e087a`).
 - **0.3 Doc truth-sync** (README upstream-patches, status block on
-  the since-deleted PLAN.md, Cargo.toml comments, ARCHITECTURE.md
-  §12 invariants).
+  the since-deleted PLAN.md, Cargo.toml comments, the
+  ARCHITECTURE.md checkable invariants).
 - **0.4 rustfmt.toml + CI** (fmt soft-gate until a repo-wide
   `cargo fmt` lands post-PR#38; hosted tests + rv32 build as hard
-  gates; CI clones the xous-core sibling per BUILDING.md §1).
+  gates; CI clones the xous-core sibling per BUILDING.md step 1).
 
 ## Wave 1 — structural core
 
@@ -169,7 +169,8 @@ The v1 security/hardening umbrella (issue #37, closed 2026-07-25 when
 roadmap tracking moved from the issue tracker into this document)
 carried ten prioritized items from the post-v0.2 deep-read. Three
 exited earlier: item 9 shipped as SECURITY.md (PR #51), item 10 is
-§1.1 (typed WorkerError), item 4 is §2.2 (logout drain-then-wipe).
+proposal 1.1 (typed WorkerError), item 4 is proposal 2.2 (logout
+drain-then-wipe).
 The seven residual items, ranked active leak > latent leak >
 defense-in-depth > audit-readability (full rationale in the #37
 thread):
@@ -230,7 +231,7 @@ Wave 1: 1.1 typed WorkerError → 1.2 MessageStore funnel → 1.3 gam_app split
 Wave 2: 2.1 ws_pump lifecycle → 2.2 logout/ownership → 2.3 retry fold-in
 Wave 3: 3.1 persistence (needs 1.2) · 3.2 fork-delta shrink ·
         3.3 UI spike (gate: aes provenance) · 3.4 vendor bookkeeping
-Wave 4: security backlog §4 (4.1/4.2 first: active leaks; 4.1
+Wave 4: security backlog, section 4 (4.1/4.2 first: active leaks; 4.1
         pairs with the closed #30 feature gate)
 ```
 

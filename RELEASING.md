@@ -46,7 +46,8 @@ releases create new `xas-vX.Y+1` branches — they don't reuse old ones.
    ```sh
    cd path/to/xous-app-signal
    # Edit Cargo.toml: bump [workspace.package] version to "X.Y.0"
-   # Edit BUILDING.md §1 and the §3-intro "Branch selection" note if
+   # Edit BUILDING.md step 1 and the "Branch selection" note at
+   # the top of the hardware path if
    # the release-pin tag they mention needs bumping (dev builds keep
    # pointing at the xas-integration branch).
    cargo metadata --format-version 1 >/dev/null   # regen Cargo.lock
