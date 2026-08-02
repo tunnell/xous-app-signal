@@ -468,8 +468,7 @@ pub struct PddbKeyList {
 /// sync per entry). Typical Signal session-send batches stay well
 /// under the cap; multi-recipient group sends are the workload most
 /// likely to trip it. Splitting an oversized buffered batch into
-/// multiple `write_batch` calls of size <= cap is a tracked refactor
-/// item and would preserve the
+/// multiple `write_batch` calls of size <= cap would preserve the
 /// one-sync-per-batch saving when N > 1.
 pub const MAX_PDDB_WRITE_BATCH_LEN: usize = 3800;
 

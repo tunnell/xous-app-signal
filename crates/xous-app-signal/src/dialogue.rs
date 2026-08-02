@@ -466,8 +466,6 @@ mod tests {
 
     #[test]
     fn rebuild_group_tag_is_sticky_across_messages() {
-        // Once any message in a thread is group-tagged the summary
-        // stays group-tagged regardless of message order.
         let mut first = incoming(uuid_a(), 100, "one", "Bob");
         first.group = true;
         let second = incoming(uuid_a(), 200, "two", "Bob");

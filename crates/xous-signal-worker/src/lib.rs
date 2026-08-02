@@ -611,8 +611,7 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
 ///
 /// The provisioning URL forwarded through `Event::LinkUrl` is
 /// short-lived but high-value — see that variant's `# Security`
-/// section. This function currently logs the URL at `log::info!`
-/// inside the `forwarder` closure; that is a known audit finding.
+/// section.
 ///
 /// # Logging
 ///
@@ -910,8 +909,7 @@ async fn manager_task(
     // SECURITY: the profile_key bytes (32 bytes per entry) are
     // secret-derived material from the sender. Treated as opaque
     // here and passed to `ProfileKey::create` without copying; never
-    // logged. A future hardening item would wrap it in
-    // `Zeroizing` for defense-in-depth.
+    // logged. Not wrapped in `Zeroizing`.
     let mut pending_profile_fetches: Vec<(presage::libsignal_service::prelude::Uuid, [u8; 32])> = Vec::new();
     let mut fetched_or_failed: std::collections::HashSet<presage::libsignal_service::prelude::Uuid> =
         std::collections::HashSet::new();
@@ -1692,9 +1690,7 @@ async fn handle_resolve_username(
 /// `Manager`'s session state inconsistent. The alternative — let
 /// the panic propagate and kill `manager_task` — would force every
 /// subsequent send to surface "manager task died." Both outcomes
-/// are bad; this path picks the recoverable one. A future item
-/// would remove panics from the libsignal send path rather than
-/// continue catching them.
+/// are bad; this path picks the recoverable one.
 ///
 /// # Logging
 ///

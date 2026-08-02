@@ -55,7 +55,7 @@
 //! Buffer memory is unbounded in this implementation. In practice
 //! the worst-case batch (one `Signal::send_message` for a 100-member
 //! group) touches at most ~110 entries × ~1 KB each = ~110 KB.
-//! A heapless, bounded variant is possible if this grows.
+//!
 //!
 //! Batch semantics:
 //!
