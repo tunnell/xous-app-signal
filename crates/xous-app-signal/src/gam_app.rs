@@ -294,6 +294,9 @@ struct App {
     ///
     /// PII. Same logging discipline as `account_device_name`.
     account_phone: Option<String>,
+    /// A `Cmd::GetAccountInfo` is in flight. Distinguishes "not linked"
+    /// from "do not know yet", which the header must not conflate.
+    account_query_pending: bool,
     /// `true` between `Cmd::ResolveUsername` send and the
     /// corresponding `Event::UsernameResolveResult`. Suppresses
     /// concurrent lookups and gates
@@ -507,13 +510,17 @@ impl App {
     }
 
     /// Which account this device is acting as, for the screen headers.
-    /// `(unlinked)` is a claim about the UI's own state, so it must not
-    /// be shown while account fields are still arriving.
+    /// `(unlinked)` is a claim, not a default: it is shown only once a
+    /// lookup has actually come back saying so. While one is in flight,
+    /// or we are linked but the fields have not arrived, say so.
     fn identity_line(&self) -> String {
+        if self.account_query_pending {
+            return "(loading)".to_string();
+        }
         match (self.linked, self.account_phone.as_deref(), self.account_device_name.as_deref()) {
             (true, Some(phone), Some(name)) => format!("{}  ({})", phone, name),
             (true, Some(phone), None) => phone.to_string(),
-            (true, None, _) => String::new(),
+            (true, None, _) => "(loading)".to_string(),
             (false, _, _) => "(unlinked)".to_string(),
         }
     }
@@ -1225,6 +1232,7 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
         account_device_name: None,
         account_aci: None,
         account_phone: None,
+        account_query_pending: false,
         username_lookup_in_progress: false,
     };
     seed_mock_messages_if_requested(&mut app);
@@ -1260,8 +1268,9 @@ pub fn run(cmd_tx: Sender<Cmd>, event_rx: Receiver<Event>) -> Result<(), String>
                         // unlocked; foreground is the first point it is not.
                         if !app.linked && app.account_aci.is_none() {
                             log::info!("xas/gam_app: foreground while unlinked — querying account state");
-                            if let Err(e) = cmd_tx.send_blocking(Cmd::GetAccountInfo) {
-                                log::warn!("xas/gam_app: Cmd::GetAccountInfo send err: {:?}", e);
+                            match cmd_tx.send_blocking(Cmd::GetAccountInfo) {
+                                Ok(()) => app.account_query_pending = true,
+                                Err(e) => log::warn!("xas/gam_app: Cmd::GetAccountInfo send err: {:?}", e),
                             }
                         }
                         if let Err(e) = app.render() {
@@ -1510,8 +1519,9 @@ fn handle_keys(
                             log::info!(
                                 "xas/gam_app: Profile entry, account info not loaded — sending Cmd::GetAccountInfo"
                             );
-                            if let Err(e) = cmd_tx.send_blocking(Cmd::GetAccountInfo) {
-                                log::warn!("xas/gam_app: Cmd::GetAccountInfo send err: {:?}", e);
+                            match cmd_tx.send_blocking(Cmd::GetAccountInfo) {
+                                Ok(()) => app.account_query_pending = true,
+                                Err(e) => log::warn!("xas/gam_app: Cmd::GetAccountInfo send err: {:?}", e),
                             }
                         }
                         app.screen = Screen::Profile;
@@ -1750,6 +1760,7 @@ fn handle_worker_event(
             app.last_status = "worker shutdown".to_string();
         }
         Event::AccountInfo(Ok(info)) => {
+            app.account_query_pending = false;
             log::info!(
                 "xas/gam_app: AccountInfo OK device={} aci={} phone={}",
                 info.device_name,
@@ -1777,6 +1788,7 @@ fn handle_worker_event(
             }
         }
         Event::AccountInfo(Err(reason)) => {
+            app.account_query_pending = false;
             log::warn!("xas/gam_app: AccountInfo Err: {}", reason);
             // Leave account_* fields as-is. Profile screen will
             // continue to show "(not loaded)" placeholders. Not
