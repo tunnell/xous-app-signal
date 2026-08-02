@@ -597,9 +597,10 @@ fn worker_main(store: PddbStore, cmd_rx: Receiver<Cmd>, event_tx: Sender<Event>)
 ///
 /// # Logging
 ///
-/// Emits the provisioning URL (`log::info!` "URL received from
-/// libsignal: {}") and the user-chosen `device_name` to the log
-/// pipeline. Both are security-relevant; see REFACTOR_NOTES.
+/// Emits the provisioning URL to the log pipeline only under the
+/// default-off `link-uri-uart` feature (the URL is the link
+/// credential for its window); default builds log its length. The
+/// user-chosen `device_name` is still logged.
 async fn handle_link_device(
     store: PddbStore,
     event_tx: Sender<Event>,
@@ -616,7 +617,13 @@ async fn handle_link_device(
     let forwarder = async move {
         match url_rx.await {
             Ok(url) => {
+                // The exact "URL received from libsignal:" text is
+                // grepped by tests/hosted/test_link_qr.sh — keep it
+                // stable under the feature.
+                #[cfg(feature = "link-uri-uart")]
                 log::info!("worker/link: URL received from libsignal: {}", url);
+                #[cfg(not(feature = "link-uri-uart"))]
+                log::info!("worker/link: link URL received ({} bytes)", url.as_str().len());
                 if let Err(e) = event_tx_for_url.send(Event::LinkUrl(url.to_string())).await {
                     log::warn!("worker/link: event_tx send LinkUrl failed: {:?}", e);
                 }
@@ -1743,7 +1750,7 @@ async fn handle_send(
             }
         }
         let Some(uuid) = matched else {
-            log::warn!("worker/send: no contact matched e164={}", target);
+            log::warn!("worker/send: no contact matched e164={}", presage_store_pddb::log_id(target));
             let _ = event_tx
                 .send(Event::SendError {
                     reason: format!(
